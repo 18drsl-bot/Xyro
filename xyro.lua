@@ -3189,7 +3189,7 @@ local toolDefs = {
 		run = function()
 			loadstring(
 				game:HttpGet(
-					"https://raw.githubusercontent.com/mckenziii/twin-towers/refs/heads/main/twin%20towers%20sc"
+					"https://github.com/vertxxy-1/Xyro/blob/main/Fabs/twintowers.lua"
 				)
 			)()
 		end,
@@ -3198,7 +3198,7 @@ local toolDefs = {
 	[5] = {
 		name = "Stage Fab",
 		run = function()
-			loadstring(game:HttpGet("https://raw.githubusercontent.com/mckenziii/stage/refs/heads/main/stage%20sc"))()
+			loadstring(game:HttpGet("https://github.com/vertxxy-1/Xyro/blob/main/Fabs/stage.lua"))()
 		end,
 	},
 
@@ -3207,7 +3207,7 @@ local toolDefs = {
 		run = function()
 			loadstring(
 				game:HttpGet(
-					"https://raw.githubusercontent.com/mckenziii/dance-floor/refs/heads/main/dance%20floor%20sc"
+					"https://github.com/vertxxy-1/Xyro/blob/main/Fabs/dancefloor.lua"
 				)
 			)()
 		end,
@@ -3217,7 +3217,7 @@ local toolDefs = {
 		name = "Stripclub Fab",
 		run = function()
 			loadstring(
-				game:HttpGet("https://raw.githubusercontent.com/mckenziii/stripclub/refs/heads/main/stripclub%20sc")
+				game:HttpGet("https://github.com/vertxxy-1/Xyro/blob/main/Fabs/stripclub.lua")
 			)()
 		end,
 	},
@@ -3227,7 +3227,7 @@ local toolDefs = {
 		run = function()
 			loadstring(
 				game:HttpGet(
-					"https://raw.githubusercontent.com/mckenziii/city-islands/refs/heads/main/city%20islands%20sc"
+					"https://github.com/vertxxy-1/Xyro/blob/main/Fabs/islands.lua"
 				)
 			)()
 		end,
@@ -3237,7 +3237,7 @@ local toolDefs = {
 		name = "Racetrack Fab",
 		run = function()
 			loadstring(
-				game:HttpGet("https://raw.githubusercontent.com/mckenziii/racetrack/refs/heads/main/racetrack%20sc")
+				game:HttpGet("https://github.com/vertxxy-1/Xyro/blob/main/Fabs/racetrack.lua")
 			)()
 		end,
 	},
@@ -3246,7 +3246,7 @@ local toolDefs = {
 		name = "Treehouse Fab",
 		run = function()
 			loadstring(
-				game:HttpGet("https://raw.githubusercontent.com/unicornnmann/Treehouse/refs/heads/main/Treehouse")
+				game:HttpGet("https://github.com/vertxxy-1/Xyro/blob/main/Fabs/treehouse.lua")
 			)()
 		end,
 	},
