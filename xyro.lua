@@ -23,8 +23,8 @@ if makefolder and isfolder and not isfolder("me") then
 	pcall(makefolder, "me")
 end
 
-if readfile and checkForFile("me/prefix.txt", "!") then
-	local ok, value = pcall(readfile, "me/prefix.txt")
+if readfile and checkForFile("Xyro/prefix.txt", "!") then
+	local ok, value = pcall(readfile, "Xyro/prefix.txt")
 	_G.prefix = ok and (value ~= "" and value or "!") or "!"
 else
 	_G.prefix = "!"
@@ -5594,7 +5594,7 @@ Extra.openAirwalk = function()
 	end)
 end
 
-local SCRIPTS_ROOT = "me/scripts"
+local SCRIPTS_ROOT = "Xyro/scripts"
 
 local HL_KW = {}
 for _, k in ipairs({
@@ -6311,7 +6311,7 @@ Extra.openExecutor = function()
 		Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 1, -40),
 		BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 11,
 		TextColor3 = COL.sub,
-		Text = "me executor  -  files live in workspace/me/scripts",
+		Text = "me executor  -  files live in workspace/Xyro/scripts",
 		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Bottom,
 		TextWrapped = true,
 	}, optionsPage)
@@ -6999,7 +6999,7 @@ local function say(msg)
 end
 
 local HttpService = H.HttpService
-local ALIAS_FILE = "me/alias.json"
+local ALIAS_FILE = "Xyro/alias.json"
 local UserAliases = {}
 
 local function loadAliases()
@@ -7722,7 +7722,7 @@ add{
 		end
 
 		_G.prefix = c.arg
-		writefile("me/prefix.txt", tostring(c.arg))
+		writefile("Xyro/prefix.txt", tostring(c.arg))
 		return "Prefix changed to '" .. c.arg .. "'"
 	end,
 }
