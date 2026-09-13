@@ -7127,6 +7127,216 @@ local function capitalize(s)
 	return s == "" and s or (s:sub(1, 1):upper() .. s:sub(2))
 end
 
+-- Website nametags: rules live in nametags.json in this repo (vertxxy-1/Xyro),
+-- edited on github.com and fetched live by the game over plain HttpGet.
+local Players = Players or game:GetService("Players")
+local RunService = RunService or game:GetService("RunService")
+local NT_RAW_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/nametags.json"
+local ntDrawingOk = (Drawing ~= nil)
+local ntEnabled = false
+local ntRules = nil
+local ntTags = {}
+local ntFetchAcc = 0
+local NT_FETCH_EVERY = 60
+
+local function ntNormalize(s)
+	return (tostring(s or ""):lower())
+end
+
+local function ntColor(hex)
+	hex = ntNormalize(hex):gsub("#", "")
+	if #hex ~= 6 or hex:match("%X") then
+		return nil
+	end
+	local r, g, b = tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16)
+	if not (r and g and b) then
+		return nil
+	end
+	return Color3.fromRGB(r, g, b)
+end
+
+local function ntFetch(manual)
+	if not game.HttpGet then
+		return manual and "no HttpGet on this executor" or nil
+	end
+	local okR, text = pcall(function()
+		return game:HttpGet(NT_RAW_URL .. "?t=" .. tostring(os.time()))
+	end)
+	if not okR or type(text) ~= "string" or #text == 0 then
+		return manual and ("fetch failed: " .. tostring(text)) or nil
+	end
+	local decoded, cfg = pcall(function()
+		return H.HttpService:JSONDecode(text)
+	end)
+	if not decoded or type(cfg) ~= "table" or type(cfg.tags) ~= "table" then
+		return manual and "nametags.json isn't valid (needs {\"tags\":[...]})" or nil
+	end
+	local n = 0
+	for _, t in ipairs(cfg.tags) do
+		if type(t) == "table" and type(t.match) == "string" and t.match ~= ""
+			and type(t.label) == "string" and t.label ~= ""
+		then
+			n += 1
+		end
+	end
+	ntRules = cfg
+	if manual and H.notify then
+		H.notify({
+			title = "Nametags",
+			text = "loaded " .. n .. " tag rule" .. (n == 1 and "" or "s"),
+			kind = "success",
+		})
+	end
+	return "loaded " .. n .. " tag rule" .. (n == 1 and "" or "s")
+end
+
+local function ntRuleFor(plr)
+	if not (ntRules and type(ntRules.tags) == "table") then
+		return nil
+	end
+	local nm, dn = ntNormalize(plr.Name), ntNormalize(plr.DisplayName)
+	for _, t in ipairs(ntRules.tags) do
+		if type(t) == "table" and type(t.label) == "string" and t.label ~= "" then
+			local m = ntNormalize(t.match)
+			if m == "*" or (m ~= "" and (nm:sub(1, #m) == m or dn:sub(1, #m) == m)) then
+				return t
+			end
+		end
+	end
+	return nil
+end
+
+local function ntHideAll()
+	for _, o in pairs(ntTags) do
+		if o.text then
+			o.text.Visible = false
+		end
+	end
+end
+
+local function ntRemove(plr)
+	local o = ntTags[plr]
+	if o then
+		if o.text then
+			o.text:Remove()
+		end
+		ntTags[plr] = nil
+	end
+end
+
+local function ntCleanup()
+	for plr in pairs(ntTags) do
+		ntRemove(plr)
+	end
+	ntTags = {}
+	ntEnabled = false
+end
+
+connect(Players.PlayerRemoving, ntRemove)
+
+connect(RunService.RenderStepped, function(dt)
+	if not ntEnabled then
+		return
+	end
+	ntFetchAcc += dt
+	if ntFetchAcc >= NT_FETCH_EVERY then
+		ntFetchAcc = 0
+		ntFetch(false)
+	end
+	local cam = workspace.CurrentCamera
+	if not cam then
+		ntHideAll()
+		return
+	end
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= player then
+			local o = ntTags[plr]
+			if not o and ntDrawingOk then
+				local okT, text = pcall(function()
+					local d = Drawing.new("Text")
+					d.Size = 14
+					d.Center = true
+					d.Outline = true
+					d.Visible = false
+					return d
+				end)
+				o = { text = okT and text or nil }
+				ntTags[plr] = o
+			end
+			if o and o.text then
+				local rule = ntRuleFor(plr)
+				local ch = plr.Character
+				local head = ch and ch:FindFirstChild("Head")
+				if rule and head then
+					local pos, on = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 1.4, 0))
+					if on then
+						o.text.Text = rule.label
+						o.text.Color = ntColor(rule.color) or Color3.new(1, 1, 1)
+						o.text.Position = Vector2.new(pos.X, pos.Y)
+						o.text.Visible = true
+					else
+						o.text.Visible = false
+					end
+				else
+					o.text.Visible = false
+				end
+			end
+		end
+	end
+end)
+
+add{
+	name = "nametags",
+	alias = { "tags" },
+	group = "Visuals",
+	help = "Website nametags - toggle on/off",
+	bindable = true,
+	run = function()
+		if not ntDrawingOk then
+			return "no Drawing API on this executor"
+		end
+		ntEnabled = not ntEnabled
+		if ntEnabled and not ntRules then
+			ntFetch(true)
+		end
+		if not ntEnabled then
+			ntHideAll()
+		end
+		return "nametags " .. (ntEnabled and "on" or "off")
+	end,
+}
+add{
+	name = "nametagsfetch",
+	alias = { "tagsfetch" },
+	group = "Visuals",
+	help = "Refetch nametags.json from the repo now",
+	run = function()
+		local msg = ntFetch(true)
+		return msg or "fetched"
+	end,
+}
+
+H.Nametags = {
+	toggle = function()
+		if ntDrawingOk then
+			ntEnabled = not ntEnabled
+			if ntEnabled and not ntRules then
+				ntFetch(true)
+			end
+			if not ntEnabled then
+				ntHideAll()
+			end
+		end
+		return ntEnabled
+	end,
+	isOn = function()
+		return ntEnabled
+	end,
+	fetch = ntFetch,
+	cleanup = ntCleanup,
+	url = NT_RAW_URL,
+}
+
 local function listWindow(name, title, rows)
 	local existing = gui:FindFirstChild(name)
 	if existing then
@@ -9869,6 +10079,11 @@ _G.ScriptHubCleanup = function()
 	Move.restore()
 	world.restore()
 	Fly.stop()
+	pcall(function()
+		if H.Nametags then
+			H.Nametags.cleanup()
+		end
+	end)
 
 	pcall(function()
 		local myhum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")

@@ -1,20 +1,20 @@
 --[[
-	Vert's hub - loader
-	Fetches verts-hub.lua from the public Xyro repo over a plain raw URL -
-	no tokens, no auth. Reports errors instead of failing silently.
+	Xyro - loader
+	Fetches xyro.lua from the public repo over a plain raw URL - no tokens,
+	no auth. Reports errors instead of failing silently.
 
 	Run it with:
 		loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/loadstring.lua"))()
 ]]
 
-local RAW_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/verts-hub.lua"
+local RAW_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/xyro.lua"
 
 local function warnAll(msg)
-	warn("[VertsHub] " .. tostring(msg))
+	warn("[Xyro] " .. tostring(msg))
 end
 
 if not game.HttpGet then
-	warnAll("this executor has no HttpGet - paste verts-hub.lua directly instead")
+	warnAll("this executor has no HttpGet - paste xyro.lua directly instead")
 	return
 end
 
@@ -33,7 +33,7 @@ if not load then
 	return
 end
 
-local fn, cerr = load(src, "=verts-hub")
+local fn, cerr = load(src, "=xyro")
 if not fn then
 	warnAll("compile error: " .. tostring(cerr))
 	return
