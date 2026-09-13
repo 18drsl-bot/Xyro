@@ -2,72 +2,117 @@
 chcp 65001 >nul
 setlocal EnableDelayedExpansion
 
-set WEBHOOK=
-set REPO=mckenziii/The-Twink-Community-Hub
+set "REMOTE=main"
+set "BRANCH=main"
+set "REPO=vertxxy-1/Xyro"
+set "WEBHOOK="
 
+echo.
 echo Enter commit message:
-set /p MSG=
+set /p "MSG="
 
-if "%MSG%"=="" (
+if not defined MSG (
+    echo.
     echo No message entered.
     pause
-    exit /b
+    exit /b 1
 )
 
-set FILES=
+set "FILES="
+
 for /f "delims=" %%A in ('git diff --name-only') do (
-    set FILES=!FILES!%%A\n
+    set "FILES=!FILES!%%A\n"
 )
 
-if "!FILES!"=="" (
-    set FILES=No changed files
+if not defined FILES (
+    set "FILES=No changed files"
 )
 
 if not exist version.txt (
     echo v0.0.0>version.txt
 )
 
-set /p VERSION=<version.txt
+set /p "VERSION="<version.txt
+set "VER=!VERSION:v=!"
 
-set VER=%VERSION:v=%
-
-for /f "tokens=1,2,3 delims=." %%a in ("%VER%") do (
-    set MAJOR=%%a
-    set MINOR=%%b
-    set PATCH=%%c
+for /f "tokens=1,2,3 delims=." %%a in ("!VER!") do (
+    set "MAJOR=%%a"
+    set "MINOR=%%b"
+    set "PATCH=%%c"
 )
 
 set /a PATCH+=1
 
 if !PATCH! GEQ 10 (
-    set PATCH=0
+    set "PATCH=0"
     set /a MINOR+=1
 )
 
 if !MINOR! GEQ 10 (
-    set MINOR=0
+    set "MINOR=0"
     set /a MAJOR+=1
 )
 
-set NEWVERSION=v!MAJOR!.!MINOR!.!PATCH!
+set "NEWVERSION=v!MAJOR!.!MINOR!.!PATCH!"
 
 echo !NEWVERSION!>version.txt
 
 echo.
 echo Updating:
-echo %VERSION% ^> !NEWVERSION!
+echo !VERSION! ^> !NEWVERSION!
+echo.
 
 git add .
 
-git commit -m "%MSG% + Updated to !NEWVERSION!"
+git commit -m "!MSG! + Updated to !NEWVERSION!"
 
-git push --force
+if errorlevel 1 (
+    echo.
+    echo ERROR: Commit failed.
+    pause
+    exit /b 1
+)
 
-for /f "delims=" %%A in ('git log -1 --pretty^=%%an') do set AUTHOR=%%A
+echo.
+echo Pushing to GitHub...
 
-curl -H "Content-Type: application/json" ^
--d "{\"embeds\":[{\"title\":\" New Commit Pushed\",\"description\":\"Version: !NEWVERSION!\",\"fields\":[{\"name\":\" Author\",\"value\":\"!AUTHOR!\",\"inline\":true},{\"name\":\" Repository\",\"value\":\"%REPO%\",\"inline\":true},{\"name\":\" Changed Files\",\"value\":\"```!FILES!```\"},{\"name\":\" Commit message\",\"value\":\"%MSG% + Updated to !NEWVERSION!\"}],\"footer\":{\"text\":\"GitHub Actions\"}}]}" ^
-"%WEBHOOK%"
+git push -u !REMOTE! !BRANCH! --force
+
+if errorlevel 1 (
+    echo.
+    echo ERROR: Push failed.
+    pause
+    exit /b 1
+)
+
+echo.
+echo GitHub push successful.
+
+if defined WEBHOOK (
+    for /f "delims=" %%A in ('git log -1 --pretty=%%an') do (
+        set "AUTHOR=%%A"
+    )
+
+    curl -sS ^
+    -H "Content-Type: application/json" ^
+    -d "{\"embeds\":[{\"title\":\"New Commit Pushed\",\"description\":\"Version: !NEWVERSION!\",\"fields\":[{\"name\":\"Author\",\"value\":\"!AUTHOR!\",\"inline\":true},{\"name\":\"Repository\",\"value\":\"!REPO!\",\"inline\":true},{\"name\":\"Changed Files\",\"value\":\"```!FILES!```\"},{\"name\":\"Commit message\",\"value\":\"!MSG! + Updated to !NEWVERSION!\"}],\"footer\":{\"text\":\"Xyro Update Script\"}}]}" ^
+    "!WEBHOOK!"
+
+    if errorlevel 1 (
+        echo.
+        echo WARNING: Discord notification failed.
+    ) else (
+        echo Discord notification sent.
+    )
+) else (
+    echo Discord webhook disabled.
+)
+
 echo.
 echo Finished!
+echo Version: !NEWVERSION!
+echo Branch: !BRANCH!
+echo Repo: !REPO!
+echo.
+
 pause
