@@ -7138,6 +7138,13 @@ local ntRules = nil
 local ntTags = {}
 local ntFetchAcc = 0
 local NT_FETCH_EVERY = 60
+local ntOpts = {
+	size = 14,
+	maxDistance = 0,
+	showDistance = true,
+	showHealth = true,
+	showBox = true,
+}
 
 local function ntNormalize(s)
 	return (tostring(s or ""):lower())
@@ -7179,6 +7186,14 @@ local function ntFetch(manual)
 			n += 1
 		end
 	end
+	if type(cfg.options) == "table" then
+		local o = cfg.options
+		ntOpts.size = math.clamp(tonumber(o.size) or 14, 8, 60)
+		ntOpts.maxDistance = math.max(tonumber(o.maxDistance) or 0, 0)
+		ntOpts.showDistance = o.showDistance ~= false
+		ntOpts.showHealth = o.showHealth ~= false
+		ntOpts.showBox = o.showBox ~= false
+	end
 	ntRules = cfg
 	if manual and H.notify then
 		H.notify({
@@ -7211,6 +7226,9 @@ local function ntHideAll()
 		if o.text then
 			o.text.Visible = false
 		end
+		if o.box then
+			o.box.Visible = false
+		end
 	end
 end
 
@@ -7219,6 +7237,9 @@ local function ntRemove(plr)
 	if o then
 		if o.text then
 			o.text:Remove()
+		end
+		if o.box then
+			o.box:Remove()
 		end
 		ntTags[plr] = nil
 	end
@@ -7233,6 +7254,9 @@ local function ntCleanup()
 end
 
 connect(Players.PlayerRemoving, ntRemove)
+
+-- background prefetch so the first !nametags toggle is instant
+task.spawn(ntFetch, false)
 
 connect(RunService.RenderStepped, function(dt)
 	if not ntEnabled then
@@ -7260,7 +7284,18 @@ connect(RunService.RenderStepped, function(dt)
 					d.Visible = false
 					return d
 				end)
-				o = { text = okT and text or nil }
+				local box
+				if okT then
+					pcall(function()
+						box = Drawing.new("Square")
+						box.Filled = true
+						box.Color = Color3.new(0, 0, 0)
+						box.Transparency = 0.35
+						box.Thickness = 1
+						box.Visible = false
+					end)
+				end
+				o = { text = okT and text or nil, box = box }
 				ntTags[plr] = o
 			end
 			if o and o.text then
@@ -7268,17 +7303,52 @@ connect(RunService.RenderStepped, function(dt)
 				local ch = plr.Character
 				local head = ch and ch:FindFirstChild("Head")
 				if rule and head then
+					local dist = (cam.CFrame.Position - head.Position).Magnitude
+					local tooFar = ntOpts.maxDistance > 0 and dist > ntOpts.maxDistance
 					local pos, on = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 1.4, 0))
-					if on then
-						o.text.Text = rule.label
+					if not tooFar and on then
+						local label = rule.label
+						local suffix = {}
+						if ntOpts.showHealth then
+							local hum = ch:FindFirstChildOfClass("Humanoid")
+							if hum then
+								suffix[#suffix + 1] = math.floor(hum.Health + 0.5) .. "hp"
+							end
+						end
+						if ntOpts.showDistance then
+							suffix[#suffix + 1] = math.floor(dist + 0.5) .. "m"
+						end
+						if #suffix > 0 then
+							label = label .. " [" .. table.concat(suffix, " ") .. "]"
+						end
+						o.text.Text = label
+						o.text.Size = math.clamp(tonumber(rule.size) or ntOpts.size, 8, 60)
 						o.text.Color = ntColor(rule.color) or Color3.new(1, 1, 1)
 						o.text.Position = Vector2.new(pos.X, pos.Y)
 						o.text.Visible = true
+						if o.box then
+							local okB, b = pcall(function()
+								return o.text.TextBounds
+							end)
+							if okB and b and ntOpts.showBox then
+								o.box.Size = Vector2.new(b.X + 8, b.Y + 4)
+								o.box.Position = Vector2.new(pos.X - (b.X + 8) / 2, pos.Y - 2)
+								o.box.Visible = true
+							else
+								o.box.Visible = false
+							end
+						end
 					else
 						o.text.Visible = false
+						if o.box then
+							o.box.Visible = false
+						end
 					end
 				else
 					o.text.Visible = false
+					if o.box then
+						o.box.Visible = false
+					end
 				end
 			end
 		end

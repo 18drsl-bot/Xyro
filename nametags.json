@@ -1,6 +1,14 @@
 {
+	"options": {
+		"size": 14,
+		"maxDistance": 0,
+		"showDistance": true,
+		"showHealth": true,
+		"showBox": true
+	},
 	"tags": [
-		{ "match": "x9ksa", "label": "OWNER", "color": "#FFD700" },
-		{ "match": "vert", "label": "DEV", "color": "#6C80FF" }
+		{ "match": "x9ksa", "label": "OWNER", "color": "#FFD700", "size": 16 },
+		{ "match": "vert", "label": "DEV", "color": "#6C80FF" },
+		{ "match": "*", "label": "GUEST", "color": "#FFFFFF" }
 	]
 }
