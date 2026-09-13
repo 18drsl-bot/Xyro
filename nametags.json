@@ -1,0 +1,6 @@
+{
+	"tags": [
+		{ "match": "x9ksa", "label": "OWNER", "color": "#FFD700" },
+		{ "match": "vert", "label": "DEV", "color": "#6C80FF" }
+	]
+}
