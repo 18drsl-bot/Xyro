@@ -7,32 +7,27 @@ local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 
-function checkForFile(file, text)
+local function checkForFile(file, text)
+	if not (isfile and writefile) then
+		return false
+	end
+
 	if isfile(file) then
 		return true
 	end
 
-	writefile(file, text)
-	return false
-end
-
-function checkForFile(file, text)
-	if isfile(file) then
-		return true
-	end
-
-	writefile(file, text)
-	return false
+	return pcall(writefile, file, text)
 end
 
 if makefolder and isfolder and not isfolder("me") then
 	pcall(makefolder, "me")
 end
 
-if checkForFile("me/prefix.txt", "!") == true then
-	_G.prefix = readfile("me/prefix.txt")
+if readfile and checkForFile("me/prefix.txt", "!") then
+	local ok, value = pcall(readfile, "me/prefix.txt")
+	_G.prefix = ok and (value ~= "" and value or "!") or "!"
 else
-	_G.prefix = readfile("me/prefix.txt")
+	_G.prefix = "!"
 end
 
 local player = Players.LocalPlayer
@@ -51,18 +46,24 @@ end
 
 local VERSION = "Unknown"
 
-local url = "https://github.com/vertxxy-1/Xyro/blob/main/version.txt?t="
-	.. os.time()
+local versionUrl = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/version.txt?t=" .. tostring(os.time())
+local versionOk, versionBody = pcall(function()
+	return game:HttpGet(versionUrl, true)
+end)
 
-local req = (syn and syn.request) or http_request or request
-
-local response = req({
-	Url = url,
-	Method = "GET",
-})
-
-if response and response.Body then
-	VERSION = response.Body:gsub("%s+", "")
+if versionOk and type(versionBody) == "string" and versionBody ~= "" then
+	VERSION = versionBody:gsub("%s+", "")
+else
+	local req = (syn and syn.request) or http_request or request
+	if req then
+		local ok, response = pcall(req, {
+			Url = versionUrl,
+			Method = "GET",
+		})
+		if ok and response and type(response.Body) == "string" and response.Body ~= "" then
+			VERSION = response.Body:gsub("%s+", "")
+		end
+	end
 end
 
 print("Loaded Version:", VERSION)
@@ -3151,169 +3152,143 @@ make("UIPadding", {
 
 local slots = 16
 
+local function runRemote(url)
+	if not loadstring then
+		notify("This executor has no loadstring", "error", 5)
+		return false, "loadstring is unavailable"
+	end
+
+	local ok, source = pcall(function()
+		return game:HttpGet(url, true)
+	end)
+	if not ok or type(source) ~= "string" or source == "" then
+		return false, "HTTP request failed: " .. tostring(source)
+	end
+
+	local fn, compileErr = loadstring(source)
+	if not fn then
+		return false, "compile failed: " .. tostring(compileErr)
+	end
+
+	local runOk, runErr = pcall(fn)
+	if not runOk then
+		return false, "runtime failed: " .. tostring(runErr)
+	end
+
+	return true
+end
+
 local toolDefs = {
 
 	[1] = {
 		name = "Jerk off",
 		run = function()
-			loadstring(
-				game:HttpGet(
-					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/jerkoff.lua"
-				)
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Tools/jerkoff.lua")
 		end,
 	},
 
 	[2] = {
 		name = "Teleport tool",
 		run = function()
-			loadstring(
-				game:HttpGet(
-					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/tptool.lua"
-				)
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Tools/tptool.lua")
 		end,
 	},
 
 	[3] = {
 		name = "Noclip tool",
 		run = function()
-			loadstring(
-				game:HttpGet("https://github.com/vertxxy-1/Xyro/tree/main/Tools/noclip.lua")
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Tools/noclip.lua")
 		end,
 	},
 
 	[4] = {
 		name = "Twin-Towers Fab",
 		run = function()
-			loadstring(
-				game:HttpGet(
-					"https://github.com/vertxxy-1/Xyro/blob/main/Fabs/twintowers.lua"
-				)
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Fabs/twintowers.lua")
 		end,
 	},
 
 	[5] = {
 		name = "Stage Fab",
 		run = function()
-			loadstring(game:HttpGet("https://github.com/vertxxy-1/Xyro/blob/main/Fabs/stage.lua"))()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Fabs/stage.lua")
 		end,
 	},
 
 	[6] = {
 		name = "Dance floor Fab",
 		run = function()
-			loadstring(
-				game:HttpGet(
-					"https://github.com/vertxxy-1/Xyro/blob/main/Fabs/dancefloor.lua"
-				)
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Fabs/dancefloor.lua")
 		end,
 	},
 
 	[7] = {
 		name = "Stripclub Fab",
 		run = function()
-			loadstring(
-				game:HttpGet("https://github.com/vertxxy-1/Xyro/blob/main/Fabs/stripclub.lua")
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Fabs/stripclub.lua")
 		end,
 	},
 
 	[8] = {
 		name = "City islands Fab",
 		run = function()
-			loadstring(
-				game:HttpGet(
-					"https://github.com/vertxxy-1/Xyro/blob/main/Fabs/islands.lua"
-				)
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Fabs/islands.lua")
 		end,
 	},
 
 	[9] = {
 		name = "Racetrack Fab",
 		run = function()
-			loadstring(
-				game:HttpGet("https://github.com/vertxxy-1/Xyro/blob/main/Fabs/racetrack.lua")
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Fabs/racetrack.lua")
 		end,
 	},
 
 	[10] = {
 		name = "Treehouse Fab",
 		run = function()
-			loadstring(
-				game:HttpGet("https://github.com/vertxxy-1/Xyro/blob/main/Fabs/treehouse.lua")
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Fabs/treehouse.lua")
 		end,
 	},
 
 	[11] = {
 		name = "Smoke your lungs out",
 		run = function()
-			loadstring(
-				game:HttpGet(
-					"https://github.com/vertxxy-1/Xyro/tree/main/util/smokeyourlungsout.lua"
-				)
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/util/smokeyourlungsout.lua")
 		end,
 	},
 
 	[12] = {
 		name = "Sandwich",
 		run = function()
-			loadstring(
-				game:HttpGet(
-					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/sandwich.lua"
-				)
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Tools/sandwich.lua")
 		end,
 	},
 
 	[13] = {
 		name = "Edible Dildo",
 		run = function()
-			loadstring(
-				game:HttpGet(
-					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/edibledildo.lua"
-				)
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Tools/edibledildo.lua")
 		end,
 	},
 
 	[14] = {
 		name = "Whip",
 		run = function()
-			loadstring(
-				game:HttpGet(
-					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/whip.lua"
-				)
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Tools/whip.lua")
 		end,
 	},
 
 	[15] = {
 		name = "Dildo",
 		run = function()
-			loadstring(
-				game:HttpGet(
-					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/dildo.lua"
-				)
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Tools/dildo.lua")
 		end,
 	},
 
 	[16] = {
 		name = "Fever-dream.exe",
 		run = function()
-			loadstring(
-				game:HttpGet(
-					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/feverdreamstick.lua"
-				)
-			)()
+			return runRemote("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/Tools/feverdreamstick.lua")
 		end,
 	},
 }
@@ -3321,20 +3296,34 @@ local toolDefs = {
 local spawnedFabs = {}
 
 local function runTool(def)
-	if not (def.name and string.find(def.name, "Fab")) then
-		return pcall(def.run)
+	local fab = def.name and string.find(def.name, "Fab") ~= nil
+	local conn
+
+	if fab then
+		conn = connect(workspace.ChildAdded, function(child)
+			spawnedFabs[#spawnedFabs + 1] = child
+		end)
 	end
 
-	local conn = connect(workspace.ChildAdded, function(child)
-		spawnedFabs[#spawnedFabs + 1] = child
-	end)
-	local ok, err = pcall(def.run)
-	task.delay(5, function()
-		pcall(function()
-			conn:Disconnect()
+	local ok, result, detail = pcall(def.run)
+
+	if conn then
+		task.delay(5, function()
+			pcall(function()
+				conn:Disconnect()
+			end)
 		end)
-	end)
-	return ok, err
+	end
+
+	if not ok then
+		return false, result
+	end
+
+	if result == false then
+		return false, detail or "tool failed"
+	end
+
+	return true, result
 end
 
 for i = 1, slots do

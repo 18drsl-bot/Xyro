@@ -1,47 +1,99 @@
-local P,R,S=game:GetService("Players").LocalPlayer,game:GetService("RunService"),game:GetService("StarterGui")
-local N,C
+local P = game:GetService("Players").LocalPlayer
+local R = game:GetService("RunService")
+local S = game:GetService("StarterGui")
+
+local N = false
+local C
+local savedCollision = {}
 
 local function T(t)
-	pcall(S.SetCore,S,"SendNotification",{Title="Noclip Tool",Text=t,Duration=3})
+    pcall(S.SetCore, S, "SendNotification", {
+        Title = "Noclip Tool",
+        Text = t,
+        Duration = 3,
+    })
+end
+
+local function restoreCollision()
+    for part, canCollide in pairs(savedCollision) do
+        if part and part.Parent and part:IsA("BasePart") then
+            part.CanCollide = canCollide
+        end
+    end
+    table.clear(savedCollision)
+end
+
+local function disableNoclip()
+    N = false
+    if C then
+        C:Disconnect()
+        C = nil
+    end
+    restoreCollision()
+end
+
+local function enableNoclip(character)
+    disableNoclip()
+
+    if not character then
+        return
+    end
+
+    N = true
+    C = R.Stepped:Connect(function()
+        if not N or not character.Parent then
+            disableNoclip()
+            return
+        end
+
+        for _, v in ipairs(character:GetDescendants()) do
+            if v:IsA("BasePart") then
+                if savedCollision[v] == nil then
+                    savedCollision[v] = v.CanCollide
+                end
+                v.CanCollide = false
+            end
+        end
+    end)
+
+    T("Noclip Enabled")
 end
 
 local function G()
-	local B=P:WaitForChild("Backpack")
-	if B:FindFirstChild("Noclip Tool") then B["Noclip Tool"]:Destroy() end
-	local X=Instance.new("Tool")
-	X.Name="Noclip Tool"
-	X.RequiresHandle=false
-	X.CanBeDropped=false
-	X.Parent=B
-	X.Activated:Connect(function()
-		local H=P.Character
-		if not H then return end
-		N=not N
-		if C then C:Disconnect() end
-		if N then
-			C=R.Stepped:Connect(function()
-				for _,v in ipairs(H:GetDescendants()) do
-					if v:IsA("BasePart") then
-						v.CanCollide=false
-					end
-				end
-			end)
-			T("Noclip Enabled")
-		else
-			for _,v in ipairs(H:GetDescendants()) do
-				if v:IsA("BasePart") then
-					v.CanCollide=true
-				end
-			end
-			T("Noclip Disabled")
-		end
-	end)
+    local B = P:WaitForChild("Backpack")
+    local old = B:FindFirstChild("Noclip Tool")
+    if old then
+        old:Destroy()
+    end
+
+    local X = Instance.new("Tool")
+    X.Name = "Noclip Tool"
+    X.RequiresHandle = false
+    X.CanBeDropped = false
+    X.Parent = B
+
+    X.Activated:Connect(function()
+        local H = P.Character
+        if not H then
+            T("No character")
+            return
+        end
+
+        if N then
+            disableNoclip()
+            T("Noclip Disabled")
+        else
+            enableNoclip(H)
+        end
+    end)
 end
 
-if P.Character then G() end
+if P.Character then
+    G()
+end
+
 P.CharacterAdded:Connect(function()
-	N=false
-	if C then C:Disconnect() end
-	task.wait(.2)
-	G()
+    disableNoclip()
+    task.wait(0.2)
+    G()
 end)

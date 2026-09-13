@@ -5,6 +5,14 @@ setlocal EnableDelayedExpansion
 set "REMOTE=main"
 set "BRANCH=main"
 set "REPO=vertxxy-1/Xyro"
+
+rem Prefer the configured "main" remote, but fall back to origin.
+git remote get-url !REMOTE! >nul 2>&1
+if errorlevel 1 set "REMOTE=origin"
+
+rem Push the currently checked-out branch when possible.
+for /f "delims=" %%B in ('git branch --show-current 2^>nul') do set "CURRENT_BRANCH=%%B"
+if defined CURRENT_BRANCH set "BRANCH=!CURRENT_BRANCH!"
 set "WEBHOOK="
 
 echo.
@@ -76,7 +84,7 @@ if errorlevel 1 (
 echo.
 echo Pushing to GitHub...
 
-git push -u !REMOTE! !BRANCH! --force
+git push -u !REMOTE! !BRANCH!
 
 if errorlevel 1 (
     echo.

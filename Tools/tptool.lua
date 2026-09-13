@@ -32,12 +32,9 @@ TpTool.Activated:Connect(function()
 
     local pos = hit.Position
 
-    root.CFrame = CFrame.new(
-        pos.X,
-        pos.Y + 3,
-        pos.Z,
-        select(4, root.CFrame:GetComponents())
-    )
+    local rx, ry, rz = root.CFrame:ToOrientation()
+    root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+        * CFrame.fromOrientation(rx, ry, rz)
 
     breakVelocity()
 end)
