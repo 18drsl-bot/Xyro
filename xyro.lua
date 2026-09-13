@@ -51,7 +51,7 @@ end
 
 local VERSION = "Unknown"
 
-local url = "https://raw.githubusercontent.com/mckenziii/The-Twink-Community-Hub/refs/heads/main/version.txt?t="
+local url = "https://github.com/vertxxy-1/Xyro/blob/main/version.txt?t="
 	.. os.time()
 
 local req = (syn and syn.request) or http_request or request
@@ -3158,7 +3158,7 @@ local toolDefs = {
 		run = function()
 			loadstring(
 				game:HttpGet(
-					"https://raw.githubusercontent.com/mckenziii/The-Twink-Community-Hub/refs/heads/main/Tools/jerkoff.lua"
+					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/jerkoff.lua"
 				)
 			)()
 		end,
@@ -3169,7 +3169,7 @@ local toolDefs = {
 		run = function()
 			loadstring(
 				game:HttpGet(
-					"https://raw.githubusercontent.com/mckenziii/The-Twink-Community-Hub/refs/heads/main/Tools/tptool.lua"
+					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/tptool.lua"
 				)
 			)()
 		end,
@@ -3179,7 +3179,7 @@ local toolDefs = {
 		name = "Noclip tool",
 		run = function()
 			loadstring(
-				game:HttpGet("https://raw.githubusercontent.com/mckenziii/The-Twink-Community-Hub/refs/heads/main/Tools/noclip.lua")
+				game:HttpGet("https://github.com/vertxxy-1/Xyro/tree/main/Tools/noclip.lua")
 			)()
 		end,
 	},
@@ -3256,7 +3256,7 @@ local toolDefs = {
 		run = function()
 			loadstring(
 				game:HttpGet(
-					"https://raw.githubusercontent.com/mckenziii/smoke-your-lungs-out/refs/heads/main/smoke%20your%20lungs%20out%20sc"
+					"https://github.com/vertxxy-1/Xyro/tree/main/util/smokeyourlungsout.lua"
 				)
 			)()
 		end,
@@ -3267,7 +3267,7 @@ local toolDefs = {
 		run = function()
 			loadstring(
 				game:HttpGet(
-					"https://raw.githubusercontent.com/mckenziii/The-Twink-Community-Hub/refs/heads/main/Tools/sandwich.lua"
+					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/sandwich.lua"
 				)
 			)()
 		end,
@@ -3278,7 +3278,7 @@ local toolDefs = {
 		run = function()
 			loadstring(
 				game:HttpGet(
-					"https://raw.githubusercontent.com/mckenziii/The-Twink-Community-Hub/refs/heads/main/Tools/edibledildo.lua"
+					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/edibledildo.lua"
 				)
 			)()
 		end,
@@ -3289,7 +3289,7 @@ local toolDefs = {
 		run = function()
 			loadstring(
 				game:HttpGet(
-					"https://raw.githubusercontent.com/mckenziii/The-Twink-Community-Hub/refs/heads/main/Tools/whip.lua"
+					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/whip.lua"
 				)
 			)()
 		end,
@@ -3300,7 +3300,7 @@ local toolDefs = {
 		run = function()
 			loadstring(
 				game:HttpGet(
-					"https://raw.githubusercontent.com/mckenziii/The-Twink-Community-Hub/refs/heads/main/Tools/dildo.lua"
+					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/dildo.lua"
 				)
 			)()
 		end,
@@ -3311,7 +3311,7 @@ local toolDefs = {
 		run = function()
 			loadstring(
 				game:HttpGet(
-					"https://raw.githubusercontent.com/mckenziii/The-Twink-Community-Hub/refs/heads/main/Tools/feverdreamstick.lua"
+					"https://github.com/vertxxy-1/Xyro/tree/main/Tools/feverdreamstick.lua"
 				)
 			)()
 		end,
