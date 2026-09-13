@@ -5,7 +5,11 @@
 	"empty window" bug), retries, and reports errors instead of failing
 	silently.
 
-	Run it with:
+	For most people the direct one-liner is enough:
+		loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/refs/heads/main/xyro.lua"))()
+
+	Use THIS loader instead if your executor's HttpGet is flaky - it
+	retries 3x and verifies the file before running it:
 		loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/loadstring.lua"))()
 ]]
 

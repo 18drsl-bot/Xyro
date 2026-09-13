@@ -6,10 +6,16 @@ discords: @vertxxy @x9kzx
 ## Load (executor one-liner)
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/loadstring.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/refs/heads/main/xyro.lua"))()
 ```
 
-The loader downloads `xyro.lua` fresh every run (retries 3x and rejects truncated downloads), so script updates go live for everyone the moment they're pushed here — no re-copying code.
+This runs `xyro.lua` straight from the repo, so script updates go live for everyone the moment they're pushed here — no re-copying code.
+
+Prefer extra protection against flaky downloads? This variant retries 3x and rejects truncated files before running:
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/loadstring.lua"))()
+```
 
 ## Commands (default prefix `!`)
 
