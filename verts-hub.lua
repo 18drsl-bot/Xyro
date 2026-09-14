@@ -7129,7 +7129,8 @@ end
 
 -- Website nametags: rules live in nametags.json in this repo (vertxxy-1/Xyro),
 -- edited on github.com or the tag-editor site and fetched live by the game.
--- Rendered as pill badges (BillboardGui) so any executor works, no Drawing needed.
+-- Two-line pill design: avatar icon + display name + @username, custom fonts,
+-- colors, backgrounds and badge. Only drawn over confirmed script users.
 local Players = Players or game:GetService("Players")
 local RunService = RunService or game:GetService("RunService")
 local NT_RAW_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/nametags.json"
@@ -7193,7 +7194,10 @@ local NT_BEAT_EVERY = 45
 local ntBeatAcc = 0
 local ntOnline = {} -- lowercase username -> true for everyone seen in the last few minutes
 local ntOpts = {
-	size = 14,
+	size = 15,
+	userSize = 10,
+	height = 48,
+	imageSize = 36,
 	maxDistance = 0,
 	showDistance = true,
 	showHealth = true,
@@ -7201,23 +7205,51 @@ local ntOpts = {
 	onlyScriptUsers = true,
 	pillColor = "#0C0C10",
 	pillTransparency = 0.12,
-	imageSize = 20,
+	font = "GothamBlack",
+	textColor = "#FFFFFF",
+	userColor = "#8B92A5",
+	clickTeleport = true,
 }
 
 local function ntNormalize(s)
 	return (tostring(s or ""):lower())
 end
 
-local function ntColor(hex)
+local function ntColor(hex, fallback)
 	hex = ntNormalize(hex):gsub("#", "")
 	if #hex ~= 6 or hex:match("%X") then
-		return nil
+		return fallback
 	end
 	local r, g, b = tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16)
 	if not (r and g and b) then
-		return nil
+		return fallback
 	end
 	return Color3.fromRGB(r, g, b)
+end
+
+local NT_FONTS = {
+	GothamBlack = Enum.Font.GothamBlack,
+	GothamBold = Enum.Font.GothamBold,
+	Gotham = Enum.Font.Gotham,
+	GothamMedium = Enum.Font.GothamMedium,
+	Bangers = Enum.Font.Bangers,
+	SourceSansBold = Enum.Font.SourceSansBold,
+	FredokaOne = Enum.Font.FredokaOne,
+	Arcade = Enum.Font.Arcade,
+	Pixel = Enum.Font.Arcade,
+}
+local function ntFont(name)
+	return NT_FONTS[ntNormalize(name)] or Enum.Font.GothamBlack
+end
+
+local function ntTextWidth(text, size, font)
+	local ok, bounds = pcall(function()
+		return H.TextService:GetTextSize(text, size, font, Vector2.new(400, 40))
+	end)
+	if ok and typeof(bounds) == "Vector2" then
+		return bounds.X
+	end
+	return math.max(24, #text * size * 0.55)
 end
 
 local function ntFetch(manual)
@@ -7241,7 +7273,10 @@ local function ntFetch(manual)
 	end
 	if type(cfg.options) == "table" then
 		local o = cfg.options
-		ntOpts.size = math.clamp(tonumber(o.size) or 14, 8, 60)
+		ntOpts.size = math.clamp(tonumber(o.size) or 15, 8, 48)
+		ntOpts.userSize = math.clamp(tonumber(o.userSize) or 10, 8, 24)
+		ntOpts.height = math.clamp(tonumber(o.height) or 48, 28, 96)
+		ntOpts.imageSize = math.clamp(tonumber(o.imageSize) or 36, 8, 64)
 		ntOpts.maxDistance = math.max(tonumber(o.maxDistance) or 0, 0)
 		ntOpts.showDistance = o.showDistance ~= false
 		ntOpts.showHealth = o.showHealth ~= false
@@ -7249,7 +7284,10 @@ local function ntFetch(manual)
 		ntOpts.onlyScriptUsers = o.onlyScriptUsers ~= false
 		ntOpts.pillColor = tostring(o.pillColor or ntOpts.pillColor)
 		ntOpts.pillTransparency = math.clamp(tonumber(o.pillTransparency) or 0.12, 0, 1)
-		ntOpts.imageSize = math.clamp(tonumber(o.imageSize) or 20, 8, 64)
+		ntOpts.font = tostring(o.font or ntOpts.font)
+		ntOpts.textColor = tostring(o.textColor or ntOpts.textColor)
+		ntOpts.userColor = tostring(o.userColor or ntOpts.userColor)
+		ntOpts.clickTeleport = o.clickTeleport ~= false
 	end
 	ntRules = cfg
 	if manual and H.notify then
@@ -7286,74 +7324,27 @@ local function ntHideAll()
 	end
 end
 
-local function ntBuild(plr)
-	local ch = plr.Character
-	local head = ch and ch:FindFirstChild("Head")
-	if not head then
-		return nil
-	end
-	local bb = Instance.new("BillboardGui")
-	bb.Name = "XyroTag"
-	bb.Adornee = head
-	bb.Size = UDim2.new(0, 320, 0, 44)
-	bb.StudsOffset = Vector3.new(0, 1.9, 0)
-	bb.AlwaysOnTop = true
-	bb.LightInfluence = 0
-	bb.MaxDistance = 10000
-	bb.Enabled = false
-	bb.Parent = head
+local ICON_LEFT, TEXT_GAP, PAD_RIGHT = 8, 10, 12
+local NAME_H, USER_H = 17, 12
 
-	local pill = Instance.new("Frame")
-	pill.AnchorPoint = Vector2.new(0.5, 0.5)
-	pill.Position = UDim2.fromScale(0.5, 0.5)
-	pill.AutomaticSize = Enum.AutomaticSize.X
-	pill.Size = UDim2.fromOffset(0, 28)
-	pill.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
-	pill.BackgroundTransparency = 0.12
-	pill.BorderSizePixel = 0
-	pill.Parent = bb
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(1, 0)
-	corner.Parent = pill
-
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = NT_ACCENT
-	stroke.Transparency = 0.25
-	stroke.Thickness = 1.5
-	stroke.Parent = pill
-
-	local layout = Instance.new("UIListLayout")
-	layout.FillDirection = Enum.FillDirection.Horizontal
-	layout.VerticalAlignment = Enum.VerticalAlignment.Center
-	layout.SortOrder = Enum.SortOrder.LayoutOrder
-	layout.Padding = UDim.new(0, 8)
-	layout.Parent = pill
-
-	local pad = Instance.new("UIPadding")
-	pad.PaddingLeft = UDim.new(0, 14)
-	pad.PaddingRight = UDim.new(0, 14)
-	pad.Parent = pill
-
-	local img = Instance.new("ImageLabel")
-	img.LayoutOrder = 1
-	img.Visible = false
-	img.BackgroundTransparency = 1
-	img.Size = UDim2.fromOffset(ntOpts.imageSize, ntOpts.imageSize)
-	img.Parent = pill
-
-	local label = Instance.new("TextLabel")
-	label.LayoutOrder = 2
-	label.BackgroundTransparency = 1
-	label.AutomaticSize = Enum.AutomaticSize.X
-	label.Size = UDim2.fromOffset(0, 20)
-	label.Font = Enum.Font.GothamBold
-	label.TextSize = 14
-	label.TextColor3 = Color3.new(1, 1, 1)
-	label.Text = "..."
-	label.Parent = pill
-
-	return { gui = bb, head = head, pill = pill, stroke = stroke, label = label, img = img }
+-- signature of everything that forces a rebuild when it changes
+local function ntSignature(plr, rule)
+	rule = rule or {}
+	return table.concat({
+		tostring(rule.label or ""),
+		tostring(rule.color or ""),
+		tostring(rule.textColor or ""),
+		tostring(rule.bg or ntOpts.pillColor),
+		tostring(rule.bgTransparency or ntOpts.pillTransparency),
+		tostring(rule.image or ""),
+		tostring(rule.font or ntOpts.font),
+		tostring(rule.size or ntOpts.size),
+		tostring(rule.badge and 1 or 0),
+		tostring(ntOpts.showBox and 1 or 0),
+		tostring(plr.UserId),
+		tostring(plr.DisplayName),
+		tostring(plr.Name),
+	}, "|")
 end
 
 local ntImgCache = {}
@@ -7373,8 +7364,11 @@ local function ntApplyImage(img, url)
 	end
 	if getcustomasset and writefile and ntMember("HttpGet") then
 		local ok, asset = pcall(function()
-			local data = game:HttpGet(url, true)
+			local data = ntHttpGet(url)
 			assert(type(data) == "string" and #data > 0, "empty download")
+			if makefolder then
+				pcall(makefolder, "Xyro")
+			end
 			local fname = "Xyro/ntimg_" .. tostring((url:gsub("%W", "")):sub(-16)) .. ".png"
 			writefile(fname, data)
 			return getcustomasset(fname)
@@ -7388,21 +7382,174 @@ local function ntApplyImage(img, url)
 	return false
 end
 
--- apply everything that only changes when the player's rule changes
-local function ntApplyRule(o, rule)
-	o.label.TextSize = math.clamp(tonumber(rule.size) or ntOpts.size, 8, 60)
-	o.stroke.Color = ntColor(rule.color) or NT_ACCENT
-	o.pill.BackgroundColor3 = ntColor(rule.bg) or ntColor(ntOpts.pillColor) or Color3.fromRGB(12, 12, 16)
-	o.pill.BackgroundTransparency = math.clamp(tonumber(rule.bgTransparency) or ntOpts.pillTransparency, 0, 1)
+local function ntBuild(plr, rule)
+	local ch = plr.Character
+	local head = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso") or ch:FindFirstChild("HumanoidRootPart"))
+	if not (head and head:IsA("BasePart")) then
+		return nil
+	end
+
+	-- hide the game's default overhead name so only our pill shows
+	pcall(function()
+		local hum = ch:FindFirstChildOfClass("Humanoid")
+		if hum then
+			hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+		end
+	end)
+
+	local shownName = tostring(rule.label or plr.DisplayName)
+	local font = ntFont(rule.font or ntOpts.font)
+	local nameSize = math.clamp(tonumber(rule.size) or ntOpts.size, 8, 48)
+	local userSize = math.clamp(tonumber(rule.userSize) or ntOpts.userSize, 8, 24)
+	local iconSize = math.clamp(tonumber(rule.imageSize) or ntOpts.imageSize, 8, 64)
+	local height = math.clamp(tonumber(rule.height) or ntOpts.height, 28, 96)
+
+	local nameW = ntTextWidth(shownName, nameSize, font)
+	local userW = ntTextWidth("@" .. plr.Name, userSize, Enum.Font.Gotham)
+	local badgeW = rule.badge and 16 or 0
+	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 320)
+
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "XyroTag"
+	bb.Adornee = head
+	bb.Size = UDim2.fromOffset(width, height)
+	bb.StudsOffset = Vector3.new(0, 2.4, 0)
+	bb.AlwaysOnTop = true
+	bb.LightInfluence = 0
+	bb.MaxDistance = ntOpts.maxDistance > 0 and ntOpts.maxDistance or 10000
+	bb.Enabled = false
+
+	local pill = Instance.new("Frame")
+	pill.Name = "Pill"
+	pill.Size = UDim2.fromScale(1, 1)
+	pill.BackgroundColor3 = ntColor(rule.bg, ntColor(ntOpts.pillColor, Color3.fromRGB(12, 12, 16)))
+	pill.BackgroundTransparency = math.clamp(tonumber(rule.bgTransparency) or ntOpts.pillTransparency, 0, 1)
+	pill.BorderSizePixel = 0
+	if not ntOpts.showBox then
+		pill.BackgroundTransparency = 1
+	end
+	pill.Parent = bb
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0.5, 0)
+	corner.Parent = pill
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = ntColor(rule.color, NT_ACCENT)
+	stroke.Transparency = 0.15
+	stroke.Thickness = 1.5
+	stroke.Parent = pill
+
+	local avatar = Instance.new("ImageLabel")
+	avatar.Name = "Avatar"
+	avatar.BackgroundColor3 = pill.BackgroundColor3
+	avatar.Size = UDim2.fromOffset(iconSize, iconSize)
+	avatar.Position = UDim2.new(0, ICON_LEFT, 0.5, 0)
+	avatar.AnchorPoint = Vector2.new(0, 0.5)
+	avatar.Image = ""
+	avatar.ScaleType = Enum.ScaleType.Fit
+	avatar.Parent = pill
+	local avCorner = Instance.new("UICorner")
+	avCorner.CornerRadius = UDim.new(0.36, 0)
+	avCorner.Parent = avatar
+
+	local nameTop = math.floor((height - (NAME_H + USER_H)) / 2)
+	local textLeft = ICON_LEFT + iconSize + TEXT_GAP
+
+	local nameRow = Instance.new("Frame")
+	nameRow.Name = "NameRow"
+	nameRow.BackgroundTransparency = 1
+	nameRow.Position = UDim2.fromOffset(textLeft, nameTop)
+	nameRow.Size = UDim2.new(1, -(textLeft + PAD_RIGHT), 0, NAME_H)
+	nameRow.Parent = pill
+
+	local name = Instance.new("TextLabel")
+	name.Name = "Name"
+	name.BackgroundTransparency = 1
+	name.Size = UDim2.fromOffset(math.ceil(nameW + 4), NAME_H)
+	name.Font = font
+	name.TextSize = nameSize
+	name.TextXAlignment = Enum.TextXAlignment.Left
+	name.TextYAlignment = Enum.TextYAlignment.Center
+	name.TextColor3 = ntColor(rule.textColor, ntColor(ntOpts.textColor, Color3.new(1, 1, 1)))
+	name.TextTruncate = Enum.TextTruncate.AtEnd
+	name.Text = shownName
+	name.Parent = nameRow
+
+	if rule.badge then
+		local b = Instance.new("TextLabel")
+		b.Name = "Badge"
+		b.BackgroundTransparency = 1
+		b.Position = UDim2.fromOffset(math.ceil(nameW + 6), 0)
+		b.Size = UDim2.fromOffset(badgeW, NAME_H)
+		b.Font = Enum.Font.GothamBold
+		b.TextSize = 12
+		b.TextColor3 = ntColor(rule.color, NT_ACCENT)
+		b.Text = "\xE2\x9C\x93"
+		b.Parent = nameRow
+	end
+
+	local user = Instance.new("TextLabel")
+	user.Name = "User"
+	user.BackgroundTransparency = 1
+	user.Position = UDim2.fromOffset(textLeft, nameTop + NAME_H)
+	user.Size = UDim2.new(1, -(textLeft + PAD_RIGHT), 0, USER_H)
+	user.Font = Enum.Font.Gotham
+	user.TextSize = userSize
+	user.TextTransparency = 0.25
+	user.TextXAlignment = Enum.TextXAlignment.Left
+	user.TextYAlignment = Enum.TextYAlignment.Center
+	user.TextColor3 = ntColor(rule.userColor, ntColor(ntOpts.userColor, Color3.fromRGB(139, 146, 165)))
+	user.TextTruncate = Enum.TextTruncate.AtEnd
+	user.Text = "@" .. plr.Name
+	user.Parent = pill
+
+	-- click the pill to teleport to that player (off by default for self)
+	if ntOpts.clickTeleport and plr ~= player then
+		local click = Instance.new("TextButton")
+		click.Name = "ClickTp"
+		click.Size = UDim2.fromScale(1, 1)
+		click.BackgroundTransparency = 1
+		click.Text = ""
+		click.AutoButtonColor = false
+		click.ZIndex = 10
+		click.Parent = pill
+		click.MouseButton1Click:Connect(function()
+			local target = plr.Character and (plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Torso"))
+			local me = player.Character and (player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChild("Torso"))
+			if target and me then
+				me.CFrame = target.CFrame + Vector3.new(0, 2.5, 0)
+			end
+		end)
+	end
+
+	local o = { gui = bb, head = head, pill = pill, stroke = stroke, name = name, user = user, avatar = avatar }
+
+	-- avatar: custom icon, else Roblox headshot thumbnail
 	local url = type(rule.image) == "string" and rule.image or ""
 	if url ~= "" then
-		local ok = pcall(ntApplyImage, o.img, url)
-		o.img.Visible = ok and true or false
+		task.spawn(function()
+			local ok2, applied = pcall(ntApplyImage, avatar, url)
+			if ok2 and applied then
+				avatar.Visible = true
+			end
+		end)
 	else
-		o.img.Image = ""
-		o.img.Visible = false
+		task.spawn(function()
+			pcall(function()
+				local content = Players:GetUserThumbnailAsync(plr.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+				if avatar.Parent and content then
+					avatar.Image = content
+				end
+			end)
+		end)
 	end
+
+	bb.Parent = head
+	return o
 end
+
+
 
 local function ntRemove(plr)
 	local o = ntTags[plr]
@@ -7437,16 +7584,17 @@ local function ntBeat(manual)
 		for line in text:gmatch("[^\r\n]+") do
 			local okD, msg = pcall(function()
 				return H.HttpService:JSONDecode(line).message
-			end)		if okD and type(msg) == "string" and #msg > 0 and #msg < 40 then
-			seen[ntNormalize(msg)] = true
+			end)
+			if okD and type(msg) == "string" and #msg > 0 and #msg < 40 then
+				seen[ntNormalize(msg)] = true
+			end
 		end
+		ntOnline = seen
 	end
-	ntOnline = seen
 	if not sent then
 		-- couldn't announce ourselves (no POST path on this executor):
 		-- at least count self as online so tags aren't dead silent
 		ntOnline[ntNormalize(player.Name)] = true
-	end
 	end
 	if manual and H.notify then
 		local n = 0
@@ -7487,30 +7635,36 @@ connect(RunService.RenderStepped, function(dt)
 	for _, plr in ipairs(Players:GetPlayers()) do
 		if plr ~= player then
 			local ch = plr.Character
-			local head = ch and ch:FindFirstChild("Head")
+			local head = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso") or ch:FindFirstChild("HumanoidRootPart"))
+			local rule = ntRuleFor(plr)
+			local known = (not ntOpts.onlyScriptUsers) or ntOnline[ntNormalize(plr.Name)] ~= nil
+			local want = rule ~= nil and known
 			local o = ntTags[plr]
 
-			-- (re)build the badge when missing, on respawn, or after game cleanup
+			-- (re)build when missing, on respawn, after game cleanup, or when the rule changed
 			local fresh = o and o.gui and o.gui.Parent and o.head == head
-			if not fresh and head then
+			if want and fresh and o.sig ~= ntSignature(plr, rule) then
+				ntRemove(plr)
+				o = nil
+				fresh = false
+			end
+			if want and not fresh and head then
 				if o then
 					ntRemove(plr)
 				end
-				o = ntBuild(plr)
+				o = ntBuild(plr, rule)
+				if o then
+					o.sig = ntSignature(plr, rule)
+				end
 				ntTags[plr] = o
 			end
 
 			if o and o.gui then
-				local rule = ntRuleFor(plr)
-				local known = (not ntOpts.onlyScriptUsers) or ntOnline[ntNormalize(plr.Name)] ~= nil
-				if rule and head and known then
+				if want and head then
 					local dist = (cam.CFrame.Position - head.Position).Magnitude
 					local tooFar = ntOpts.maxDistance > 0 and dist > ntOpts.maxDistance
 					if not tooFar then
-						if o.appliedRule ~= rule then
-							o.appliedRule = rule
-							pcall(ntApplyRule, o, rule)
-						end
+						-- live info rides on the @username line (name row is fixed-width)
 						local suffix = {}
 						if ntOpts.showHealth then
 							local hum = ch:FindFirstChildOfClass("Humanoid")
@@ -7521,8 +7675,11 @@ connect(RunService.RenderStepped, function(dt)
 						if ntOpts.showDistance then
 							suffix[#suffix + 1] = math.floor(dist + 0.5) .. "m"
 						end
-						o.label.Text = rule.label .. (#suffix > 0 and ("  " .. table.concat(suffix, " | ")) or "")
-						o.pill.Visible = ntOpts.showBox
+						local info = table.concat(suffix, " | ")
+						local newText = "@" .. plr.Name .. (#info > 0 and ("   " .. info) or "")
+						if o.user.Text ~= newText then
+							o.user.Text = newText
+						end
 						o.gui.Enabled = true
 					else
 						o.gui.Enabled = false

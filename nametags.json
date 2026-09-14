@@ -1,6 +1,9 @@
 {
 	"options": {
-		"size": 14,
+		"size": 15,
+		"userSize": 10,
+		"height": 48,
+		"imageSize": 36,
 		"maxDistance": 0,
 		"showDistance": true,
 		"showHealth": true,
@@ -8,7 +11,10 @@
 		"onlyScriptUsers": true,
 		"pillColor": "#0C0C10",
 		"pillTransparency": 0.12,
-		"imageSize": 20
+		"font": "GothamBlack",
+		"textColor": "#FFFFFF",
+		"userColor": "#8B92A5",
+		"clickTeleport": true
 	},
 	"tags": [
 		{
