@@ -1,6 +1,6 @@
-// quick static sanity check for editor.html editor logic
+// quick static sanity check for index.html editor logic
 const fs = require("fs");
-const html = fs.readFileSync("editor.html", "utf8");
+const html = fs.readFileSync("index.html", "utf8");
 
 // extract the main <script> block (the last one)
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
