@@ -13,8 +13,9 @@
 	"tags": [
 		{
 			"match": "Vertxxy2",
-			"label": "nigger",
-			"color": "#6C80FF"
+			"label": "Vert",
+			"color": "#6C80FF",
+			"badge": true
 		},
 		{
 			"match": "stellarpAlladium",
