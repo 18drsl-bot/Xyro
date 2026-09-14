@@ -20,7 +20,10 @@
 		"userBoxRadius": 0,
 		"userBoxStroke": "",
 		"clickTeleport": true,
-		"seeThroughWalls": true
+		"seeThroughWalls": true,
+		"collapseFar": true,
+		"collapseDistance": 60,
+		"collapsedIcon": 28
 	},
 	"tags": [
 		{

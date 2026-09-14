@@ -5348,6 +5348,12 @@ local function loadFriends()
 	if not ok or not pages then
 		return
 	end
+	-- some executors return the Players instance instead of a FriendsPage
+	-- (throwing "IsFinished is not a valid member of Players" on first use)
+	-- - verify we actually got a FriendsPage before paging it
+	if typeof(pages) ~= "Instance" or not pages:IsA("FriendsPage") then
+		return
+	end
 	local new, guard = {}, 0
 	while guard < 60 do
 		guard += 1
@@ -7246,6 +7252,8 @@ local ntOpts = {
 	userBoxTransparency = 0.25,
 	userBoxRadius = 8,
 	userBoxStroke = "",
+	collapseDistance = 60, -- closer than this the full pill shows; 0 = never collapse
+	collapsedIcon = 28, -- avatar-only size while collapsed (still click-teleports)
 }
 
 local function ntNormalize(s)
@@ -7312,6 +7320,12 @@ local function ntApplyOptions(o)
 	ntOpts.userBoxTransparency = math.clamp(tonumber(o.userBoxTransparency) or 0.25, 0, 1)
 	ntOpts.userBoxRadius = math.clamp(tonumber(o.userBoxRadius) or 8, 0, 24)
 	ntOpts.userBoxStroke = tostring(o.userBoxStroke or "")
+	ntOpts.collapseDistance = math.max(tonumber(o.collapseDistance) or 60, 0)
+	ntOpts.collapsedIcon = math.clamp(tonumber(o.collapsedIcon) or 28, 16, 128)
+	ntOpts.collapseFar = o.collapseFar ~= false
+	if not ntOpts.collapseFar then
+		ntOpts.collapseDistance = 0
+	end
 end
 
 -- your tag is saved to disk after every successful fetch and re-applied
@@ -8310,7 +8324,54 @@ local function ntBuild(plr, rule)
 		end)
 	end
 
-	local o = { gui = bb, head = head, pill = pill, stroke = stroke, name = name, user = user, avatar = avatar, bgImg = bgImg }
+	local o = { gui = bb, head = head, pill = pill, stroke = stroke, shadow = shadow, name = name, user = user, avatar = avatar, bgImg = bgImg }
+
+	-- distance collapse: beyond collapseDistance the pill shrinks to the
+	-- avatar alone (name/user rows hidden) but stays click-teleportable;
+	-- walk closer and it expands again. openObject keeps the pill full-size
+	-- while the user is interacting with it.
+	if ntOpts.collapseDistance > 0 and plr ~= player then
+		o.openObject = Instance.new("BoolValue")
+		o.openObject.Name = "XyroTagOpen"
+		o.openObject.Value = true
+		o.openObject.Parent = bb
+		local collapsed = Instance.new("ImageButton")
+		collapsed.Name = "Collapsed"
+		collapsed.AnchorPoint = Vector2.new(0.5, 0.5)
+		collapsed.Position = UDim2.fromScale(0.5, 0.5)
+		collapsed.Size = UDim2.fromOffset(ntOpts.collapsedIcon, ntOpts.collapsedIcon)
+		collapsed.BackgroundTransparency = 1
+		collapsed.Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(plr.UserId) .. "&w=420&h=420"
+		collapsed.ScaleType = Enum.ScaleType.Crop
+		collapsed.Visible = false
+		collapsed.ZIndex = 10
+		collapsed.Parent = bb
+		local cCorner = Instance.new("UICorner")
+		cCorner.CornerRadius = UDim.new(0.5, 0)
+		cCorner.Parent = collapsed
+		local cRing = Instance.new("UIStroke")
+		cRing.Color = ntColor(rule.color, NT_ACCENT)
+		cRing.Thickness = 2
+		cRing.Transparency = 0.2
+		cRing.Parent = collapsed
+		collapsed.ImageTransparency = 1
+		task.spawn(function()
+			task.wait()
+			if collapsed.Parent then
+				collapsed.ImageTransparency = 0
+			end
+		end)
+		o.collapsed = collapsed
+		o.baseSize = bb.Size
+		o.collapsedIconSize = ntOpts.collapsedIcon
+		collapsed.MouseButton1Click:Connect(function()
+			local target = plr.Character and (plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Torso"))
+			local me = player.Character and (player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChild("Torso"))
+			if target and me then
+				me.CFrame = target.CFrame + Vector3.new(0, 2.5, 0)
+			end
+		end)
+	end
 
 	-- avatar: custom icon, else Roblox headshot thumbnail
 	local url = type(rule.image) == "string" and rule.image or ""
@@ -8346,6 +8407,30 @@ local function ntRemove(plr)
 		end
 		ntTags[plr] = nil
 	end
+end
+
+-- flip a tag between full pill and icon-only collapsed mode. Cheap: only
+-- writes when the state actually changes (runs every frame otherwise).
+local function ntSetCollapsed(o, on)
+	if o.collapsedState == on then
+		return
+	end
+	o.collapsedState = on
+	local bb = o.gui
+	if not (bb and bb.Parent) then
+		return
+	end
+	if o.openObject then
+		o.openObject.Value = not on
+	end
+	o.pill.Visible = not on
+	if o.shadow then
+		o.shadow.Visible = not on
+	end
+	if o.collapsed then
+		o.collapsed.Visible = on
+	end
+	bb.Size = on and UDim2.fromOffset(o.collapsedIconSize, o.collapsedIconSize) or o.baseSize
 end
 
 local function ntCleanup()
@@ -8484,7 +8569,9 @@ connect(RunService.RenderStepped, function(dt)
 			local o = ntTags[plr]
 
 			-- (re)build when missing, on respawn, after game cleanup, or when the rule changed
-			local fresh = o and o.gui and o.gui.Parent and o.head == head
+			-- collapsedState == nil marks a fresh build so an old state never
+			-- leaks onto a rebuilt tag (rebuilds happen on rule/respawn changes)
+			local fresh = o and o.gui and o.gui.Parent and o.head == head and o.collapsedState == nil
 			if want and fresh and o.sig ~= ntSignature(plr, rule) then
 				ntRemove(plr)
 				o = nil
@@ -8504,7 +8591,25 @@ connect(RunService.RenderStepped, function(dt)
 			if o and o.gui then
 				if want and head then
 					local dist = (cam.CFrame.Position - head.Position).Magnitude
-					local tooFar = ntOpts.maxDistance > 0 and dist > ntOpts.maxDistance
+					local tooFar = ntOpts.maxDistance > 0 and dist > ntOpts.maxDistance					-- distance collapse (other players only): far away the pill
+					-- shrinks to just the avatar icon - still click-teleports.
+					-- Hover the mouse near the icon and the full pill expands
+					-- again until the mouse moves off it (screen-space check:
+					-- a raycast would false-positive on empty sky).
+					local wantCollapsed = ntOpts.collapseDistance > 0 and o.collapsed ~= nil and dist > ntOpts.collapseDistance
+					local hoverOpen = false
+					if wantCollapsed and o.collapsedState and mouse then
+						local okPt, sp = pcall(function()
+							return cam:WorldToViewportPoint(head.Position)
+						end)
+						if okPt and type(sp) == "table" and sp.Z > 0 then
+							local dx, dy = mouse.X - sp.X, mouse.Y - sp.Y
+							hoverOpen = dx * dx + dy * dy <= 2304 -- 48px radius squared
+						end
+					end
+					if o.collapsed then
+						ntSetCollapsed(o, wantCollapsed and not hoverOpen)
+					end
 					if not tooFar then
 						-- live info rides on the @username line (name row is fixed-width)
 						local suffix = {}

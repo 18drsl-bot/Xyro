@@ -425,6 +425,8 @@
 					<div><label>@username box transparency (0=solid)</label><input id="optUBoxTrans" type="number" min="0" max="1" step="0.05" placeholder="0.25"></div>
 					<div><label>@username box roundness (0-24)</label><input id="optUBoxRadius" type="number" min="0" max="24" placeholder="8"></div>
 					<div><label>@username box border (hex or blank)</label><input id="optUBoxStroke" placeholder="none"></div>
+					<div><label>collapse distance (studs, 0=off)</label><input id="optCollapseDist" type="number" min="0" placeholder="60"></div>
+					<div><label>collapsed icon size (px)</label><input id="optCollapseIcon" type="number" min="16" max="128" placeholder="28"></div>
 				</div>
 				<div class="checks">
 					<label><input id="optDistOn" type="checkbox" checked> distance</label>
@@ -434,8 +436,20 @@
 					<label><input id="optClickTp" type="checkbox" checked> click pill = teleport</label>
 					<label><input id="optUBox" type="checkbox"> @username box</label>
 					<label><input id="optWalls" type="checkbox" checked> see through walls</label>
+					<label><input id="optCollapse" type="checkbox" checked> collapse far tags to icon (still clickable)</label>
 				</div>
 				<div class="hint">Options apply to everyone; per-rule settings override them.</div>
+			</div>
+		</div>
+
+		<div>
+			<div class="card">
+				<h2>
+					<span class="hl">Script users <span id="userCount" class="chip"></span></span>
+					<span class="chip" id="usersLive">checking...</span>
+				</h2>
+				<div class="hint" style="margin-top:0">Everyone currently running the script (live presence, refreshes every 20s). Click +tag to create a rule for them.</div>
+				<div class="rlist" id="userList"></div>
 			</div>
 		</div>
 
@@ -694,6 +708,9 @@ function renderOptions() {
 	$("optScriptUsers").checked = o.onlyScriptUsers !== false;
 	$("optClickTp").checked = o.clickTeleport !== false;
 	$("optWalls").checked = o.seeThroughWalls !== false;
+	$("optCollapse").checked = (o.collapseDistance != null ? o.collapseDistance : 60) > 0;
+	$("optCollapseDist").value = o.collapseDistance != null ? o.collapseDistance : 60;
+	$("optCollapseIcon").value = o.collapsedIcon != null ? o.collapsedIcon : 28;
 }
 
 function renderDirty() {
@@ -702,7 +719,7 @@ function renderDirty() {
 	document.title = (dirty ? "(unsaved) " : "") + "Xyro Tag Editor";
 }
 
-function renderAll() { renderPreview(); renderRules(); renderDirty(); }
+function renderAll() { renderPreview(); renderRules(); renderUsers(); renderDirty(); }
 
 function changed(why) {
 	localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
@@ -934,7 +951,7 @@ function moveRule(i, dir) {
 
 /* ---------- options wiring ---------- */
 /* merge with existing options so keys the form doesn't own survive a publish */
-["optSize", "optUserSize", "optHeight", "optFont", "optDist", "optImgSize", "optPillColor", "optPillTrans", "optTextColor", "optUserColor", "optUBox", "optUBoxColor", "optUBoxTrans", "optUBoxRadius", "optUBoxStroke", "optDistOn", "optHp", "optBox", "optScriptUsers", "optClickTp", "optWalls"].forEach(id => {
+["optSize", "optUserSize", "optHeight", "optFont", "optDist", "optImgSize", "optPillColor", "optPillTrans", "optTextColor", "optUserColor", "optUBox", "optUBoxColor", "optUBoxTrans", "optUBoxRadius", "optUBoxStroke", "optDistOn", "optHp", "optBox", "optScriptUsers", "optClickTp", "optWalls", "optCollapse", "optCollapseDist", "optCollapseIcon"].forEach(id => {
 	$(id).addEventListener("input", () => {
 		cfg.options = Object.assign({}, cfg.options, readOptions());
 		changed("options");
@@ -964,12 +981,94 @@ function readOptions() {
 		userBoxStroke: $("optUBoxStroke").value.trim().toUpperCase(),
 		clickTeleport: $("optClickTp").checked,
 		seeThroughWalls: $("optWalls").checked,
+		collapseDistance: Math.max(0, parseInt($("optCollapseDist").value) || 0),
+		collapsedIcon: Math.min(128, Math.max(16, parseInt($("optCollapseIcon").value) || 28)),
+		collapseFar: $("optCollapse").checked,
 	};
 }
 
 /* ---------- rules buttons ---------- */
 $("addRule").onclick = () => openEditor(cfg.tags.length);
 $("search").addEventListener("input", renderRules);
+
+/* ---------- script users (live presence sync) ---------- */
+/* the game heartbeats every player's username to this anonymous ntfy
+   topic; the editor polls the same feed so you can see who's running
+   the script right now and one-click a rule for anyone missing one */
+let seenUsers = {}; // lowercase name -> last-seen timestamp
+
+function renderUsers() {
+	if (!cfg) return; // config not loaded yet - first poll can beat load()
+	const names = Object.keys(seenUsers).sort();
+	$("userCount").textContent = names.length ? names.length + " online" : "none";
+	const list = $("userList");
+	list.innerHTML = "";
+	if (!names.length) {
+		const empty = document.createElement("div");
+		empty.className = "hint";
+		empty.style.marginTop = "6px";
+		empty.textContent = "Nobody yet - the list fills in as players run the script.";
+		list.appendChild(empty);
+		return;
+	}
+	const star = cfg.tags.some(t => (t.match || "") === "*");
+	for (const n of names) {
+		const matched = cfg.tags.some(t => {
+			const m = (t.match || "").toLowerCase();
+			return m !== "" && m !== "*" && n.startsWith(m);
+		});
+		const row = document.createElement("div");
+		row.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.05)";
+		const dot = document.createElement("span");
+		dot.style.cssText = "width:8px;height:8px;border-radius:50%;background:" + (matched ? "#3ddc84" : "#e5b83c") + ";flex:none";
+		const nm = document.createElement("b");
+		nm.textContent = n; // usernames come off the wire - never innerHTML them
+		nm.style.cssText = "font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis";
+		const state = document.createElement("span");
+		state.className = "hint";
+		state.textContent = matched ? "tagged" : star ? "catch-all" : "no rule";
+		const btn = document.createElement("button");
+		btn.textContent = "+ tag";
+		btn.style.cssText = "padding:5px 12px;font-size:12px;flex:none";
+		btn.onclick = () => {
+			openEditor(cfg.tags.length);
+			$("fMatch").value = n;
+			$("fLabel").value = n;
+			renderEditorPreview();
+			$("fLabel").focus();
+		};
+		row.append(dot, nm, state, btn);
+		list.appendChild(row);
+	}
+}
+
+async function pollUsers() {
+	try {
+		const res = await fetch("https://ntfy.sh/xyro-presence-k2m9x7q/json?poll=1&since=75s");
+		if (!res.ok) throw new Error(res.status);
+		const text = await res.text();
+		const now = Date.now();
+		// ntfy's /json endpoint is one JSON object per line (NDJSON)
+		for (const line of text.split(/\r?\n/)) {
+			if (!line.trim()) continue;
+			try {
+				const m = JSON.parse(line);
+				const n = String(m.message || "").trim().toLowerCase();
+				if (n && n.length < 40) seenUsers[n] = now;
+			} catch (_) { /* partial line */ }
+		}
+		const cutoff = now - 75000;
+		for (const n of Object.keys(seenUsers)) if (seenUsers[n] < cutoff) delete seenUsers[n];
+		renderUsers();
+		$("usersLive").textContent = "live";
+		$("usersLive").classList.add("on");
+	} catch (_) {
+		$("usersLive").textContent = "offline";
+		$("usersLive").classList.remove("on");
+	}
+}
+setInterval(pollUsers, 20000);
+pollUsers();
 
 /* ---------- token ---------- */
 function refreshTokenChip() {
