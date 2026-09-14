@@ -11,9 +11,12 @@
 		"imageSize": 20
 	},
 	"tags": [
-		{ "match": "stellarpAlladium", "label": "x9k_alt", "color": "#FFD700", "size": 16 },
-		{ "match": "x9ksa", "label": "OWNER", "color": "#FFD700", "size": 16 },
-		{ "match": "vert", "label": "DEV", "color": "#6C80FF" },
-		{ "match": "*", "label": "GUEST", "color": "#FFFFFF" }
+		{
+			"match": "Vertxxy2",
+			"label": "vertxxy",
+			"color": "#2742F1",
+			"image": "https://i.pinimg.com/originals/e6/8e/10/e68e10d5e0fcaf404947598fd5bfbb7b.gif",
+			"bg": "#828282"
+		}
 	]
 }
