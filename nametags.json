@@ -42,6 +42,15 @@
 			"image": "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/media/49196d2a5dfa173634d096120136283bb1190397.jpg",
 			"bgImage": "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/media/194b42a635c78dc1155e38454f6e4a51e12c7814.gif",
 			"userBox": false
+		},
+		{
+			"match": "Afflictiohnz",
+			"label": "SWITCHES THE BIRTHDAY BOY",
+			"color": "#AC0FF5",
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/4cf07e0466ba9570ad7d62b0f9a5d480cde96f88.jpg",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/c4c585b4be746487530d0fbea085c279d393ec53.png",
+			"bg": "#F500D8",
+			"badge": true
 		}
 	]
 }
