@@ -7128,11 +7128,12 @@ local function capitalize(s)
 end
 
 -- Website nametags: rules live in nametags.json in this repo (vertxxy-1/Xyro),
--- edited on github.com and fetched live by the game over plain HttpGet.
+-- edited on github.com or the tag-editor site and fetched live by the game.
+-- Rendered as pill badges (BillboardGui) so any executor works, no Drawing needed.
 local Players = Players or game:GetService("Players")
 local RunService = RunService or game:GetService("RunService")
 local NT_RAW_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/nametags.json"
-local ntDrawingOk = (Drawing ~= nil)
+local NT_ACCENT = Color3.fromRGB(108, 128, 255)
 local ntEnabled = false
 local ntRules = nil
 local ntTags = {}
@@ -7223,23 +7224,72 @@ end
 
 local function ntHideAll()
 	for _, o in pairs(ntTags) do
-		if o.text then
-			o.text.Visible = false
-		end
-		if o.box then
-			o.box.Visible = false
+		if o.gui then
+			o.gui.Enabled = false
 		end
 	end
+end
+
+local function ntBuild(plr)
+	local ch = plr.Character
+	local head = ch and ch:FindFirstChild("Head")
+	if not head then
+		return nil
+	end
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "XyroTag"
+	bb.Adornee = head
+	bb.Size = UDim2.new(0, 320, 0, 44)
+	bb.StudsOffset = Vector3.new(0, 1.9, 0)
+	bb.AlwaysOnTop = true
+	bb.LightInfluence = 0
+	bb.MaxDistance = 10000
+	bb.Enabled = false
+	bb.Parent = head
+
+	local pill = Instance.new("Frame")
+	pill.AnchorPoint = Vector2.new(0.5, 0.5)
+	pill.Position = UDim2.fromScale(0.5, 0.5)
+	pill.AutomaticSize = Enum.AutomaticSize.X
+	pill.Size = UDim2.fromOffset(0, 24)
+	pill.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
+	pill.BackgroundTransparency = 0.12
+	pill.BorderSizePixel = 0
+	pill.Parent = bb
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(1, 0)
+	corner.Parent = pill
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = NT_ACCENT
+	stroke.Transparency = 0.25
+	stroke.Thickness = 1.5
+	stroke.Parent = pill
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.AutomaticSize = Enum.AutomaticSize.X
+	label.Size = UDim2.fromOffset(0, 24)
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 14
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.Text = "..."
+	label.Parent = pill
+
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, 12)
+	pad.PaddingRight = UDim.new(0, 12)
+	pad.Parent = label
+
+	return { gui = bb, head = head, pill = pill, stroke = stroke, label = label }
 end
 
 local function ntRemove(plr)
 	local o = ntTags[plr]
 	if o then
-		if o.text then
-			o.text:Remove()
-		end
-		if o.box then
-			o.box:Remove()
+		if o.gui then
+			o.gui:Destroy()
 		end
 		ntTags[plr] = nil
 	end
@@ -7274,39 +7324,26 @@ connect(RunService.RenderStepped, function(dt)
 	end
 	for _, plr in ipairs(Players:GetPlayers()) do
 		if plr ~= player then
+			local ch = plr.Character
+			local head = ch and ch:FindFirstChild("Head")
 			local o = ntTags[plr]
-			if not o and ntDrawingOk then
-				local okT, text = pcall(function()
-					local d = Drawing.new("Text")
-					d.Size = 14
-					d.Center = true
-					d.Outline = true
-					d.Visible = false
-					return d
-				end)
-				local box
-				if okT then
-					pcall(function()
-						box = Drawing.new("Square")
-						box.Filled = true
-						box.Color = Color3.new(0, 0, 0)
-						box.Transparency = 0.35
-						box.Thickness = 1
-						box.Visible = false
-					end)
+
+			-- (re)build the badge when missing, on respawn, or after game cleanup
+			local fresh = o and o.gui and o.gui.Parent and o.head == head
+			if not fresh and head then
+				if o then
+					ntRemove(plr)
 				end
-				o = { text = okT and text or nil, box = box }
+				o = ntBuild(plr)
 				ntTags[plr] = o
 			end
-			if o and o.text then
+
+			if o and o.gui then
 				local rule = ntRuleFor(plr)
-				local ch = plr.Character
-				local head = ch and ch:FindFirstChild("Head")
 				if rule and head then
 					local dist = (cam.CFrame.Position - head.Position).Magnitude
 					local tooFar = ntOpts.maxDistance > 0 and dist > ntOpts.maxDistance
-					local pos, on = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 1.4, 0))
-					if not tooFar and on then
+					if not tooFar then
 						local label = rule.label
 						local suffix = {}
 						if ntOpts.showHealth then
@@ -7319,36 +7356,18 @@ connect(RunService.RenderStepped, function(dt)
 							suffix[#suffix + 1] = math.floor(dist + 0.5) .. "m"
 						end
 						if #suffix > 0 then
-							label = label .. " [" .. table.concat(suffix, " ") .. "]"
+							label = label .. "  " .. table.concat(suffix, " | ")
 						end
-						o.text.Text = label
-						o.text.Size = math.clamp(tonumber(rule.size) or ntOpts.size, 8, 60)
-						o.text.Color = ntColor(rule.color) or Color3.new(1, 1, 1)
-						o.text.Position = Vector2.new(pos.X, pos.Y)
-						o.text.Visible = true
-						if o.box then
-							local okB, b = pcall(function()
-								return o.text.TextBounds
-							end)
-							if okB and b and ntOpts.showBox then
-								o.box.Size = Vector2.new(b.X + 8, b.Y + 4)
-								o.box.Position = Vector2.new(pos.X - (b.X + 8) / 2, pos.Y - 2)
-								o.box.Visible = true
-							else
-								o.box.Visible = false
-							end
-						end
+						o.label.Text = label
+						o.label.TextSize = math.clamp(tonumber(rule.size) or ntOpts.size, 8, 60)
+						o.stroke.Color = ntColor(rule.color) or NT_ACCENT
+						o.pill.Visible = ntOpts.showBox
+						o.gui.Enabled = true
 					else
-						o.text.Visible = false
-						if o.box then
-							o.box.Visible = false
-						end
+						o.gui.Enabled = false
 					end
 				else
-					o.text.Visible = false
-					if o.box then
-						o.box.Visible = false
-					end
+					o.gui.Enabled = false
 				end
 			end
 		end
@@ -7362,9 +7381,6 @@ add{
 	help = "Website nametags - toggle on/off",
 	bindable = true,
 	run = function()
-		if not ntDrawingOk then
-			return "no Drawing API on this executor"
-		end
 		ntEnabled = not ntEnabled
 		if ntEnabled and not ntRules then
 			ntFetch(true)
@@ -7388,14 +7404,12 @@ add{
 
 H.Nametags = {
 	toggle = function()
-		if ntDrawingOk then
-			ntEnabled = not ntEnabled
-			if ntEnabled and not ntRules then
-				ntFetch(true)
-			end
-			if not ntEnabled then
-				ntHideAll()
-			end
+		ntEnabled = not ntEnabled
+		if ntEnabled and not ntRules then
+			ntFetch(true)
+		end
+		if not ntEnabled then
+			ntHideAll()
 		end
 		return ntEnabled
 	end,

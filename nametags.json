@@ -7,6 +7,7 @@
 		"showBox": true
 	},
 	"tags": [
+		{ "match": "x9k_alt", "label": "x9k_alt", "color": "#FFD700", "size": 16 },
 		{ "match": "x9ksa", "label": "OWNER", "color": "#FFD700", "size": 16 },
 		{ "match": "vert", "label": "DEV", "color": "#6C80FF" },
 		{ "match": "*", "label": "GUEST", "color": "#FFFFFF" }
