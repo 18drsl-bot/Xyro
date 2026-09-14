@@ -7655,7 +7655,9 @@ local function ntDecodeGIF(data)
 				pos += 4
 				pos += 1
 			elseif label == 0xFF then
-				pos += 1
+				-- pos already sits on the first sub-block length byte; the
+				-- stray skip here read 'N' of NETSCAPE2.0 as a length and
+				-- derailed the whole block walk (0 frames -> no image)
 				readBlock()
 			else
 				readBlock()
@@ -7800,7 +7802,7 @@ local function ntEncodePNG(w, h, rgba)
 	local zi = 2
 	local off = 1
 	while off <= #raw do
-		local piece = raw:sub(off, off + 65535)
+		local piece = raw:sub(off, off + 65534) -- 65535 bytes max per stored block (sub is inclusive!)
 		off += #piece
 		local fin = off > #raw
 		z[zi] = string.char(fin and 1 or 0, #piece % 256, math.floor(#piece / 256) % 256, bit32.bnot(#piece) % 256, bit32.bnot(math.floor(#piece / 256)) % 256) .. piece
