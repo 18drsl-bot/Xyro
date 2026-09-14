@@ -67,11 +67,17 @@ In game: `!nametags` (alias `!tags`) toggles them; `!nametagsfetch` re-fetches n
 - `showHealth` — append `[87hp]` to tags
 - `showBox` — dark box behind text for readability
 - `onlyScriptUsers` — only draw tags over players confirmed to be running Xyro (default on)
+- `pillColor` — default pill background hex (default `#0C0C10`)
+- `pillTransparency` — default pill transparency, 0 = solid (default `0.12`)
+- `imageSize` — icon size inside the pill in px, 8–28 (default `20`)
 
 **`tags`** rules, first match wins (put exact names before broad prefixes):
 - `match` — start of username or display name, case-insensitive (`"x9ksa"` matches `x9ksa123`); `"*"` matches everyone
 - `label` — the text drawn above the player's head
 - `color` — optional hex color (default white)
 - `size` — optional per-rule text size override
+- `image` — optional icon shown inside the pill: an `https://...` image URL (png/jpg/webp), a bare asset id number, or `rbxassetid://...`. URLs are downloaded once and cached locally
+- `bg` — optional per-rule pill background hex color
+- `bgTransparency` — optional per-rule pill transparency (0 = solid, 1 = invisible)
 
 Requires nothing special — tags are plain billboard UI, so any executor that runs the hub can show them. `maxDistance` hides tags past that many studs (0 = always).

@@ -5,7 +5,10 @@
 		"showDistance": true,
 		"showHealth": true,
 		"showBox": true,
-		"onlyScriptUsers": true
+		"onlyScriptUsers": true,
+		"pillColor": "#0C0C10",
+		"pillTransparency": 0.12,
+		"imageSize": 20
 	},
 	"tags": [
 		{ "match": "stellarpAlladium", "label": "x9k_alt", "color": "#FFD700", "size": 16 },

@@ -7150,6 +7150,9 @@ local ntOpts = {
 	showHealth = true,
 	showBox = true,
 	onlyScriptUsers = true,
+	pillColor = "#0C0C10",
+	pillTransparency = 0.12,
+	imageSize = 20,
 }
 
 local function ntNormalize(s)
@@ -7200,6 +7203,9 @@ local function ntFetch(manual)
 		ntOpts.showHealth = o.showHealth ~= false
 		ntOpts.showBox = o.showBox ~= false
 		ntOpts.onlyScriptUsers = o.onlyScriptUsers ~= false
+		ntOpts.pillColor = tostring(o.pillColor or ntOpts.pillColor)
+		ntOpts.pillTransparency = math.clamp(tonumber(o.pillTransparency) or 0.12, 0, 1)
+		ntOpts.imageSize = math.clamp(tonumber(o.imageSize) or 20, 8, 64)
 	end
 	ntRules = cfg
 	if manual and H.notify then
@@ -7257,7 +7263,7 @@ local function ntBuild(plr)
 	pill.AnchorPoint = Vector2.new(0.5, 0.5)
 	pill.Position = UDim2.fromScale(0.5, 0.5)
 	pill.AutomaticSize = Enum.AutomaticSize.X
-	pill.Size = UDim2.fromOffset(0, 24)
+	pill.Size = UDim2.fromOffset(0, 28)
 	pill.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
 	pill.BackgroundTransparency = 0.12
 	pill.BorderSizePixel = 0
@@ -7273,22 +7279,85 @@ local function ntBuild(plr)
 	stroke.Thickness = 1.5
 	stroke.Parent = pill
 
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Horizontal
+	layout.VerticalAlignment = Enum.VerticalAlignment.Center
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 8)
+	layout.Parent = pill
+
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, 14)
+	pad.PaddingRight = UDim.new(0, 14)
+	pad.Parent = pill
+
+	local img = Instance.new("ImageLabel")
+	img.LayoutOrder = 1
+	img.Visible = false
+	img.BackgroundTransparency = 1
+	img.Size = UDim2.fromOffset(ntOpts.imageSize, ntOpts.imageSize)
+	img.Parent = pill
+
 	local label = Instance.new("TextLabel")
+	label.LayoutOrder = 2
 	label.BackgroundTransparency = 1
 	label.AutomaticSize = Enum.AutomaticSize.X
-	label.Size = UDim2.fromOffset(0, 24)
+	label.Size = UDim2.fromOffset(0, 20)
 	label.Font = Enum.Font.GothamBold
 	label.TextSize = 14
 	label.TextColor3 = Color3.new(1, 1, 1)
 	label.Text = "..."
 	label.Parent = pill
 
-	local pad = Instance.new("UIPadding")
-	pad.PaddingLeft = UDim.new(0, 12)
-	pad.PaddingRight = UDim.new(0, 12)
-	pad.Parent = label
+	return { gui = bb, head = head, pill = pill, stroke = stroke, label = label, img = img }
+end
 
-	return { gui = bb, head = head, pill = pill, stroke = stroke, label = label }
+local ntImgCache = {}
+
+local function ntApplyImage(img, url)
+	if url:match("^%d+$") then
+		url = "rbxassetid://" .. url
+	end
+	if url:sub(1, 12) == "rbxassetid://" then
+		img.Image = url
+		return true
+	end
+	local cached = ntImgCache[url]
+	if cached then
+		img.Image = cached
+		return true
+	end
+	if getcustomasset and writefile and game.HttpGet then
+		local ok, asset = pcall(function()
+			local data = game:HttpGet(url, true)
+			assert(type(data) == "string" and #data > 0, "empty download")
+			local fname = "Xyro/ntimg_" .. tostring((url:gsub("%W", "")):sub(-16)) .. ".png"
+			writefile(fname, data)
+			return getcustomasset(fname)
+		end)
+		if ok and asset then
+			ntImgCache[url] = asset
+			img.Image = asset
+			return true
+		end
+	end
+	return false
+end
+
+-- apply everything that only changes when the player's rule changes
+local function ntApplyRule(o, rule)
+	o.label.TextSize = math.clamp(tonumber(rule.size) or ntOpts.size, 8, 60)
+	o.stroke.Color = ntColor(rule.color) or NT_ACCENT
+	o.pill.BackgroundColor3 = ntColor(rule.bg) or ntColor(ntOpts.pillColor) or Color3.fromRGB(12, 12, 16)
+	o.pill.BackgroundTransparency = math.clamp(tonumber(rule.bgTransparency) or ntOpts.pillTransparency, 0, 1)
+	local url = type(rule.image) == "string" and rule.image or ""
+	if url ~= "" then
+		local ok = pcall(ntApplyImage, o.img, url)
+		o.img.Visible = ok and true or false
+	else
+		o.img.Image = ""
+		o.img.Visible = false
+	end
 end
 
 local function ntRemove(plr)
@@ -7411,7 +7480,10 @@ connect(RunService.RenderStepped, function(dt)
 					local dist = (cam.CFrame.Position - head.Position).Magnitude
 					local tooFar = ntOpts.maxDistance > 0 and dist > ntOpts.maxDistance
 					if not tooFar then
-						local label = rule.label
+						if o.appliedRule ~= rule then
+							o.appliedRule = rule
+							pcall(ntApplyRule, o, rule)
+						end
 						local suffix = {}
 						if ntOpts.showHealth then
 							local hum = ch:FindFirstChildOfClass("Humanoid")
@@ -7422,12 +7494,7 @@ connect(RunService.RenderStepped, function(dt)
 						if ntOpts.showDistance then
 							suffix[#suffix + 1] = math.floor(dist + 0.5) .. "m"
 						end
-						if #suffix > 0 then
-							label = label .. "  " .. table.concat(suffix, " | ")
-						end
-						o.label.Text = label
-						o.label.TextSize = math.clamp(tonumber(rule.size) or ntOpts.size, 8, 60)
-						o.stroke.Color = ntColor(rule.color) or NT_ACCENT
+						o.label.Text = rule.label .. (#suffix > 0 and ("  " .. table.concat(suffix, " | ")) or "")
 						o.pill.Visible = ntOpts.showBox
 						o.gui.Enabled = true
 					else

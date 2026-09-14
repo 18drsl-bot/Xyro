@@ -126,7 +126,7 @@
 
 	<div class="card">
 		<h2>Preview / global options</h2>
-		<div class="badge-preview"><span class="badge" id="previewBadge" style="--c:#ffd700">x9k_alt</span></div>
+		<div class="badge-preview"><span class="badge" id="previewBadge" style="--c:#ffd700"><img id="previewImg" alt="" style="display:none;height:18px;vertical-align:-3px;margin-right:7px;border-radius:50%"><span id="previewLabel">x9k_alt</span></span></div>
 		<div class="row">
 			<div>
 				<label>Default size (8&ndash;60)</label>
@@ -135,6 +135,20 @@
 			<div>
 				<label>Max distance (0 = unlimited)</label>
 				<input id="optDist" type="number" min="0" value="0">
+			</div>
+			<div>
+				<label>Icon size (8&ndash;28)</label>
+				<input id="optImgSize" type="number" min="8" max="28" value="20">
+			</div>
+		</div>
+		<div class="row">
+			<div>
+				<label>Pill background color</label>
+				<input id="optPillColor" type="color" value="#0c0c10">
+			</div>
+			<div>
+				<label>Pill transparency (0 = solid, 1 = invisible)</label>
+				<input id="optPillTrans" type="number" min="0" max="1" step="0.05" value="0.12">
 			</div>
 		</div>
 		<div class="checks">
@@ -183,12 +197,14 @@ function render() {
 	const list = $("tagList");
 	list.innerHTML = "";
 	tags.forEach((t, i) => {
-		const row = document.createElement("div");
-		row.className = "tagrow";
-		row.innerHTML =
-			'<span class="badge" style="--c:' + hex(t.color) + '">' + esc(t.label) + "</span>" +
-			'<span class="meta">match: <b>' + esc(t.match) + "</b>" +
-			(t.size ? " &middot; size " + esc(t.size) : "") + "</span>";
+	const row = document.createElement("div");
+	row.className = "tagrow";
+	row.innerHTML =
+		'<span class="badge" style="--c:' + hex(t.color) + (t.bg ? ";background:" + esc(t.bg) : "") + '">' + esc(t.label) + "</span>" +
+		'<span class="meta">match: <b>' + esc(t.match) + "</b>" +
+		(t.size ? " &middot; size " + esc(t.size) : "") +
+		(t.image ? " &middot; \uD83D\uDFBC icon" : "") +
+		(t.bg ? " &middot; bg" : "") + "</span>";
 		const del = document.createElement("button");
 		del.className = "danger";
 		del.textContent = "Delete";
@@ -206,6 +222,9 @@ function readOpts() {
 		showHealth: $("optHp").checked,
 		showBox: $("optBox").checked,
 		onlyScriptUsers: $("optScriptUsers").checked,
+		pillColor: $("optPillColor").value,
+		pillTransparency: Math.min(1, Math.max(0, parseFloat($("optPillTrans").value) || 0.12)),
+		imageSize: Math.min(28, Math.max(8, parseInt($("optImgSize").value) || 20)),
 	};
 }
 
@@ -221,6 +240,9 @@ async function load() {
 	$("optHp").checked = o.showHealth !== false;
 	$("optBox").checked = o.showBox !== false;
 	$("optScriptUsers").checked = o.onlyScriptUsers !== false;
+	$("optPillColor").value = o.pillColor || "#0c0c10";
+	$("optPillTrans").value = (o.pillTransparency != null ? o.pillTransparency : 0.12);
+	$("optImgSize").value = o.imageSize || 20;
 	render();
 	status("Loaded " + tags.length + " rules from GitHub", "ok");
 }
@@ -235,13 +257,33 @@ $("clearToken").onclick = () => {
 	status("Token forgotten", "info");
 };
 
+function setPreview(label, color, image, bg) {
+	$("previewLabel").textContent = label;
+	$("previewBadge").style.setProperty("--c", hex(color));
+	if (bg && /^#[0-9a-fA-F]{6}$/.test(bg)) {
+		$("previewBadge").style.background = bg;
+	} else {
+		$("previewBadge").style.background = "";
+	}
+	const im = $("previewImg");
+	if (image && /^https:\/\//i.test(image)) {
+		im.src = image;
+		im.style.display = "inline";
+	} else if (image) {
+		im.style.display = "none";
+		$("previewLabel").textContent = "\uD83D\uDFBC " + label;
+	} else {
+		im.style.display = "none";
+	}
+}
+
 $("previewBadge").onclick = () => {
 	const t = prompt("Preview label:", "x9k_alt");
-	const c = prompt("Preview color (#hex):", "#ffd700");
-	if (t) {
-		$("previewBadge").textContent = t;
-		$("previewBadge").style.setProperty("--c", hex(c));
-	}
+	if (!t) return;
+	const c = prompt("Border color (#hex):", "#ffd700");
+	const image = prompt("Icon image (https://... URL, rbxassetid number, or blank):", "");
+	const bg = prompt("Pill background (#hex, blank = default):", "");
+	setPreview(t, c, image, bg);
 };
 
 $("addTag").onclick = () => {
@@ -249,9 +291,15 @@ $("addTag").onclick = () => {
 	if (!match) return;
 	const label = prompt("Tag text shown above their head:", match);
 	if (!label) return;
-	const color = prompt("Color hex (e.g. #FFD700):", "#6C80FF") || "#6C80FF";
+	const color = prompt("Border color hex (e.g. #FFD700):", "#6C80FF") || "#6C80FF";
 	const size = prompt("Text size (blank = default):", "") || "";
-	tags.push(size ? { match, label, color: hex(color), size: parseInt(size) || undefined } : { match, label, color: hex(color) });
+	const image = prompt("Icon image (https://... URL or rbxassetid number, blank = none):", "") || "";
+	const bg = prompt("Pill background hex (blank = default dark):", "") || "";
+	const t = { match, label, color: hex(color) };
+	if (size) t.size = parseInt(size) || undefined;
+	if (image) t.image = image.trim();
+	if (bg && /^#[0-9a-fA-F]{6}$/.test(bg)) t.bg = bg;
+	tags.push(t);
 	render();
 };
 
