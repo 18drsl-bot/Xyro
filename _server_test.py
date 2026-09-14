@@ -58,13 +58,18 @@ def main():
         assert st == 404, st
         print("404   : OK")
 
-        # / must serve the tag editor itself (index.html from this folder)
+        # / must serve the landing site, /editor.html the tag editor
         st, body, hdrs = get("/")
         text = body.decode("utf-8", "replace")
         assert st == 200 and "<html" in text.lower(), (st, len(body))
         assert hdrs.get("content-type", "").startswith("text/html"), hdrs.get("content-type")
-        assert "Xyro" in text or "xyro" in text.lower(), "editor html marker missing"
-        print("editor: OK (/ serves index.html as %s)" % hdrs.get("content-type"))
+        assert "Xyro" in text and "loadstring" in text.lower(), "landing page markers missing"
+        print("site  : OK (/ serves the landing page)")
+        st, body, hdrs = get("/editor.html")
+        text = body.decode("utf-8", "replace")
+        assert st == 200 and "<html" in text.lower(), (st, len(body))
+        assert "publish" in text.lower(), "editor page markers missing"
+        print("editor: OK (/editor.html serves the tag editor)")
 
         # /sync must update the local file and reject garbage
         import urllib.request as ur

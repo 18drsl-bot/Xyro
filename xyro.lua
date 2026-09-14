@@ -7222,7 +7222,7 @@ local ntEnabled = false
 local ntRules = nil
 local ntTags = {}
 local ntFetchAcc = 0
-local NT_FETCH_EVERY = 60
+local NT_FETCH_EVERY = 15 -- tag rules re-check; editor-tunable via options.refreshSeconds (10-300)
 local NT_TOPIC = "xyro-presence-k2m9x7q" -- anonymous presence DB: every script user heartbeats here
 local NT_BEAT_EVERY = 45
 local ntBeatAcc = 0
@@ -7326,6 +7326,9 @@ local function ntApplyOptions(o)
 	if not ntOpts.collapseFar then
 		ntOpts.collapseDistance = 0
 	end
+	-- how often rules are re-checked, seconds (floor of 10 keeps the
+	-- fetch chain polite even if someone publishes a silly value)
+	NT_FETCH_EVERY = math.clamp(tonumber(o.refreshSeconds) or 15, 10, 300)
 end
 
 -- your tag is saved to disk after every successful fetch and re-applied

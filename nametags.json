@@ -23,7 +23,8 @@
 		"seeThroughWalls": true,
 		"collapseFar": true,
 		"collapseDistance": 60,
-		"collapsedIcon": 28
+		"collapsedIcon": 28,
+		"refreshSeconds": 15
 	},
 	"tags": [
 		{

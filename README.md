@@ -76,8 +76,8 @@ put exact names above the `*` catch-all.
 always) · `showDistance` · `showHealth` · `showBox` (pill background on/off) ·
 `onlyScriptUsers` (tags require presence — set false to tag everyone matching) ·
 `pillColor` / `pillTransparency` (defaults for rules without `bg`) · `font` ·
-`textColor` · `userColor` · `clickTeleport` (click a pill to teleport to that player — works both full-size and collapsed) · `collapseFar` / `collapseDistance` / `collapsedIcon` (far tags shrink to just the avatar icon, which still click-teleports; hovering the mouse near the icon expands the full pill while it's on screen) · `staffOnly` (when true,
-only Xyro staff get tags at all — non-staff see nothing, cache nothing).
+`textColor` · `userColor` · `clickTeleport` (click a pill to teleport to that player — works both full-size and collapsed) · `collapseFar` / `collapseDistance` / `collapsedIcon` (far tags shrink to just the avatar icon, which still click-teleports; hovering the mouse near the icon expands the full pill while it's on screen) ·`staffOnly` (when true, only Xyro staff get tags at all — non-staff see nothing, cache nothing) · `refreshSeconds` (how often
+the script re-checks for published changes, 10–300, default 15)
 
 Tags render as plain billboard UI, so **any executor works** — no Drawing API needed.
 Icons support PNG/JPG/GIF by URL, asset id, or base64 `data:` URI - **GIFs fully animate** (decoded frame-by-frame in script, since Roblox only shows a GIF's first frame). Rules also take `bgImage` (URL or data URI) to fill the pill background; the editor's **Choose file** buttons upload images to `media/` in this repo (base64-embeds them without a token).

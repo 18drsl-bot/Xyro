@@ -1,0 +1,1373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Xyro Tag Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+	:root {
+		--bg0: #05060a;
+		--bg1: #0b0d14;
+		--panel: #10131c;
+		--panel2: #171b26;
+		--element: #1d2230;
+		--element2: #232939;
+		--stroke: #2a3040;
+		--stroke2: #3a4258;
+		--accent: #6d7dff;
+		--accent2: #b06cff;
+		--grad: linear-gradient(135deg, #6d7dff, #b06cff);
+		--text: #f2f4fb;
+		--sub: #98a0b3;
+		--danger: #ff5d5d;
+		--ok: #3fd68f;
+		--warn: #ffc94d;
+		--radius: 18px;
+	}
+	* { box-sizing: border-box; margin: 0; padding: 0; }
+	html { scrollbar-color: var(--stroke) transparent; }
+	::-webkit-scrollbar { width: 10px; height: 10px; }
+	::-webkit-scrollbar-thumb { background: var(--stroke); border-radius: 8px; border: 2px solid var(--bg0); }
+	::-webkit-scrollbar-thumb:hover { background: var(--stroke2); }
+	body {
+		background: var(--bg0);
+		color: var(--text);
+		font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+		min-height: 100vh;
+		-webkit-font-smoothing: antialiased;
+	}
+
+	/* ---------- aurora backdrop ---------- */
+	.aurora { position: fixed; inset: 0; z-index: -2; overflow: hidden; background: radial-gradient(1400px 700px at 50% -20%, #0d1020, var(--bg0)); }
+	.aurora i { position: absolute; border-radius: 50%; filter: blur(90px); opacity: .16; will-change: transform; }
+	.aurora i:nth-child(1) { width: 620px; height: 620px; background: #4c5dff; top: -220px; left: 8%; animation: drift1 26s ease-in-out infinite alternate; }
+	.aurora i:nth-child(2) { width: 520px; height: 520px; background: #9b4cff; top: -140px; right: 4%; animation: drift2 32s ease-in-out infinite alternate; }
+	.aurora i:nth-child(3) { width: 700px; height: 700px; background: #1fb6a6; bottom: -380px; left: 30%; opacity: .08; animation: drift1 38s ease-in-out infinite alternate-reverse; }
+	@keyframes drift1 { from { transform: translate(0,0) scale(1); } to { transform: translate(90px, 50px) scale(1.12); } }
+	@keyframes drift2 { from { transform: translate(0,0) scale(1.08); } to { transform: translate(-80px, 40px) scale(1); } }
+	.grain { position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: .5;
+		background-image: radial-gradient(rgba(255,255,255,.028) 1px, transparent 1px); background-size: 3px 3px; }
+	@media (prefers-reduced-motion: reduce) { .aurora i, .stage .badge { animation: none !important; } }
+
+	/* ---------- header ---------- */
+	header.top {
+		display: flex; align-items: center; justify-content: space-between;
+		padding: 14px 28px;
+		border-bottom: 1px solid rgba(255,255,255,.06);
+		background: rgba(8,10,16,.72);
+		position: sticky; top: 0; z-index: 10;
+		backdrop-filter: blur(16px);
+		-webkit-backdrop-filter: blur(16px);
+	}
+	.brand { display: flex; align-items: center; gap: 12px; }
+	.logo {
+		width: 34px; height: 34px; border-radius: 10px;
+		background: var(--grad);
+		display: grid; place-items: center;
+		font-weight: 800; font-size: 17px; color: #fff;
+		box-shadow: 0 4px 18px rgba(109,125,255,.4), inset 0 1px 0 rgba(255,255,255,.35);
+	}
+	.brand h1 { font-size: 16px; font-weight: 700; letter-spacing: -.01em; }
+	.brand h1 span {
+		background: var(--grad);
+		-webkit-background-clip: text; background-clip: text; color: transparent;
+	}
+	.brand .tag { font-size: 11px; color: var(--sub); border: 1px solid var(--stroke); border-radius: 999px; padding: 2px 9px; margin-left: 2px; letter-spacing: .06em; text-transform: uppercase; }
+	.top-right { display: flex; gap: 12px; align-items: center; font-size: 13px; }
+	.top-right a.ghlink {
+		color: var(--sub); text-decoration: none; display: inline-flex; align-items: center; gap: 7px;
+		border: 1px solid var(--stroke); border-radius: 999px; padding: 6px 13px; font-size: 12.5px;
+		transition: all .18s ease;
+	}
+	.top-right a.ghlink:hover { color: var(--text); border-color: var(--accent); background: rgba(109,125,255,.08); }
+	.top-right a.ghlink svg { width: 15px; height: 15px; fill: currentColor; }
+
+	.chip {
+		border: 1px solid var(--stroke);
+		background: var(--element);
+		color: var(--sub);
+		border-radius: 999px;
+		padding: 5px 13px;
+		font-size: 12px;
+		cursor: pointer;
+		transition: all .18s ease;
+	}
+	.chip:hover { border-color: var(--stroke2); color: var(--text); }
+	.chip.on { border-color: rgba(63,214,143,.5); color: var(--ok); background: rgba(63,214,143,.07); }
+	.chip.warn { border-color: rgba(255,201,77,.5); color: var(--warn); background: rgba(255,201,77,.07); cursor: default; }
+
+	/* ---------- layout ---------- */
+	.wrap { max-width: 1120px; margin: 0 auto; padding: 30px 22px 120px; }
+	.grid { display: grid; grid-template-columns: 400px 1fr; gap: 18px; align-items: start; }
+	@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+	.card {
+		background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015)), var(--panel);
+		border: 1px solid rgba(255,255,255,.07);
+		border-radius: var(--radius);
+		padding: 18px;
+		margin-bottom: 18px;
+		box-shadow: 0 12px 40px rgba(0,0,0,.35);
+		backdrop-filter: blur(14px);
+		-webkit-backdrop-filter: blur(14px);
+		transition: border-color .2s ease, transform .2s ease;
+		animation: rise .4s ease both;
+	}
+	.card:hover { border-color: rgba(255,255,255,.12); }
+	@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+	.card h2 {
+		font-size: 11px; text-transform: uppercase; letter-spacing: .16em;
+		color: var(--sub); margin-bottom: 14px;
+		display: flex; align-items: center; justify-content: space-between; gap: 8px;
+		font-weight: 700;
+	}
+	.card h2 .hl { display: inline-flex; align-items: center; gap: 8px; }
+	.card h2 .hl::before { content: ""; width: 14px; height: 3px; border-radius: 2px; background: var(--grad); }
+
+	label { display: block; font-size: 11.5px; color: var(--sub); margin: 10px 0 5px; font-weight: 500; letter-spacing: .02em; }
+	input, select, textarea {
+		width: 100%;
+		background: var(--element);
+		border: 1px solid var(--stroke);
+		border-radius: 10px;
+		color: var(--text);
+		padding: 9px 12px;
+		font-size: 14px;
+		font-family: inherit;
+		outline: none;
+		transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+	}
+	input:hover, select:hover { border-color: var(--stroke2); }
+	input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(109,125,255,.16); background: var(--element2); }
+	input[type="color"] { padding: 3px; height: 38px; cursor: pointer; }
+	input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+	input[type="color"]::-webkit-color-swatch { border: none; border-radius: 7px; }
+	input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+	.row { display: flex; gap: 10px; }
+	.row > div { flex: 1; min-width: 0; }
+	.checks { display: flex; gap: 6px 16px; margin-top: 14px; flex-wrap: wrap; }
+	.checks label {
+		display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text);
+		font-size: 12.5px; cursor: pointer; font-weight: 500;
+		background: var(--element); border: 1px solid var(--stroke); border-radius: 999px; padding: 6px 13px 6px 10px;
+		transition: all .15s ease;
+	}
+	.checks label:hover { border-color: var(--stroke2); }
+	.checks label:has(input:checked) { border-color: rgba(109,125,255,.55); background: rgba(109,125,255,.09); }
+	.checks input { width: auto; margin: 0; }
+
+	button {
+		background: var(--grad);
+		border: none; border-radius: 10px; color: #fff;
+		font-weight: 700; font-size: 13.5px; font-family: inherit;
+		padding: 10px 18px; cursor: pointer;
+		box-shadow: 0 4px 16px rgba(109,125,255,.28), inset 0 1px 0 rgba(255,255,255,.25);
+		transition: all .16s ease;
+		letter-spacing: .01em;
+	}
+	button:hover { filter: brightness(1.12); transform: translateY(-1px); box-shadow: 0 6px 22px rgba(109,125,255,.4), inset 0 1px 0 rgba(255,255,255,.25); }
+	button:active { transform: translateY(0) scale(.98); }
+	button.ghost {
+		background: var(--element); border: 1px solid var(--stroke); color: var(--text);
+		font-weight: 600; box-shadow: none;
+	}
+	button.ghost:hover { border-color: var(--stroke2); background: var(--element2); }
+	button.subtle {
+		background: transparent; border: 1px solid var(--stroke); color: var(--sub);
+		padding: 6px 12px; font-size: 12px; font-weight: 500; box-shadow: none;
+	}
+	button.subtle:hover { color: var(--text); border-color: var(--stroke2); }
+	button.icon {
+		background: transparent; border: 1px solid var(--stroke);
+		color: var(--sub); width: 28px; height: 28px; padding: 0;
+		font-size: 13px; line-height: 1; border-radius: 8px; box-shadow: none;
+	}
+	button.icon:hover { color: var(--text); border-color: var(--accent); background: rgba(109,125,255,.1); transform: none; }
+	button.icon:disabled { opacity: .3; cursor: default; }
+	button.icon:disabled:hover { color: var(--sub); border-color: var(--stroke); background: transparent; }
+	button.danger {
+		background: transparent; border: 1px solid rgba(255,93,93,.45); color: var(--danger);
+		padding: 6px 12px; font-size: 12px; font-weight: 600; box-shadow: none;
+	}
+	button.danger:hover { background: rgba(255,93,93,.1); border-color: var(--danger); filter: none; }
+	.hint { font-size: 12px; color: var(--sub); line-height: 1.6; margin-top: 10px; }
+	.hint b { color: var(--text); }
+	.hint a { color: var(--accent); text-decoration: none; }
+	.hint a:hover { text-decoration: underline; }
+
+	/* ---------- preview stage ---------- */
+	.stage {
+		position: relative;
+		background:
+			radial-gradient(120% 90% at 50% 0%, rgba(109,125,255,.14), transparent 60%),
+			linear-gradient(180deg, #17203f 0%, #0d1226 55%, #090b16 100%);
+		border: 1px solid rgba(255,255,255,.08);
+		border-radius: 14px;
+		padding: 44px 14px 50px;
+		display: flex; flex-direction: column; align-items: center; gap: 18px;
+		overflow: hidden;
+	}
+	.stage::before {
+		content: ""; position: absolute; inset: 0;
+		background:
+			linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px),
+			linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px);
+		background-size: 26px 26px;
+		mask-image: radial-gradient(80% 70% at 50% 40%, #000 30%, transparent 100%);
+		-webkit-mask-image: radial-gradient(80% 70% at 50% 40%, #000 30%, transparent 100%);
+	}
+	.stage::after {
+		content: ""; position: absolute; left: 50%; bottom: -66px; transform: translateX(-50%);
+		width: 220px; height: 90px; border-radius: 50%;
+		background: radial-gradient(closest-side, rgba(109,125,255,.28), transparent);
+		filter: blur(12px);
+	}
+	.stage .badge { position: relative; z-index: 1; animation: bob 3.2s ease-in-out infinite; }
+	@keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+	.stage-cap { position: relative; z-index: 1; font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase; color: rgba(255,255,255,.34); font-weight: 600; }
+
+	/* ---------- in-game badge look ---------- */
+	.badge {
+		display: inline-flex; align-items: center; gap: 8px;
+		background: var(--pill, #0c0c10);
+		border: 1.5px solid var(--c, var(--accent));
+		color: #fff; border-radius: 999px;
+		padding: 7px 17px;
+		font-weight: 700; font-size: 14px;
+		white-space: nowrap;
+		max-width: 100%; overflow: hidden;
+		box-shadow: 0 6px 20px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.08);
+	}
+	.badge img { height: 22px; width: 22px; object-fit: cover; border-radius: 50%; }
+	.badge.big { font-size: 17px; padding: 10px 23px; gap: 10px; }
+	.badge.big img { height: 27px; width: 27px; }
+	.badge.mini { font-size: 12px; padding: 4px 12px; box-shadow: none; }
+	.badge.mini img { height: 16px; width: 16px; }
+
+	/* ---------- rules list ---------- */
+	.rlist { display: flex; flex-direction: column; gap: 9px; margin-top: 12px; }
+	.rrow {
+		display: flex; align-items: center; gap: 12px;
+		background: var(--panel2);
+		border: 1px solid var(--stroke);
+		border-radius: 13px;
+		padding: 10px 12px;
+		transition: border-color .16s ease, transform .16s ease, background .16s ease;
+	}
+	.rrow:hover { border-color: var(--stroke2); background: var(--element); transform: translateX(2px); }
+	.rrow .meta { flex: 1; min-width: 0; font-size: 12px; color: var(--sub); display: flex; flex-direction: column; gap: 3px; }
+	.rrow .meta b { color: var(--text); font-weight: 600; }
+	.rrow .meta .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.rrow .order { display: flex; gap: 4px; }
+	.mark { font-size: 10.5px; color: var(--sub); border: 1px solid var(--stroke); border-radius: 6px; padding: 1.5px 7px; margin-right: 4px; letter-spacing: .03em; }
+.ubox { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 8px; border-radius: 8px; background: rgba(255,255,255,.09); font-size: 9px; color: var(--sub, #8b92a5); letter-spacing: .02em; }
+.filepick { white-space: nowrap; padding: 0 14px; border-radius: 10px; border: 1px solid var(--stroke); background: var(--card2, rgba(255,255,255,.04)); color: var(--sub); cursor: pointer; font: inherit; font-size: 12px; transition: all .15s ease; }
+.filepick:hover { color: var(--text); border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #6c80ff) 18%, transparent); }
+.filepick.busy { opacity: .55; pointer-events: none; }
+.filepick.done { color: #4ade80; border-color: rgba(74,222,128,.5); }
+
+	/* ---------- rule editor ---------- */
+	#editor { border-color: rgba(109,125,255,.55); box-shadow: 0 0 0 1px rgba(109,125,255,.22), 0 18px 50px rgba(0,0,0,.5), 0 0 60px rgba(109,125,255,.08); }
+	.fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
+	@media (max-width: 640px) { .fgrid { grid-template-columns: 1fr; } }
+	.mini-stage {
+		display: flex; justify-content: center; padding: 18px;
+		background: linear-gradient(180deg, #131a33, #0a0d1a);
+		border: 1px solid rgba(255,255,255,.07); border-radius: 12px; margin: 14px 0 4px;
+	}
+	.eactions { display: flex; gap: 10px; margin-top: 16px; justify-content: flex-end; }
+
+	/* ---------- publish bar ---------- */
+	.pubbar {
+		position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+		background: rgba(14,17,26,.88);
+		border: 1px solid rgba(255,255,255,.09);
+		backdrop-filter: blur(18px);
+		-webkit-backdrop-filter: blur(18px);
+		border-radius: 999px;
+		padding: 10px 14px;
+		display: flex; align-items: center; gap: 10px;
+		z-index: 20; flex-wrap: wrap; justify-content: center;
+		box-shadow: 0 16px 50px rgba(0,0,0,.55);
+		max-width: calc(100vw - 24px);
+	}
+	#publishBtn { padding: 10px 22px; }
+	#status { position: fixed; bottom: 76px; left: 0; right: 0; text-align: center; font-size: 13px; min-height: 18px; pointer-events: none; z-index: 19; text-shadow: 0 2px 8px rgba(0,0,0,.8); }
+	#status.ok { color: var(--ok); } #status.err { color: var(--danger); } #status.info { color: var(--sub); }
+
+	/* ---------- toasts ---------- */
+	#toasts { position: fixed; right: 16px; top: 70px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+	.toast {
+		background: rgba(23,27,38,.92);
+		border: 1px solid var(--stroke);
+		border-left: 3px solid var(--accent);
+		border-radius: 12px; padding: 11px 15px;
+		font-size: 13px; max-width: 330px;
+		box-shadow: 0 12px 34px rgba(0,0,0,.5);
+		backdrop-filter: blur(10px);
+		animation: slide .2s ease-out;
+	}
+	.toast.ok { border-left-color: var(--ok); }
+	.toast.err { border-left-color: var(--danger); }
+	@keyframes slide { from { transform: translateX(24px); opacity: 0; } }
+
+	dialog {
+		background: var(--panel); color: var(--text);
+		border: 1px solid var(--stroke2); border-radius: var(--radius);
+		padding: 22px; width: min(500px, 92vw);
+		box-shadow: 0 30px 80px rgba(0,0,0,.6);
+	}
+	dialog::backdrop { background: rgba(3,4,8,.7); backdrop-filter: blur(4px); }
+	dialog h3 { margin-bottom: 8px; font-size: 15px; }
+	dialog textarea {
+		width: 100%; height: 190px; resize: vertical;
+		font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; line-height: 1.5;
+	}
+	.tokenwrap { position: relative; }
+	.tokenwrap input { padding-right: 46px; font-family: "JetBrains Mono", Consolas, monospace; font-size: 13px; }
+	.tokenwrap button { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); }
+	.tokenwrap button:hover { transform: translateY(-50%); }
+	.hidden { display: none !important; }
+
+	@media (max-width: 640px) {
+		header.top { padding: 12px 16px; }
+		.brand .tag { display: none; }
+		.wrap { padding: 20px 14px 130px; }
+		.pubbar { border-radius: 20px; }
+	}
+</style>
+</head>
+<body>
+
+<div class="aurora"><i></i><i></i><i></i></div>
+<div class="grain"></div>
+
+<header class="top">
+	<div class="brand">
+		<div class="logo">X</div>
+		<h1><span>Xyro</span> Tag Editor</h1>
+		<span class="tag">live</span>
+	</div>
+	<div class="top-right">
+		<span class="chip" id="tokenChip" title="token status">no token</span>
+		<button class="subtle" id="refreshBtn" title="pull the latest published rules from GitHub now">&#8635; refresh</button>
+		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
+			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+			nametags.json
+		</a>
+	</div>
+</header>
+
+<div class="wrap">
+
+	<div class="card" id="tokenCard">
+		<h2><span class="hl">Connect to GitHub</span> <span class="chip" id="tokenState">not connected</span></h2>
+		<label>Fine-grained token &mdash; <b>Contents: Read and write</b> on vertxxy-1/Xyro only</label>
+		<div class="tokenwrap">
+			<input id="token" type="password" placeholder="github_pat_... or ghp_..." autocomplete="off">
+			<button class="subtle" id="peek" title="show/hide">&#128065;</button>
+		</div>
+		<div class="hint">
+			Create one at <b>github.com/settings/personal-access-tokens/new</b> &rarr; Only select repositories &rarr;
+			<b>vertxxy-1/Xyro</b> &rarr; Permissions &rarr; Repository permissions &rarr; <b>Contents: Read and write</b>.
+			Stored only in this browser, sent only to api.github.com, revocable any time.
+		</div>
+		<div class="row" style="margin-top:12px">
+			<button id="saveToken" class="ghost">Save &amp; test</button>
+			<button id="forgetToken" class="subtle">Forget</button>
+		</div>
+	</div>
+
+	<div class="grid">
+		<div>
+			<div class="card">
+				<h2><span class="hl">Preview</span></h2>
+				<div class="stage">
+					<span class="badge big" id="pvBadge"><img id="pvImg" alt="" class="hidden"><span id="pvLabel">x9k_alt</span><span class="ubox" id="pvUbox" style="display:none"><span id="pvUser">@user</span></span></span>
+					<span class="stage-cap">exactly how it renders in game</span>
+				</div>
+			</div>
+
+			<div class="card">
+				<h2><span class="hl">Global options</span></h2>
+				<div class="row">
+					<div><label>Name size (8&ndash;48)</label><input id="optSize" type="number" min="8" max="48" value="15"></div>
+					<div><label>@username size</label><input id="optUserSize" type="number" min="8" max="24" value="10"></div>
+					<div><label>Pill height (28&ndash;96)</label><input id="optHeight" type="number" min="28" max="96" value="48"></div>
+				</div>
+				<div class="row">
+					<div><label>Name font</label>
+						<select id="optFont">
+							<option>GothamBlack</option>
+							<option>GothamBold</option>
+							<option>Gotham</option>
+							<option>GothamMedium</option>
+							<option>Bangers</option>
+							<option>SourceSansBold</option>
+							<option>FredokaOne</option>
+							<option>Arcade</option>
+						</select>
+					</div>
+					<div><label>Max distance (0 = &infin;)</label><input id="optDist" type="number" min="0" value="0"></div>
+					<div><label>Icon size (8&ndash;128)</label><input id="optImgSize" type="number" min="8" max="128" value="36"></div>
+				</div>
+				<div class="row">
+					<div><label>Pill background</label><input id="optPillColor" type="color" value="#0c0c10"></div>
+					<div><label>Pill transparency (0=solid)</label><input id="optPillTrans" type="number" min="0" max="1" step="0.05" value="0.12"></div>
+				</div>
+				<div class="row">
+					<div><label>Name color</label><input id="optTextColor" type="color" value="#ffffff"></div>
+					<div><label>@username color</label><input id="optUserColor" type="color" value="#8b92a5"></div>
+					<div><label>@username box color</label><input id="optUBoxColor" type="color" value="#1a1f2e"></div>
+					<div><label>@username box transparency (0=solid)</label><input id="optUBoxTrans" type="number" min="0" max="1" step="0.05" placeholder="0.25"></div>
+					<div><label>@username box roundness (0-24)</label><input id="optUBoxRadius" type="number" min="0" max="24" placeholder="8"></div>
+					<div><label>@username box border (hex or blank)</label><input id="optUBoxStroke" placeholder="none"></div>
+					<div><label>collapse distance (studs, 0=off)</label><input id="optCollapseDist" type="number" min="0" placeholder="60"></div>
+					<div><label>collapsed icon size (px)</label><input id="optCollapseIcon" type="number" min="16" max="128" placeholder="28"></div>
+					<div><label>tag refresh every (sec, 10-300)</label><input id="optRefresh" type="number" min="10" max="300" placeholder="15"></div>
+				</div>
+				<div class="checks">
+					<label><input id="optDistOn" type="checkbox" checked> distance</label>
+					<label><input id="optHp" type="checkbox" checked> health</label>
+					<label><input id="optBox" type="checkbox" checked> pill background</label>
+					<label><input id="optScriptUsers" type="checkbox" checked> only tag script users</label>
+					<label><input id="optClickTp" type="checkbox" checked> click pill = teleport</label>
+					<label><input id="optUBox" type="checkbox"> @username box</label>
+					<label><input id="optWalls" type="checkbox" checked> see through walls</label>
+					<label><input id="optCollapse" type="checkbox" checked> collapse far tags to icon (still clickable)</label>
+				</div>
+				<div class="hint">Options apply to everyone; per-rule settings override them.</div>
+			</div>
+		</div>
+
+		<div>
+			<div class="card">
+				<h2>
+					<span class="hl">Script users <span id="userCount" class="chip"></span></span>
+					<span class="chip" id="usersLive">checking...</span>
+				</h2>
+				<div class="hint" style="margin-top:0">Everyone currently running the script (live presence, refreshes every 20s). Click +tag to create a rule for them.</div>
+				<div class="rlist" id="userList"></div>
+			</div>
+		</div>
+
+		<div>
+			<div class="card">
+				<h2>
+					<span class="hl">Rules <span id="ruleCount"></span></span>
+					<span style="display:flex;gap:8px;align-items:center">
+						<input id="search" placeholder="filter..." style="width:140px;padding:6px 11px;font-size:12px">
+						<button id="addRule" style="padding:7px 14px;font-size:12.5px">+ Add rule</button>
+					</span>
+				</h2>
+				<div class="hint" style="margin-top:0">First match wins &mdash; order matters. Use &#8593;&#8595; to reorder (exact names above &#8220;*&#8221;).</div>
+				<div class="rlist" id="ruleList"></div>
+			</div>
+
+			<div class="card hidden" id="editor">
+				<h2><span class="hl"><span id="editorTitle">Edit rule</span></span><span class="chip" id="ruleIndex"></span></h2>
+				<div class="fgrid">
+					<div>
+						<label>Match &mdash; start of username/display name, or *</label>
+						<input id="fMatch" placeholder="stellarpAlladium or *">
+					</div>
+					<div>
+						<label>Tag text (shown above head)</label>
+						<input id="fLabel" placeholder="x9k_alt">
+					</div>
+					<div>
+						<label>Border color</label>
+						<div class="row"><input id="fColor" type="color" value="#ffd700"><input id="fColorHex" value="#FFD700"></div>
+					</div>
+					<div>
+						<label>Text size (blank = default)</label>
+						<input id="fSize" type="number" min="8" max="60" placeholder="default">
+					</div>
+					<div>
+						<label>Pill background (blank = default)</label>
+						<div class="row"><input id="fBg" type="color" value="#0c0c10"><input id="fBgHex" placeholder="default"></div>
+					</div>
+					<div>
+						<label>Pill transparency (0=solid, 1=ghost)</label>
+						<input id="fBgTrans" type="number" min="0" max="1" step="0.05" placeholder="default">
+					</div>
+					<div style="grid-column:1/-1">
+						<label>Icon image &mdash; URL, asset id, or upload a file (GIF/PNG/JPG, GIFs animate)</label>
+						<div class="row">
+							<input id="fImage" placeholder="https://i.imgur.com/xxxx.png or data:image/gif;base64,...">
+							<button class="filepick" id="edIconFileBtn" type="button">Choose file</button>
+						</div>
+						<input type="file" id="edIconFile" accept="image/png,image/jpeg,image/gif" class="hidden">
+					</div>
+					<div style="grid-column:1/-1">
+						<label>Background image &mdash; fills the pill behind the text (GIFs animate)</label>
+						<div class="row">
+							<input id="fBgImage" placeholder="https://... or upload">
+							<button class="filepick" id="edBgFileBtn" type="button">Choose file</button>
+						</div>
+						<input type="file" id="edBgFile" accept="image/png,image/jpeg,image/gif" class="hidden">
+					</div>
+					<div>
+						<label>@username box (blank = default, on/off)</label>
+						<select id="fUserBox">
+							<option value="">default</option>
+							<option value="true">show</option>
+							<option value="false">hide</option>
+						</select>
+					</div>
+					<div class="checks" style="grid-column:1/-1">
+						<label><input id="fBadge" type="checkbox"> show check badge next to name</label>
+					</div>
+				</div>
+				<div class="mini-stage"><span class="badge mini" id="edBadge"><img id="edImg" alt="" class="hidden"><span id="edLabel">?</span><span id="edBadgeCheck" style="display:none">&#10003;</span><span class="ubox" id="edUbox" style="display:none"><span>@user</span></span></span></div>
+				<div class="eactions">
+					<button class="subtle" id="edCancel">Cancel</button>
+					<button class="ghost" id="edDelete" style="border-color:rgba(255,93,93,.45);color:var(--danger)">Delete rule</button>
+					<button id="edSave">Save rule</button>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+<div id="status"></div>
+
+<div class="pubbar">
+	<span class="chip warn hidden" id="dirtyChip">unsaved changes</span>
+	<button class="subtle hidden" id="draftBtn">restore draft</button>
+	<button class="subtle" id="revertBtn">Revert</button>
+	<button class="subtle" id="exportBtn">Export</button>
+	<button class="subtle" id="importBtn">Import</button>
+	<button id="publishBtn">&#9650;&nbsp; Publish to GitHub</button>
+</div>
+
+<div id="toasts"></div>
+
+<dialog id="importDlg">
+	<h3>Import nametags JSON</h3>
+	<div class="hint" style="margin-top:0">Paste JSON or choose a file. This replaces your working copy (not GitHub) until you publish.</div>
+	<textarea id="importText" spellcheck="false" placeholder='{"options":{...},"tags":[...]}'></textarea>
+	<div class="row" style="margin-top:12px;justify-content:flex-end">
+		<button class="subtle" id="importFileBtn">Choose file...</button>
+		<button class="subtle" id="importCancel">Cancel</button>
+		<button id="importApply">Import</button>
+	</div>
+	<input type="file" id="importFile" accept=".json,application/json" class="hidden">
+</dialog>
+
+<script>
+const REPO = "vertxxy-1/Xyro";
+const PATH = "nametags.json";
+const API = "https://api.github.com/repos/" + REPO + "/contents/" + PATH;
+const LS_TOKEN = "xyro_token";
+const LS_DRAFT = "xyro_draft_v2";
+
+const $ = id => document.getElementById(id);
+let live = null;          // last published state from GitHub {options, tags}
+let liveSha = null;
+let cfg = { options: {}, tags: [] };  // working copy
+let editing = -1;         // index into cfg.tags, -1 = closed
+
+/* ---------- helpers ---------- */
+function esc(s) {
+	const d = document.createElement("div");
+	d.textContent = s == null ? "" : String(s);
+	return d.innerHTML;
+}
+function hex6(c) {
+	const v = (c || "").toString().trim();
+	return /^#[0-9a-fA-F]{6}$/.test(v) ? v : null;
+}
+function toast(msg, kind, secs) {
+	const t = document.createElement("div");
+	t.className = "toast " + (kind || "");
+	t.textContent = msg;
+	$("toasts").appendChild(t);
+	setTimeout(() => t.remove(), (secs || 4.2) * 1000);
+}
+function status(msg, cls) { const s = $("status"); s.textContent = msg; s.className = cls || ""; }
+function getToken() { return localStorage.getItem(LS_TOKEN) || ""; }
+
+function deepCopy(o) { return JSON.parse(JSON.stringify(o)); }
+function sameJSON(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+
+/* ---------- badges ---------- */
+function badgeHTML(t, big, mini) {
+	const color = hex6(t.color) || "#6c80ff";
+	const pill = hex6(t.bg) || "#0c0c10";
+	let inner = "";
+	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
+		inner += '<img src="' + esc(t.image) + '" onerror="this.style.display=\'none\'">';
+	} else if (t.image && t.image !== "") {
+		inner += "&#127917; ";
+	}
+	inner += esc(t.label || "?");
+	return '<span class="badge' + (big ? " big" : mini ? " mini" : "") + '" style="--c:' + color +
+		(pill !== "#0c0c10" ? ";--pill:" + pill : "") + '">' + inner + "</span>";
+}
+
+/* ---------- rendering ---------- */
+function renderPreview() {
+	const t = (editing >= 0 ? editorTag() : null) || cfg.tags[0] || { label: "x9k_alt", color: "#ffd700" };
+	const badge = $("pvBadge");
+	badge.style.setProperty("--c", hex6(t.color) || "#6c80ff");
+	/* @username box mirrors the global options (plus rule override) */
+	const ubOn = t.userBox === "true" || (t.userBox === undefined && $("optUBox").checked);
+	const ub = $("pvUbox");
+	ub.style.display = ubOn ? "" : "none";
+	if (ubOn) {
+		ub.style.background = (hex6(t.userBoxColor) || $("optUBoxColor").value || "#1a1f2e").toLowerCase();
+		ub.style.borderRadius = (parseInt($("optUBoxRadius").value) || 0) + "px";
+		ub.style.border = $("optUBoxStroke").value.trim() ? "1px solid " + $("optUBoxStroke").value.trim() : "none";
+	}
+	badge.style.setProperty("--pill", hex6(t.bg) || $("optPillColor").value || "#0c0c10");
+	$("pvLabel").textContent = t.label || "?";
+	const img = $("pvImg");
+	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
+		img.src = t.image; img.classList.remove("hidden");
+	} else {
+		img.classList.add("hidden");
+	}
+}
+
+function renderRules() {
+	const q = ($("search").value || "").toLowerCase();
+	const list = $("ruleList");
+	list.innerHTML = "";
+	let shown = 0;
+	cfg.tags.forEach((t, i) => {
+		const hay = ((t.match || "") + " " + (t.label || "")).toLowerCase();
+		if (q && !hay.includes(q)) return;
+		shown++;
+		const row = document.createElement("div");
+		row.className = "rrow";
+		const marks =
+			(t.image ? '<span class="mark">&#127917; icon</span>' : "") +
+			(t.bgImage ? '<span class="mark">&#127917; bg</span>' : "") +
+			(t.bg ? '<span class="mark">bg</span>' : "") +
+			(t.userBox === true ? '<span class="mark">@box</span>' : t.userBox === false ? '<span class="mark">no @box</span>' : "") +
+			(t.size ? '<span class="mark">s' + esc(t.size) + "</span>" : "");
+		row.innerHTML =
+			badgeHTML(t, false, true) +
+			'<span class="meta"><span class="line">match <b>' + esc(t.match) + "</b></span>" +
+			'<span class="line">' + marks + "</span></span>";
+		const order = document.createElement("span");
+		order.className = "order";
+		[["&#8593;", -1, i > 0], ["&#8595;", 1, i < cfg.tags.length - 1]].forEach(m => {
+			const b = document.createElement("button");
+			b.className = "icon";
+			b.innerHTML = m[0];
+			b.disabled = !m[2];
+			b.onclick = () => moveRule(i, m[1]);
+			order.appendChild(b);
+		});
+		row.appendChild(order);
+		const edit = document.createElement("button");
+		edit.className = "icon";
+		edit.innerHTML = "\u270E";
+		edit.title = "edit";
+		edit.onclick = () => openEditor(i);
+		row.appendChild(edit);
+		const del = document.createElement("button");
+		del.className = "danger";
+		del.textContent = "Delete";
+		del.onclick = () => {
+			cfg.tags.splice(i, 1);
+			if (editing === i) closeEditor();
+			else if (editing > i) editing--;
+			changed("rule deleted");
+		};
+		row.appendChild(del);
+		list.appendChild(row);
+	});
+	$("ruleCount").textContent = shown + " / " + cfg.tags.length;
+}
+
+function renderOptions() {
+	const o = cfg.options || {};
+	$("optSize").value = o.size || 15;
+	$("optUserSize").value = o.userSize || 10;
+	$("optHeight").value = o.height || 48;
+	$("optFont").value = o.font || "GothamBlack";
+	$("optDist").value = o.maxDistance || 0;
+	$("optImgSize").value = o.imageSize || 44;
+	$("optPillColor").value = (o.pillColor || "#0c0c10").toLowerCase();
+	$("optPillTrans").value = (o.pillTransparency != null ? o.pillTransparency : 0.12);
+	$("optTextColor").value = (o.textColor || "#ffffff").toLowerCase();
+	$("optUserColor").value = (o.userColor || "#8b92a5").toLowerCase();
+	$("optUBox").checked = o.userBox === true;
+	$("optUBoxColor").value = (o.userBoxColor || "#1a1f2e").toLowerCase();
+	$("optUBoxTrans").value = o.userBoxTransparency != null ? o.userBoxTransparency : "";
+	$("optUBoxRadius").value = o.userBoxRadius != null ? o.userBoxRadius : "";
+	$("optUBoxStroke").value = o.userBoxStroke || "";
+	$("optDistOn").checked = o.showDistance !== false;
+	$("optHp").checked = o.showHealth !== false;
+	$("optBox").checked = o.showBox !== false;
+	$("optScriptUsers").checked = o.onlyScriptUsers !== false;
+	$("optClickTp").checked = o.clickTeleport !== false;
+	$("optWalls").checked = o.seeThroughWalls !== false;
+	$("optCollapse").checked = (o.collapseDistance != null ? o.collapseDistance : 60) > 0;
+	$("optCollapseDist").value = o.collapseDistance != null ? o.collapseDistance : 60;
+	$("optCollapseIcon").value = o.collapsedIcon != null ? o.collapsedIcon : 28;
+	$("optRefresh").value = o.refreshSeconds != null ? o.refreshSeconds : 15;
+}
+
+function renderDirty() {
+	const dirty = live && !sameJSON(cfg, live);
+	$("dirtyChip").classList.toggle("hidden", !dirty);
+	document.title = (dirty ? "(unsaved) " : "") + "Xyro Tag Editor";
+}
+
+function renderAll() { renderPreview(); renderRules(); renderUsers(); renderDirty(); }
+
+function changed(why) {
+	localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+	renderAll();
+}
+
+/* ---------- rule editor ---------- */
+/* media uploads: files go to media/<hash>.<ext> in the repo (keeps
+   nametags.json small); without a token we fall back to a base64 data
+   URI embedded straight into the rule, which the in-game decoder reads */
+let edMedia = { icon: false, bg: false };
+
+function fileToDataURI(file) {
+	return new Promise((res, rej) => {
+		const r = new FileReader();
+		r.onload = () => res(r.result);
+		r.onerror = () => rej(new Error("read failed"));
+		r.readAsDataURL(file);
+	});
+}
+
+async function fileToBlobURL(file) {
+	const buf = await file.arrayBuffer();
+	const hash = await crypto.subtle.digest("SHA-1", buf);
+	const name = [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, "0")).join("");
+	const ext = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "") || "png";
+	const path = "media/" + name + "." + ext;
+	const rawURL = "https://cdn.jsdelivr.net/gh/" + REPO + "@main/" + path; // fast global edge instead of raw.githubusercontent
+	const token = getToken();
+	if (!token) throw Object.assign(new Error("no token"), { code: "notoken" });
+	// file already in the repo? then its URL is instantly valid
+	const head = await fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, { headers: { Authorization: "Bearer " + token } });
+	if (head.ok) return rawURL;
+	if (head.status !== 404) throw new Error("github said " + head.status);
+	/* chunked base64: spreading 100k+ bytes into String.fromCharCode
+	   blows the call stack on big GIFs */
+	const bytes = new Uint8Array(buf);
+	let bin = "";
+	for (let i = 0; i < bytes.length; i += 0x8000) {
+		bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+	}
+	const b64 = btoa(bin);
+	const put = await fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, {
+		method: "PUT",
+		headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+		body: JSON.stringify({ message: "Add tag media " + name.slice(0, 8), content: b64 }),
+	});
+	if (!put.ok) {
+		const err = await put.json().catch(() => ({}));
+		// 422 = already exists (race) - the URL is still good
+		if (put.status === 422) return rawURL;
+		throw new Error(err.message || put.status);
+	}
+	return rawURL;
+}
+
+function wireFilePicker(fileInputId, btnId, urlInputId, mediaKey) {
+	$(btnId).onclick = () => $(fileInputId).click();
+	$(fileInputId).onchange = async e => {
+		const f = e.target.files[0];
+		e.target.value = "";
+		if (!f) return;
+		if (f.size > 3 * 1024 * 1024) { toast("Image too large (max 3 MB)", "err"); return; }
+		const btn = $(btnId);
+		btn.classList.remove("done"); btn.classList.add("busy");
+		btn.textContent = "uploading...";
+		try {
+			const url = await fileToBlobURL(f);
+			$(urlInputId).value = url;
+			/* self-hosted: mirror the bytes to the local tag server's media
+			   folder so the in-game fast lane serves them immediately too */
+			if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+				const localName = url.split("/media/")[1];
+				if (localName) {
+					f.arrayBuffer().then(b => fetch("/media/" + localName, { method: "POST", body: b })).catch(() => {});
+				}
+			}
+			btn.classList.remove("busy"); btn.classList.add("done");
+			btn.textContent = "uploaded!";
+			toast("Image uploaded to the repo - remember to publish", "ok");
+		} catch (err) {
+			btn.classList.remove("busy");
+			if (err && err.code === "notoken") {
+				try {
+					const uri = await fileToDataURI(f);
+					$(urlInputId).value = uri;
+					edMedia[mediaKey] = true;
+					btn.textContent = "embedded";
+					toast("No token connected - embedded as base64 (heavier publish). Connect a token to upload instead.", "info", 8);
+				} catch (_) {
+					btn.textContent = "Choose file";
+					toast("Could not read that file", "err");
+				}
+			} else {
+				btn.textContent = "failed - retry";
+				toast("Upload failed: " + (err.message || err), "err");
+			}
+		}
+		renderEditorPreview();
+	};
+}
+
+wireFilePicker("edIconFile", "edIconFileBtn", "fImage", "icon");
+wireFilePicker("edBgFile", "edBgFileBtn", "fBgImage", "bg");
+
+function editorTag() {
+	return {
+		match: $("fMatch").value.trim(),
+		label: $("fLabel").value.trim() || "?",
+		color: $("fColorHex").value,
+		size: $("fSize").value ? parseInt($("fSize").value) : undefined,
+		image: $("fImage").value.trim(),
+		bgImage: $("fBgImage").value.trim(),
+		bg: hex6($("fBgHex").value) ? $("fBgHex").value : undefined,
+		bgTransparency: $("fBgTrans").value !== "" ? parseFloat($("fBgTrans").value) : undefined,
+		userBox: $("fUserBox").value,
+		badge: $("fBadge").checked || undefined,
+	};
+}
+
+function renderEditorPreview() {
+	const t = editorTag();
+	const badge = $("edBadge");
+	badge.style.setProperty("--c", hex6(t.color) || "#6c80ff");
+	badge.style.setProperty("--pill", hex6(t.bg) || "#0c0c10");
+	$("edLabel").textContent = t.label;
+	$("edBadgeCheck").style.display = t.badge ? "" : "none";
+	/* @username box on the mini preview: per-rule override or global default */
+	const ubOn = t.userBox === "true" || (t.userBox === undefined && $("optUBox").checked);
+	const ub = $("edUbox");
+	ub.style.display = ubOn ? "" : "none";
+	if (ubOn) {
+		ub.style.background = (hex6(t.userBoxColor) || $("optUBoxColor").value || "#1a1f2e").toLowerCase();
+		ub.style.borderRadius = (parseInt($("optUBoxRadius").value) || 0) + "px";
+		ub.style.border = $("optUBoxStroke").value.trim() ? "1px solid " + $("optUBoxStroke").value.trim() : "none";
+	}
+	/* match in-game: the badge renders as the Roblox verified seal in blue */
+	$("edBadgeCheck").style.color = "#00aaff";
+	const img = $("edImg");
+	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
+		img.src = t.image; img.classList.remove("hidden");
+	} else {
+		img.classList.add("hidden");
+	}
+	$("edImg").style.display = t.image && /^(https:\/\/|data:image\/)/i.test(t.image) ? "" : "none";
+	/* live background-image preview fills the pill itself */
+	if (t.bgImage && /^(https:\/\/|data:image\/)/i.test(t.bgImage)) {
+		badge.style.backgroundImage = 'url("' + t.bgImage + '")';
+		badge.style.backgroundSize = "cover";
+		badge.style.backgroundPosition = "center";
+	} else {
+		badge.style.backgroundImage = "none";
+	}
+}
+
+function openEditor(i) {
+	editing = i;
+	const t = cfg.tags[i] || {};
+	$("editorTitle").textContent = i >= cfg.tags.length ? "Add rule" : "Edit rule";
+	$("ruleIndex").textContent = "#" + (i + 1);
+	$("fMatch").value = t.match || "";
+	$("fLabel").value = t.label || "";
+	$("fColor").value = (hex6(t.color) || "#6c80ff").toLowerCase();
+	$("fColorHex").value = (t.color || "#6C80FF").toUpperCase();
+	$("fSize").value = t.size || "";
+	$("fImage").value = t.image || "";
+	$("fBgImage").value = t.bgImage || "";
+	edMedia = { icon: false, bg: false };
+	$("edIconFileBtn").textContent = "Choose file";
+	$("edBgFileBtn").textContent = "Choose file";
+	$("edIconFileBtn").classList.remove("done", "busy");
+	$("edBgFileBtn").classList.remove("done", "busy");
+	$("fBg").value = (hex6(t.bg) || "#0c0c10").toLowerCase();
+	$("fBgHex").value = t.bg ? t.bg.toUpperCase() : "";
+	$("fBgTrans").value = t.bgTransparency != null ? t.bgTransparency : "";
+	$("fUserBox").value = t.userBox === true ? "true" : t.userBox === false ? "false" : "";
+	$("fBadge").checked = t.badge === true;
+	$("edDelete").style.display = i < cfg.tags.length ? "" : "none";
+	$("editor").classList.remove("hidden");
+	renderEditorPreview();
+	$("fMatch").focus();
+}
+
+function closeEditor() {
+	editing = -1;
+	$("editor").classList.add("hidden");
+	renderPreview();
+}
+
+["fMatch", "fLabel", "fColorHex", "fSize", "fImage", "fBgImage", "fBgHex", "fBgTrans", "fUserBox"].forEach(id => {
+	$(id).addEventListener("input", renderEditorPreview);
+});
+$("fBadge").addEventListener("change", renderEditorPreview);
+$("fColor").addEventListener("input", () => { $("fColorHex").value = $("fColor").value.toUpperCase(); renderEditorPreview(); });
+$("fColorHex").addEventListener("input", () => { if (hex6($("fColorHex").value)) $("fColor").value = $("fColorHex").value; });
+$("fBg").addEventListener("input", () => { $("fBgHex").value = $("fBg").value.toUpperCase(); renderEditorPreview(); });
+$("fBgHex").addEventListener("input", () => { if (hex6($("fBgHex").value)) $("fBg").value = $("fBgHex").value; renderEditorPreview(); });
+
+$("edSave").onclick = () => {
+	const t = editorTag();
+	if (!t.match) { toast("Match is required (a username or *)", "err"); return; }
+	if (!t.label || t.label === "?") { toast("Tag text is required", "err"); return; }
+	if (t.color && !hex6(t.color)) { toast("Color must be #RRGGBB", "err"); return; }
+	/* lossless: carry over keys this form doesn't own (userSize, height, textSize, ...) */
+	const prev = editing < cfg.tags.length ? (cfg.tags[editing] || {}) : {};
+	const clean = Object.assign({}, prev, { match: t.match, label: t.label, color: t.color || undefined });
+	if (t.size) clean.size = t.size; else delete clean.size;
+	if (t.image) clean.image = t.image; else delete clean.image;
+	if (t.bgImage) clean.bgImage = t.bgImage; else delete clean.bgImage;
+	if (t.bg) clean.bg = t.bg; else delete clean.bg;
+	if (t.bgTransparency != null && !isNaN(t.bgTransparency)) clean.bgTransparency = t.bgTransparency; else delete clean.bgTransparency;
+	if (t.badge) clean.badge = true; else delete clean.badge;
+	if (t.userBox === "true") clean.userBox = true;
+	else if (t.userBox === "false") clean.userBox = false;
+	else delete clean.userBox;
+	if (editing >= cfg.tags.length) cfg.tags.push(clean);
+	else cfg.tags[editing] = clean;
+	toast("Rule saved (not published yet)");
+	closeEditor();
+	changed("rule saved");
+};
+$("edCancel").onclick = closeEditor;
+$("edDelete").onclick = () => {
+	if (editing < cfg.tags.length) cfg.tags.splice(editing, 1);
+	closeEditor();
+	changed("rule deleted");
+};
+document.addEventListener("keydown", e => { if (e.key === "Escape" && editing >= 0) closeEditor(); });
+
+function moveRule(i, dir) {
+	const j = i + dir;
+	if (j < 0 || j >= cfg.tags.length) return;
+	const tmp = cfg.tags[i]; cfg.tags[i] = cfg.tags[j]; cfg.tags[j] = tmp;
+	if (editing === i) editing = j; else if (editing === j) editing = i;
+	changed("reordered");
+}
+
+/* ---------- options wiring ---------- */
+/* merge with existing options so keys the form doesn't own survive a publish */
+["optSize", "optUserSize", "optHeight", "optFont", "optDist", "optImgSize", "optPillColor", "optPillTrans", "optTextColor", "optUserColor", "optUBox", "optUBoxColor", "optUBoxTrans", "optUBoxRadius", "optUBoxStroke", "optDistOn", "optHp", "optBox", "optScriptUsers", "optClickTp", "optWalls", "optCollapse", "optCollapseDist", "optCollapseIcon", "optRefresh"].forEach(id => {
+	$(id).addEventListener("input", () => {
+		cfg.options = Object.assign({}, cfg.options, readOptions());
+		changed("options");
+	});
+});
+
+function readOptions() {
+	return {
+		size: Math.min(48, Math.max(8, parseInt($("optSize").value) || 15)),
+		userSize: Math.min(24, Math.max(8, parseInt($("optUserSize").value) || 10)),
+		height: Math.min(96, Math.max(28, parseInt($("optHeight").value) || 48)),
+		font: $("optFont").value,
+		maxDistance: Math.max(0, parseInt($("optDist").value) || 0),
+		showDistance: $("optDistOn").checked,
+		showHealth: $("optHp").checked,
+		showBox: $("optBox").checked,
+		onlyScriptUsers: $("optScriptUsers").checked,
+		pillColor: $("optPillColor").value.toUpperCase(),
+		pillTransparency: Math.min(1, Math.max(0, parseFloat($("optPillTrans").value) || 0.12)),
+		imageSize: Math.min(128, Math.max(8, parseInt($("optImgSize").value) || 44)),
+		textColor: $("optTextColor").value.toUpperCase(),
+		userColor: $("optUserColor").value.toUpperCase(),
+		userBox: $("optUBox").checked,
+		userBoxColor: $("optUBoxColor").value.toUpperCase(),
+		userBoxTransparency: Math.min(1, Math.max(0, parseFloat($("optUBoxTrans").value) || 0.25)),
+		userBoxRadius: Math.min(24, Math.max(0, parseInt($("optUBoxRadius").value) || 0)),
+		userBoxStroke: $("optUBoxStroke").value.trim().toUpperCase(),
+		clickTeleport: $("optClickTp").checked,
+		seeThroughWalls: $("optWalls").checked,
+		collapseDistance: Math.max(0, parseInt($("optCollapseDist").value) || 0),
+		collapsedIcon: Math.min(128, Math.max(16, parseInt($("optCollapseIcon").value) || 28)),
+		collapseFar: $("optCollapse").checked,
+		refreshSeconds: Math.min(300, Math.max(10, parseInt($("optRefresh").value) || 15)),
+	};
+}
+
+/* ---------- rules buttons ---------- */
+$("addRule").onclick = () => openEditor(cfg.tags.length);
+$("search").addEventListener("input", renderRules);
+
+/* ---------- script users (live presence sync) ---------- */
+/* the game heartbeats every player's username to this anonymous ntfy
+   topic; the editor polls the same feed so you can see who's running
+   the script right now and one-click a rule for anyone missing one */
+let seenUsers = {}; // lowercase name -> last-seen timestamp
+
+function renderUsers() {
+	if (!cfg) return; // config not loaded yet - first poll can beat load()
+	const names = Object.keys(seenUsers).sort();
+	$("userCount").textContent = names.length ? names.length + " online" : "none";
+	const list = $("userList");
+	list.innerHTML = "";
+	if (!names.length) {
+		const empty = document.createElement("div");
+		empty.className = "hint";
+		empty.style.marginTop = "6px";
+		empty.textContent = "Nobody yet - the list fills in as players run the script.";
+		list.appendChild(empty);
+		return;
+	}
+	const star = cfg.tags.some(t => (t.match || "") === "*");
+	for (const n of names) {
+		const matched = cfg.tags.some(t => {
+			const m = (t.match || "").toLowerCase();
+			return m !== "" && m !== "*" && n.startsWith(m);
+		});
+		const row = document.createElement("div");
+		row.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.05)";
+		const dot = document.createElement("span");
+		dot.style.cssText = "width:8px;height:8px;border-radius:50%;background:" + (matched ? "#3ddc84" : "#e5b83c") + ";flex:none";
+		const nm = document.createElement("b");
+		nm.textContent = n; // usernames come off the wire - never innerHTML them
+		nm.style.cssText = "font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis";
+		const state = document.createElement("span");
+		state.className = "hint";
+		state.textContent = matched ? "tagged" : star ? "catch-all" : "no rule";
+		const btn = document.createElement("button");
+		btn.textContent = "+ tag";
+		btn.style.cssText = "padding:5px 12px;font-size:12px;flex:none";
+		btn.onclick = () => {
+			openEditor(cfg.tags.length);
+			$("fMatch").value = n;
+			$("fLabel").value = n;
+			renderEditorPreview();
+			$("fLabel").focus();
+		};
+		row.append(dot, nm, state, btn);
+		list.appendChild(row);
+	}
+}
+
+async function pollUsers() {
+	try {
+		const res = await fetch("https://ntfy.sh/xyro-presence-k2m9x7q/json?poll=1&since=75s");
+		if (!res.ok) throw new Error(res.status);
+		const text = await res.text();
+		const now = Date.now();
+		// ntfy's /json endpoint is one JSON object per line (NDJSON)
+		for (const line of text.split(/\r?\n/)) {
+			if (!line.trim()) continue;
+			try {
+				const m = JSON.parse(line);
+				const n = String(m.message || "").trim().toLowerCase();
+				if (n && n.length < 40) seenUsers[n] = now;
+			} catch (_) { /* partial line */ }
+		}
+		const cutoff = now - 75000;
+		for (const n of Object.keys(seenUsers)) if (seenUsers[n] < cutoff) delete seenUsers[n];
+		renderUsers();
+		$("usersLive").textContent = "live";
+		$("usersLive").classList.add("on");
+	} catch (_) {
+		$("usersLive").textContent = "offline";
+		$("usersLive").classList.remove("on");
+	}
+}
+setInterval(pollUsers, 20000);
+pollUsers();
+
+/* ---------- token ---------- */
+function refreshTokenChip() {
+	const has = !!getToken();
+	$("tokenChip").textContent = has ? "token saved" : "no token";
+	$("tokenChip").className = "chip" + (has ? " on" : "");
+	$("tokenState").textContent = has ? "connected" : "not connected";
+	$("tokenState").className = "chip" + (has ? " on" : "");
+}
+$("peek").onclick = () => {
+	const f = $("token");
+	f.type = f.type === "password" ? "text" : "password";
+};
+$("saveToken").onclick = async () => {
+	const v = $("token").value.trim();
+	if (!v) { toast("Paste a token first", "err"); return; }
+	status("testing token...", "info");
+	try {
+		const res = await fetch("https://api.github.com/repos/" + REPO, {
+			headers: { Authorization: "Bearer " + v },
+		});
+		if (res.status === 401 || res.status === 403) {
+			status("token rejected by GitHub (" + res.status + ")", "err");
+			toast("Token invalid or lacking access", "err");
+			return;
+		}
+		const repo = await res.json();
+		if (!repo.permissions || !repo.permissions.push) {
+			status("token cannot access " + REPO, "err");
+			toast("Token needs access to " + REPO + " (Only select repositories)", "err");
+			return;
+		}
+		// NOTE: for fine-grained tokens GitHub reports the ACCOUNT's repo
+		// permission here, not the token's scope - Contents: Read and write
+		// can only be truly verified by a publish attempt. Warn accordingly.
+		localStorage.setItem(LS_TOKEN, v);
+		$("token").value = "";
+		refreshTokenChip();
+		const fine = v.indexOf("github_pat_") === 0;
+		status(fine ? "token saved - make sure Contents: Read and write was set, publish verifies it" : "token saved and verified", fine ? "info" : "ok");
+		toast(fine ? "Connected - publish will verify write access" : "Connected to " + REPO, "ok");
+	} catch (e) {
+		status("network error while testing token", "err");
+	}
+};
+$("forgetToken").onclick = () => {
+	localStorage.removeItem(LS_TOKEN);
+	refreshTokenChip();
+	status("token forgotten", "info");
+};
+$("tokenChip").onclick = () => $("tokenCard").scrollIntoView({ behavior: "smooth" });
+
+/* ---------- load / publish ---------- */
+/* the contents API returns an envelope {sha, content:"<base64>"} - decode
+   it to the real nametags.json. Falls back to raw.githubusercontent (plain
+   text, no sha) when the API is rate-limited or unreachable. */
+async function fetchConfig() {
+	/* self-hosted speed lane: when the page itself is served from the local
+	   tag server (http://localhost:8619/), the config is one disk read away -
+	   load it first so the editor opens instantly with no GitHub round-trip.
+	   Publish is still safe: it re-reads the sha from the API every time. */
+	if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+		try {
+			const res = await fetch("/nametags.json", { cache: "no-store" });
+			if (res.ok) return { config: await res.json(), sha: null };
+		} catch (_) { /* fall through to GitHub */ }
+	}
+	try {
+		const res = await fetch(API + "?t=" + Date.now());
+		if (res.ok) {
+			const env = await res.json();
+			if (typeof env.content === "string") {
+				const bin = atob(env.content.replace(/\s/g, ""));
+				const bytes = new Uint8Array(bin.length);
+				for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+				const text = JSON.parse(new TextDecoder("utf-8").decode(bytes));
+				return { config: text, sha: env.sha };
+			}
+		}
+	} catch (_) { /* fall through to raw */ }
+	const res = await fetch("https://raw.githubusercontent.com/" + REPO + "/main/" + PATH + "?t=" + Date.now());
+	if (!res.ok) throw new Error("github " + res.status);
+	return { config: await res.json(), sha: null };
+}
+
+async function load() {
+	status("loading nametags.json from GitHub...", "info");
+	try {
+		const json = await fetchConfig();
+		live = { options: json.config.options || {}, tags: Array.isArray(json.config.tags) ? json.config.tags : [] };
+		liveSha = json.sha;
+		/* the PUBLISHED rules always win on open - a stale draft must never
+		   masquerade as the live config. A differing draft is offered as an
+		   explicit one-click restore instead. */
+		cfg = deepCopy(live);
+		const draft = localStorage.getItem(LS_DRAFT);
+		if (draft) {
+			try {
+				const d = JSON.parse(draft);
+				if (!sameJSON(d, live)) {
+					$("draftBtn").classList.remove("hidden");
+					$("draftBtn").onclick = () => {
+						if (!confirm("Restore your saved draft? It may be older than the published rules and will overwrite your working copy.")) return;
+						cfg = d;
+						$("draftBtn").classList.add("hidden");
+						changed("draft restored");
+						toast("Draft restored", "info");
+					};
+				}
+			} catch (_) {}
+		}
+		renderOptions();
+		renderAll();
+		status(live.tags.length + " rules loaded from GitHub" + ($("draftBtn").classList.contains("hidden") ? "" : " - a saved draft is available"), "");
+	} catch (e) {
+		status("network error: " + e, "err");
+	}
+}
+
+/* keep the editor in sync with GitHub while it's open: anyone publishing
+   (you from another tab, a teammate) lands here within ~2 minutes, or
+   instantly via the refresh click. Never clobbers unsaved work or an
+   open rule editor. */
+let refreshing = false;
+async function refreshLive(sayIt) {
+	if (refreshing) return false;
+	refreshing = true;
+	try {
+		const json = await fetchConfig();
+		const fresh = { options: json.config.options || {}, tags: Array.isArray(json.config.tags) ? json.config.tags : [] };
+		if (sameJSON(fresh, live)) return false;
+		const hadEdits = !sameJSON(cfg, live);
+		live = fresh;
+		liveSha = json.sha;
+		if (!hadEdits && editing < 0) {
+			cfg = deepCopy(live);
+			localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+			$("draftBtn").classList.add("hidden");
+			renderOptions();
+			renderAll();
+			if (sayIt) { status("rules refreshed from GitHub", "ok"); toast("Updated to the latest published rules", "ok"); }
+		} else if (sayIt) {
+			toast("Newer rules exist on GitHub - publish or revert to see them", "info", 8);
+		}
+		return true;
+	} catch (_) {
+		/* offline / rate limit: keep what we have */
+	} finally {
+		refreshing = false;
+	}
+}
+setInterval(() => refreshLive(true), 120000);
+
+function publishSummary() {
+	const a = live.tags, b = cfg.tags;
+	const bKeys = new Set(b.map(t => t.match + "|" + t.label));
+	const aKeys = new Set(a.map(t => t.match + "|" + t.label));
+	let added = 0, removed = 0, kept = 0;
+	b.forEach(t => { if (bKeys.size && aKeys.has(t.match + "|" + t.label)) kept++; else added++; });
+	a.forEach(t => { if (!bKeys.has(t.match + "|" + t.label)) removed++; });
+	const optChanged = !sameJSON(live.options, cfg.options);
+	return a.length + " -> " + b.length + " rules (" + added + " new, " + removed + " removed)" + (optChanged ? ", options changed" : "");
+}
+
+$("publishBtn").onclick = async () => {
+	const token = getToken();
+	if (!token) {
+		toast("Connect a token first", "err");
+		$("tokenCard").scrollIntoView({ behavior: "smooth" });
+		return;
+	}
+	if (live && sameJSON(cfg, live)) { toast("Nothing to publish - no changes"); return; }
+	const summary = live ? publishSummary() : cfg.tags.length + " rules";
+	if (!confirm("Publish to " + REPO + "?\n\n" + summary + "\n\nEvery player running Xyro gets this within seconds (CDN purged instantly).")) return;
+	status("publishing...", "info");
+	try {
+		const cur = await fetch(API + "?t=" + Date.now(), { headers: { Authorization: "Bearer " + token } });
+		if (!cur.ok) { status("cannot read current file (" + cur.status + ")", "err"); return; }
+		const meta = await cur.json();
+		/* one canonical body string for GitHub, the local server sync, and
+		   the draft (previously the sync silently referenced a shadowed
+		   outer body -> local copy never actually updated) */
+		const body = JSON.stringify({ options: cfg.options, tags: cfg.tags }, null, "\t") + "\n";
+		const res = await fetch(API, {
+			method: "PUT",
+			headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+			body: JSON.stringify({
+				message: "Update nametags via tag editor",
+				content: btoa(unescape(encodeURIComponent(body))),
+				sha: meta.sha,
+			}),
+		});
+		if (!res.ok) {
+			const err = await res.json().catch(() => ({}));
+			status("GitHub said " + res.status + ": " + (err.message || "unknown"), "err");
+			if (res.status === 403 || res.status === 404) {
+				toast("Publish blocked: your token has Contents: Read only. Fix it at github.com/settings/personal-access-tokens \u2192 click your token \u2192 Repository permissions \u2192 Contents \u2192 Read and write \u2192 Update (no new token needed), then Publish again. Your draft is safe.", "err", 14);
+			} else {
+				toast("Publish failed: " + (err.message || res.status), "err");
+			}
+			return;
+		}
+		const done = await res.json();
+		liveSha = done.content && done.content.sha;
+		live = deepCopy(cfg);
+		localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+		$("draftBtn").classList.add("hidden");
+		renderAll();
+		/* kick the game's CDN so the update lands in seconds, not minutes */
+		fetch("https://purge.jsdelivr.net/gh/" + REPO + "@main/" + PATH).catch(() => {});
+		/* keep the local tag server's copy fresh too (silently no-op if it
+		   isn't running; http://localhost is exempt from https mixed-content
+		   blocking in modern browsers) */
+		fetch("http://localhost:8619/sync", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body,
+		}).catch(() => {});
+		status("published! in game in seconds - or run !nametagsfetch now", "ok");
+		toast("Published + CDN purged - live in seconds", "ok");
+	} catch (e) {
+		status("network error: " + e, "err");
+	}
+};
+
+$("revertBtn").onclick = () => {
+	if (!live) { toast("Nothing loaded yet", "err"); return; }
+	if (!sameJSON(cfg, live) && !confirm("Discard your unsaved changes and go back to the last published version?")) return;
+	cfg = deepCopy(live);
+	localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+	$("draftBtn").classList.add("hidden");
+	closeEditor();
+	renderOptions();
+	renderAll();
+	status("reverted to last published version", "info");
+};
+
+/* ---------- import / export ---------- */
+$("exportBtn").onclick = () => {
+	const body = JSON.stringify({ options: cfg.options, tags: cfg.tags }, null, "\t") + "\n";
+	const a = document.createElement("a");
+	a.href = URL.createObjectURL(new Blob([body], { type: "application/json" }));
+	a.download = "nametags.json";
+	a.click();
+	URL.revokeObjectURL(a.href);
+};
+$("importBtn").onclick = () => {
+	$("importText").value = "";
+	$("importDlg").showModal();
+};
+$("importFileBtn").onclick = () => $("importFile").click();
+$("importFile").onchange = e => {
+	const f = e.target.files[0];
+	if (!f) return;
+	const r = new FileReader();
+	r.onload = () => { $("importText").value = r.result; };
+	r.readAsText(f);
+};
+$("refreshBtn").onclick = async () => {
+	$("refreshBtn").classList.add("busy");
+	const got = await refreshLive(true).catch(() => false);
+	$("refreshBtn").classList.remove("busy");
+	if (!got) toast("Already up to date", "info");
+};
+$("importCancel").onclick = () => $("importDlg").close();
+$("importApply").onclick = () => {
+	try {
+		const d = JSON.parse($("importText").value);
+		if (!Array.isArray(d.tags)) throw new Error("needs a tags array");
+		cfg = { options: d.options || {}, tags: d.tags };
+		closeEditor();
+		renderOptions();
+		changed("imported");
+		$("importDlg").close();
+		toast("Imported " + cfg.tags.length + " rules (not published yet)", "ok");
+	} catch (e) {
+		toast("Invalid JSON: " + e.message, "err");
+	}
+};
+
+/* ---------- unsaved-changes guard ---------- */
+window.addEventListener("beforeunload", e => {
+	if (live && !sameJSON(cfg, live)) { e.preventDefault(); e.returnValue = ""; }
+});
+
+/* ---------- boot ---------- */
+refreshTokenChip();
+load();
+</script>
+</body>
+</html>
