@@ -141,6 +141,7 @@
 			<label><input id="optDistOn" type="checkbox" checked> show distance</label>
 			<label><input id="optHp" type="checkbox" checked> show health</label>
 			<label><input id="optBox" type="checkbox" checked> show pill background</label>
+			<label><input id="optScriptUsers" type="checkbox" checked> only tag script users</label>
 		</div>
 	</div>
 
@@ -204,6 +205,7 @@ function readOpts() {
 		showDistance: $("optDistOn").checked,
 		showHealth: $("optHp").checked,
 		showBox: $("optBox").checked,
+		onlyScriptUsers: $("optScriptUsers").checked,
 	};
 }
 
@@ -218,6 +220,7 @@ async function load() {
 	$("optDistOn").checked = o.showDistance !== false;
 	$("optHp").checked = o.showHealth !== false;
 	$("optBox").checked = o.showBox !== false;
+	$("optScriptUsers").checked = o.onlyScriptUsers !== false;
 	render();
 	status("Loaded " + tags.length + " rules from GitHub", "ok");
 }

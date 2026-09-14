@@ -41,6 +41,8 @@ Nametags are driven by **`nametags.json` in this repo**. Edit it right here on g
 
 In game: `!nametags` (alias `!tags`) toggles them; `!nametagsfetch` re-fetches now. Tags render as pill badges above heads — no Drawing API needed, works on every executor.
 
+**Only script users get tagged.** Every running copy heartbeats its username to a shared presence feed every 45s; a tag is drawn only over players seen in the last few minutes. Non-users never show up, even if they match a rule. (Turn off with `"onlyScriptUsers": false`.)
+
 ```json
 {
 	"options": {
@@ -64,6 +66,7 @@ In game: `!nametags` (alias `!tags`) toggles them; `!nametagsfetch` re-fetches n
 - `showDistance` — append `[123m]` to tags
 - `showHealth` — append `[87hp]` to tags
 - `showBox` — dark box behind text for readability
+- `onlyScriptUsers` — only draw tags over players confirmed to be running Xyro (default on)
 
 **`tags`** rules, first match wins (put exact names before broad prefixes):
 - `match` — start of username or display name, case-insensitive (`"x9ksa"` matches `x9ksa123`); `"*"` matches everyone

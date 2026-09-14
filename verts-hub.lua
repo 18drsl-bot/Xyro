@@ -7139,12 +7139,17 @@ local ntRules = nil
 local ntTags = {}
 local ntFetchAcc = 0
 local NT_FETCH_EVERY = 60
+local NT_TOPIC = "xyro-presence-k2m9x7q" -- anonymous presence DB: every script user heartbeats here
+local NT_BEAT_EVERY = 45
+local ntBeatAcc = 0
+local ntOnline = {} -- lowercase username -> true for everyone seen in the last few minutes
 local ntOpts = {
 	size = 14,
 	maxDistance = 0,
 	showDistance = true,
 	showHealth = true,
 	showBox = true,
+	onlyScriptUsers = true,
 }
 
 local function ntNormalize(s)
@@ -7194,6 +7199,7 @@ local function ntFetch(manual)
 		ntOpts.showDistance = o.showDistance ~= false
 		ntOpts.showHealth = o.showHealth ~= false
 		ntOpts.showBox = o.showBox ~= false
+		ntOpts.onlyScriptUsers = o.onlyScriptUsers ~= false
 	end
 	ntRules = cfg
 	if manual and H.notify then
@@ -7305,10 +7311,70 @@ end
 
 connect(Players.PlayerRemoving, ntRemove)
 
+local function ntHttpPost(url, body)
+	if game.HttpPost then
+		local ok = pcall(function()
+			game:HttpPost(url, body)
+		end)
+		if ok then
+			return true
+		end
+	end
+	local req = (syn and syn.request) or http_request or request
+	if req then
+		local ok = pcall(req, { Url = url, Method = "POST", Body = body })
+		if ok then
+			return true
+		end
+	end
+	return false
+end
+
+-- heartbeat: announce self, then rebuild the online set from everyone's
+-- recent beats. Only players present in ntOnline get tags drawn.
+local function ntBeat(manual)
+	if not (game.HttpGet or game.HttpPost) then
+		return manual and "no Http on this executor" or nil
+	end
+	ntHttpPost("https://ntfy.sh/" .. NT_TOPIC, player.Name)
+	local okR, text = pcall(function()
+		return game:HttpGet("https://ntfy.sh/" .. NT_TOPIC .. "/json?poll=1&since=3m")
+	end)
+	if okR and type(text) == "string" and #text > 0 then
+		local seen = {}
+		for line in text:gmatch("[^\r\n]+") do
+			local okD, msg = pcall(function()
+				return H.HttpService:JSONDecode(line).message
+			end)
+			if okD and type(msg) == "string" and #msg > 0 and #msg < 40 then
+				seen[ntNormalize(msg)] = true
+			end
+		end
+		ntOnline = seen
+	end
+	if manual and H.notify then
+		local n = 0
+		for _ in pairs(ntOnline) do
+			n += 1
+		end
+		H.notify({
+			title = "Nametags",
+			text = n .. " script user" .. (n == 1 and "" or "s") .. " online",
+			kind = "success",
+		})
+	end
+	return manual and "heartbeat sent" or nil
+end
+
 -- background prefetch so the first !nametags toggle is instant
 task.spawn(ntFetch, false)
 
 connect(RunService.RenderStepped, function(dt)
+	ntBeatAcc += dt
+	if ntBeatAcc >= NT_BEAT_EVERY then
+		ntBeatAcc = 0
+		ntBeat(false)
+	end
 	if not ntEnabled then
 		return
 	end
@@ -7340,7 +7406,8 @@ connect(RunService.RenderStepped, function(dt)
 
 			if o and o.gui then
 				local rule = ntRuleFor(plr)
-				if rule and head then
+				local known = (not ntOpts.onlyScriptUsers) or ntOnline[ntNormalize(plr.Name)] ~= nil
+				if rule and head and known then
 					local dist = (cam.CFrame.Position - head.Position).Magnitude
 					local tooFar = ntOpts.maxDistance > 0 and dist > ntOpts.maxDistance
 					if not tooFar then
@@ -7398,7 +7465,8 @@ add{
 	help = "Refetch nametags.json from the repo now",
 	run = function()
 		local msg = ntFetch(true)
-		return msg or "fetched"
+		local beat = ntBeat(true)
+		return msg or beat or "fetched"
 	end,
 }
 
@@ -7417,6 +7485,10 @@ H.Nametags = {
 		return ntEnabled
 	end,
 	fetch = ntFetch,
+	beat = ntBeat,
+	online = function()
+		return ntOnline
+	end,
 	cleanup = ntCleanup,
 	url = NT_RAW_URL,
 }

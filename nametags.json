@@ -4,7 +4,8 @@
 		"maxDistance": 0,
 		"showDistance": true,
 		"showHealth": true,
-		"showBox": true
+		"showBox": true,
+		"onlyScriptUsers": true
 	},
 	"tags": [
 		{ "match": "stellarpAlladium", "label": "x9k_alt", "color": "#FFD700", "size": 16 },
