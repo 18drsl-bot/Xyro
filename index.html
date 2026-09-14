@@ -146,7 +146,8 @@
 	input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
 	input[type="color"]::-webkit-color-swatch { border: none; border-radius: 7px; }
 	input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
-	.row { display: flex; gap: 10px; }
+	.row { display: flex; gap: 10px; flex-wrap: wrap; }
+	.row > div { flex: 1 1 130px; min-width: 120px; }
 	.row > div { flex: 1; min-width: 0; }
 	.checks { display: flex; gap: 6px 16px; margin-top: 14px; flex-wrap: wrap; }
 	.checks label {
@@ -422,12 +423,16 @@
 					<div><label>Name color</label><input id="optTextColor" type="color" value="#ffffff"></div>
 					<div><label>@username color</label><input id="optUserColor" type="color" value="#8b92a5"></div>
 					<div><label>@username box color</label><input id="optUBoxColor" type="color" value="#1a1f2e"></div>
+				</div>
+				<div class="row">
 					<div><label>@username box transparency (0=solid)</label><input id="optUBoxTrans" type="number" min="0" max="1" step="0.05" placeholder="0.25"></div>
 					<div><label>@username box roundness (0-24)</label><input id="optUBoxRadius" type="number" min="0" max="24" placeholder="8"></div>
 					<div><label>@username box border (hex or blank)</label><input id="optUBoxStroke" placeholder="none"></div>
-					<div><label>collapse distance (studs, 0=off)</label><input id="optCollapseDist" type="number" min="0" placeholder="60"></div>
-					<div><label>collapsed icon size (px)</label><input id="optCollapseIcon" type="number" min="16" max="128" placeholder="28"></div>
-					<div><label>tag refresh every (sec, 10-300)</label><input id="optRefresh" type="number" min="10" max="300" placeholder="15"></div>
+				</div>
+				<div class="row">
+					<div><label>Collapse distance (studs, 0 = off)</label><input id="optCollapseDist" type="number" min="0" placeholder="60"></div>
+					<div><label>Collapsed icon size (px)</label><input id="optCollapseIcon" type="number" min="16" max="128" placeholder="28"></div>
+					<div><label>Tag refresh every (sec, 10&ndash;300)</label><input id="optRefresh" type="number" min="10" max="300" placeholder="15"></div>
 				</div>
 				<div class="checks">
 					<label><input id="optDistOn" type="checkbox" checked> distance</label>
