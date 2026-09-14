@@ -10278,6 +10278,173 @@ connect(cmdBox.FocusLost, function(enter)
 	end
 end)
 
+-- ===== Keybinds tab: view / change / remove every bindable command =====
+do
+	local make, round, connect, click, COL = H.make, H.round, H.connect, H.click, H.COL
+	local row = H.row
+	local UIS = H.UIS
+	local hubSaveConfig, hubKeyFromName = H.saveConfig, H.keyFromName
+	local Binds = H.Binds
+	local waitingAction = nil
+
+	local bindsPage = H.makeTab("Keys")
+	-- hide the tab while inside a game's custom tab set
+	if H.Games and H.Games.default then
+		H.Games.default["Keys"] = true
+	end
+
+	local scroll = make("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = COL.sub,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+	}, bindsPage)
+	local layout = make("UIListLayout", {
+		Padding = UDim.new(0, 6),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, scroll)
+	make("UIPadding", {
+		PaddingTop = UDim.new(0, 4),
+		PaddingLeft = UDim.new(0, 4),
+		PaddingRight = UDim.new(0, 4),
+	}, scroll)
+	connect(layout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+		scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y / H.scaleOf(scroll) + 6)
+	end)
+
+	local ord = 0
+	local keyBtns = {} -- action -> { btn, get }
+
+	local function keyLabelFor(action)
+		return H.keyFor(action)
+	end
+
+	local function stopWaiting()
+		waitingAction = nil
+		for _, e in pairs(keyBtns) do
+			e.btn.Text = e.get()
+			e.btn.TextColor3 = COL.text
+		end
+	end
+
+	local function startWaiting(action)
+		waitingAction = action
+		for a, e in pairs(keyBtns) do
+			if a == action then
+				e.btn.Text = "press a key..."
+				e.btn.TextColor3 = COL.accent
+			else
+				e.btn.Text = e.get()
+				e.btn.TextColor3 = COL.text
+			end
+		end
+	end
+
+	-- one row per bindable command
+	for _, spec in ipairs(ORDER) do
+		if spec.bindable then
+			ord += 1
+			local action = spec.name
+			local r = row(scroll, 0, spec.name)
+			r.Size = UDim2.new(1, -160, 0, 22)
+			r.LayoutOrder = ord
+			local keyBtn = make("TextButton", {
+				Size = UDim2.new(0, 66, 0, 22),
+				Position = UDim2.new(1, -150, 0, 0),
+				BackgroundColor3 = COL.element,
+				Font = Enum.Font.GothamMedium,
+				TextSize = 11,
+				TextColor3 = COL.text,
+				Text = keyLabelFor(action),
+				AutoButtonColor = false,
+				BorderSizePixel = 0,
+				LayoutOrder = ord,
+			}, scroll)
+			round(keyBtn, 6)
+			local xBtn = make("TextButton", {
+				Size = UDim2.new(0, 22, 0, 22),
+				Position = UDim2.new(1, -26, 0, 0),
+				BackgroundColor3 = COL.bg,
+				Font = Enum.Font.GothamBold,
+				TextSize = 12,
+				TextColor3 = COL.sub,
+				Text = "x",
+				AutoButtonColor = false,
+				BorderSizePixel = 0,
+				LayoutOrder = ord,
+			}, scroll)
+			round(xBtn, 6)
+			local entry = {
+				btn = keyBtn,
+				get = function()
+					return keyLabelFor(action)
+				end,
+			}
+			keyBtns[action] = entry
+
+			connect(keyBtn.MouseButton1Click, function()
+				click()
+				if waitingAction == action then
+					stopWaiting()
+				else
+					startWaiting(action)
+				end
+			end)
+			connect(xBtn.MouseButton1Click, function()
+				click()
+				local kc = hubKeyFromName(H.keyFor(action))
+				if kc then
+					Binds[kc.Name] = nil
+				end
+				H.refreshKeys()
+				pcall(hubSaveConfig)
+				stopWaiting()
+			end)
+		end
+	end
+
+	-- one capture listener for the whole tab
+	connect(UIS.InputBegan, function(input, gp)
+		if not waitingAction or gp then
+			return
+		end
+		if input.UserInputType ~= Enum.UserInputType.Keyboard then
+			return
+		end
+		local action = waitingAction
+		stopWaiting()
+		H.setBind(action, input.KeyCode.Name)
+		pcall(hubSaveConfig)
+	end)
+
+	-- stay in sync when binds change elsewhere (key chip, fly/airwalk/executor buttons)
+	H.keyRefreshers[#H.keyRefreshers + 1] = function()
+		for a, e in pairs(keyBtns) do
+			if waitingAction ~= a then
+				e.btn.Text = e.get()
+			end
+		end
+	end
+end
+
+add{
+	name = "keybinds",
+	alias = { "keys", "binds" },
+	group = "Binds",
+	help = "Open the Keybinds tab",
+	run = function()
+		if H.selectTab then
+			H.selectTab("Keys")
+		end
+		if H.reselectTab then
+			H.reselectTab()
+		end
+		return "keybinds tab opened"
+	end,
+}
+
 H.runCommand = hubRunCommand
 end
 
