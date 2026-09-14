@@ -7134,6 +7134,7 @@ end
 local Players = Players or game:GetService("Players")
 local RunService = RunService or game:GetService("RunService")
 local NT_RAW_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/nametags.json"
+local NT_API_URL = "https://api.github.com/repos/vertxxy-1/Xyro/contents/nametags.json"
 local NT_ACCENT = Color3.fromRGB(108, 128, 255)
 
 -- Roblox verified-podium glyph, shown as the badge ONLY for Xyro staff.
@@ -7326,8 +7327,63 @@ local function ntLoadCache()
 	return nil
 end
 
+-- decode a GitHub contents-API response into raw file text. The API is
+-- NEVER CDN-cached, so a publish lands for everyone immediately -
+-- raw.githubusercontent.com serves stale copies for minutes after a
+-- push, which is exactly why staff kept seeing old tags.
+local function ntFromAPI(jsonBody)
+	local ok, data = pcall(function()
+		return H.HttpService:JSONDecode(jsonBody)
+	end)
+	if not (ok and type(data) == "table" and type(data.content) == "string" and #data.content > 16) then
+		return nil
+	end
+	local b64 = data.content:gsub("\n", "")
+	local crypt = (syn and syn.crypt and syn.crypt.base64decode)
+		or (type(crypt) == "table" and crypt.base64decode)
+		or (syn and syn.base64decode)
+	if crypt then
+		local okD, out = pcall(crypt, b64)
+		if okD and type(out) == "string" and #out > 0 then
+			return out
+		end
+	end
+	-- pure-Lua base64 fallback for executors without a crypt lib
+	local CH = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	local INV = {}
+	for i = 1, #CH do
+		INV[CH:sub(i, i)] = i - 1
+	end
+	local bits = ""
+	for c in b64:gmatch("[^=]") do
+		local f = INV[c] or 0
+		for i = 6, 1, -1 do
+			bits = bits .. ((math.floor(f / 2 ^ (i - 1)) % 2 == 1) and "1" or "0")
+		end
+	end
+	local out = {}
+	for i = 1, #bits - 7, 8 do
+		local v = 0
+		for j = 1, 8 do
+			if bits:sub(i + j - 1, i + j - 1) == "1" then
+				v = v + 2 ^ (8 - j)
+			end
+		end
+		out[#out + 1] = string.char(math.floor(v % 256))
+	end
+	return table.concat(out)
+end
+
 local function ntFetch(manual)
-	local text = ntHttpGet(NT_RAW_URL .. "?t=" .. tostring(os.time()))
+	-- API first on startup and manual fetches (never stale), raw as
+	-- fallback and for the no-rate-limit 60s background cycle
+	local text = nil
+	if manual then
+		text = ntFromAPI(ntHttpGet(NT_API_URL) or "")
+	end
+	if not text then
+		text = ntHttpGet(NT_RAW_URL .. "?t=" .. tostring(os.time()))
+	end
 	if not text or #text == 0 then
 		return manual and "fetch failed (no HttpGet on this executor?)" or nil
 	end
@@ -7726,6 +7782,31 @@ task.spawn(ntBeat, false)
 
 -- background refresh from the repo
 task.spawn(ntFetch, false)
+
+-- update watcher: compare against the live version.txt (via the
+-- never-cached API) and toast staff/players when their build is old
+-- - no more silently running yesterday's script
+task.spawn(function()
+	local first = true
+	while true do
+		task.wait(first and 20 or 600)
+		first = false
+		if VERSION ~= "Unknown" then
+			local body = ntHttpGet("https://api.github.com/repos/vertxxy-1/Xyro/contents/version.txt")
+			local txt = body and ntFromAPI(body)
+			if txt then
+				local latest = txt:gsub("%s+", "")
+				if latest ~= "" and latest ~= VERSION and H.notify then
+					H.notify({
+						title = "Xyro",
+						text = "update available: " .. latest .. " (running " .. VERSION .. ") - re-execute the loadstring",
+						kind = "info",
+					})
+				end
+			end
+		end
+	end
+end)
 
 connect(RunService.RenderStepped, function(dt)
 	ntBeatAcc += dt
