@@ -678,7 +678,7 @@ function renderOptions() {
 	$("optHeight").value = o.height || 48;
 	$("optFont").value = o.font || "GothamBlack";
 	$("optDist").value = o.maxDistance || 0;
-	$("optImgSize").value = o.imageSize || 36;
+	$("optImgSize").value = o.imageSize || 44;
 	$("optPillColor").value = (o.pillColor || "#0c0c10").toLowerCase();
 	$("optPillTrans").value = (o.pillTransparency != null ? o.pillTransparency : 0.12);
 	$("optTextColor").value = (o.textColor || "#ffffff").toLowerCase();
@@ -954,7 +954,7 @@ function readOptions() {
 		onlyScriptUsers: $("optScriptUsers").checked,
 		pillColor: $("optPillColor").value.toUpperCase(),
 		pillTransparency: Math.min(1, Math.max(0, parseFloat($("optPillTrans").value) || 0.12)),
-		imageSize: Math.min(128, Math.max(8, parseInt($("optImgSize").value) || 36)),
+		imageSize: Math.min(128, Math.max(8, parseInt($("optImgSize").value) || 44)),
 		textColor: $("optTextColor").value.toUpperCase(),
 		userColor: $("optUserColor").value.toUpperCase(),
 		userBox: $("optUBox").checked,

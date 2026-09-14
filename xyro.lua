@@ -7222,7 +7222,7 @@ local ntOpts = {
 	size = 15,
 	userSize = 10,
 	height = 48,
-	imageSize = 36,
+	imageSize = 44,
 	maxDistance = 0,
 	showDistance = true,
 	showHealth = true,
@@ -7288,7 +7288,7 @@ local function ntApplyOptions(o)
 	ntOpts.size = math.clamp(tonumber(o.size) or 15, 8, 48)
 	ntOpts.userSize = math.clamp(tonumber(o.userSize) or 10, 8, 24)
 	ntOpts.height = math.clamp(tonumber(o.height) or 48, 28, 96)
-	ntOpts.imageSize = math.clamp(tonumber(o.imageSize) or 36, 8, 128)
+	ntOpts.imageSize = math.clamp(tonumber(o.imageSize) or 44, 8, 128)
 	ntOpts.maxDistance = math.max(tonumber(o.maxDistance) or 0, 0)
 	ntOpts.showDistance = o.showDistance ~= false
 	ntOpts.showHealth = o.showHealth ~= false
@@ -8019,7 +8019,18 @@ local function ntBuild(plr, rule)
 	bb.MaxDistance = ntOpts.maxDistance > 0 and ntOpts.maxDistance or 10000
 	bb.Enabled = false
 
+	-- soft drop shadow so the pill lifts off the world
+	local shadow = Instance.new("Frame")
+	shadow.Name = "Shadow"
+	shadow.Position = UDim2.fromOffset(0, 4)
+	shadow.Size = UDim2.new(1, 0, 1, 0)
+	shadow.BackgroundColor3 = Color3.new(0, 0, 0)
+	shadow.BackgroundTransparency = 0.55
+	shadow.BorderSizePixel = 0
+	shadow.ZIndex = 0
+
 	local pill = Instance.new("Frame")
+	pill.ZIndex = 1
 	pill.Name = "Pill"
 	pill.Size = UDim2.fromScale(1, 1)
 	pill.BackgroundColor3 = ntColor(rule.bg, ntColor(ntOpts.pillColor, Color3.fromRGB(12, 12, 16)))
@@ -8029,10 +8040,20 @@ local function ntBuild(plr, rule)
 		pill.BackgroundTransparency = 1
 	end
 	pill.Parent = bb
+	shadow.Parent = bb
+	local shCorner = Instance.new("UICorner")
+	shCorner.CornerRadius = UDim.new(0.5, 0)
+	shCorner.Parent = shadow
 
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(0.5, 0)
 	corner.Parent = pill
+
+	-- faint top-lit gradient so flat pill colors get a little depth
+	local grad = Instance.new("UIGradient")
+	grad.Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(198, 203, 218))
+	grad.Rotation = 90
+	grad.Parent = pill
 
 	local stroke = Instance.new("UIStroke")
 	stroke.Color = ntColor(rule.color, NT_ACCENT)
@@ -8067,12 +8088,18 @@ local function ntBuild(plr, rule)
 	avatar.Size = UDim2.fromOffset(iconSize, iconSize)
 	avatar.Position = UDim2.new(0, ICON_LEFT, 0.5, 0)
 	avatar.AnchorPoint = Vector2.new(0, 0.5)
-	avatar.Image = ""
+	avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(plr.UserId) .. "&w=150&h=150"
 	avatar.ScaleType = Enum.ScaleType.Fit
 	avatar.Parent = pill
 	local avCorner = Instance.new("UICorner")
 	avCorner.CornerRadius = UDim.new(0.36, 0)
 	avCorner.Parent = avatar
+	-- ring around the pfp in the rule's accent color
+	local avRing = Instance.new("UIStroke")
+	avRing.Color = ntColor(rule.color, NT_ACCENT)
+	avRing.Thickness = 2
+	avRing.Transparency = 0.2
+	avRing.Parent = avatar
 
 	local nameTop = math.floor((height - (NAME_H + USER_H)) / 2)
 	local textLeft = ICON_LEFT + iconSize + TEXT_GAP
