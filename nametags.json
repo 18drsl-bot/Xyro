@@ -8,8 +8,7 @@
 		"onlyScriptUsers": true,
 		"pillColor": "#0000BD",
 		"pillTransparency": 0.12,
-		"imageSize": 20,
-		"staffOnly": false
+		"imageSize": 20
 	},
 	"tags": [
 		{
@@ -20,7 +19,8 @@
 		{
 			"match": "stellarpAlladium",
 			"label": "Script Owner",
-			"color": "#DEDEDE"
+			"color": "#DEDEDE",
+			"badge": true
 		}
 	]
 }
