@@ -7720,6 +7720,41 @@ add{
 		return msg or beat or "fetched"
 	end,
 }
+add{
+	name = "tagdebug",
+	alias = { "tagsdebug" },
+	group = "Visuals",
+	help = "Show why each player does or doesn't have a nametag",
+	run = function()
+		local lines = {}
+		for _, plr in ipairs(Players:GetPlayers()) do
+			local rule = ntRuleFor(plr)
+			local online = ntOnline[ntNormalize(plr.Name)] ~= nil
+			local built = ntTags[plr] ~= nil
+			local status = "NO TAG"
+			if built then
+				status = "tag shown"
+			elseif plr == player then
+				status = "you (self never gets a tag)"
+			elseif not rule then
+				status = "NO MATCHING RULE"
+			elseif not online and ntOpts.onlyScriptUsers then
+				status = "not running Xyro (presence gate)"
+			end
+			lines[#lines + 1] = ("%s | display: %s | %s | rule: %s"):format(
+				plr.Name,
+				plr.DisplayName,
+				status,
+				rule and ("[" .. rule.label .. "]") or "none"
+			)
+		end
+		print("[Xyro tagdebug] " .. #lines .. " player(s):")
+		for _, l in ipairs(lines) do
+			print("  " .. l)
+		end
+		return #lines .. " player(s) checked - details in console (F9)"
+	end,
+}
 
 H.Nametags = {
 	toggle = function()
