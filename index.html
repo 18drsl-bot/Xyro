@@ -265,6 +265,10 @@
 	.rrow .order { display: flex; gap: 4px; }
 	.mark { font-size: 10.5px; color: var(--sub); border: 1px solid var(--stroke); border-radius: 6px; padding: 1.5px 7px; margin-right: 4px; letter-spacing: .03em; }
 .ubox { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 8px; border-radius: 8px; background: rgba(255,255,255,.09); font-size: 9px; color: var(--sub, #8b92a5); letter-spacing: .02em; }
+	.ubox.plain { background: transparent; padding: 0 0 0 2px; }
+	[contenteditable="true"] { outline: none; cursor: text; border-bottom: 1px dashed transparent; transition: border-color .15s; }
+	[contenteditable="true"]:hover { border-bottom-color: rgba(255,255,255,.25); }
+	[contenteditable="true"]:focus { border-bottom-color: var(--accent); background: rgba(109,125,255,.07); border-radius: 4px 4px 0 0; }
 .filepick { white-space: nowrap; padding: 0 14px; border-radius: 10px; border: 1px solid var(--stroke); background: var(--card2, rgba(255,255,255,.04)); color: var(--sub); cursor: pointer; font: inherit; font-size: 12px; transition: all .15s ease; }
 .filepick:hover { color: var(--text); border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #6c80ff) 18%, transparent); }
 .filepick.busy { opacity: .55; pointer-events: none; }
@@ -387,7 +391,7 @@
 			<div class="card">
 				<h2><span class="hl">Preview</span></h2>
 				<div class="stage">
-					<span class="badge big" id="pvBadge"><img id="pvImg" alt="" class="hidden"><span id="pvLabel">x9k_alt</span><span class="ubox" id="pvUbox" style="display:none"><span id="pvUser">@user</span></span></span>
+					<span class="badge big" id="pvBadge"><img id="pvImg" alt="" class="hidden"><span id="pvLabel" contenteditable="true" spellcheck="false">x9k_alt</span><span class="ubox" id="pvUbox"><span id="pvUser" contenteditable="true" spellcheck="false">@user</span></span></span>
 					<span class="stage-cap">exactly how it renders in game</span>
 				</div>
 			</div>
@@ -527,7 +531,7 @@
 						<label><input id="fBadge" type="checkbox"> show check badge next to name</label>
 					</div>
 				</div>
-				<div class="mini-stage"><span class="badge mini" id="edBadge"><img id="edImg" alt="" class="hidden"><span id="edLabel">?</span><span id="edBadgeCheck" style="display:none">&#10003;</span><span class="ubox" id="edUbox" style="display:none"><span>@user</span></span></span></div>
+				<div class="mini-stage"><span class="badge mini" id="edBadge"><img id="edImg" alt="" class="hidden"><span id="edLabel">?</span><span id="edBadgeCheck" style="display:none">&#10003;</span><span class="ubox plain" id="edUbox"><span id="edUser">@user</span></span></span></div>
 				<div class="eactions">
 					<button class="subtle" id="edCancel">Cancel</button>
 					<button class="ghost" id="edDelete" style="border-color:rgba(255,93,93,.45);color:var(--danger)">Delete rule</button>
@@ -620,21 +624,45 @@ function badgeHTML(t, big, mini) {
 }
 
 /* ---------- rendering ---------- */
+/* your Roblox username, so the preview pill shows a real @line. Resolved
+   from the logged-in roblox.com session (works because this editor is
+   used in a browser already signed into Roblox); cached in localStorage */
+let myName = localStorage.getItem("xyro_myName") || "user";
+(async function resolveMe() {
+	try {
+		const res = await fetch("https://users.roblox.com/v1/users/authenticated", { credentials: "include" });
+		if (!res.ok) return;
+		const me = await res.json();
+		if (me && me.name) {
+			myName = me.name;
+			localStorage.setItem("xyro_myName", myName);
+			const pv = $("pvUser");
+			const ed = $("edUser");
+			if (pv && document.activeElement !== pv) pv.textContent = "@" + myName;
+			if (ed) ed.textContent = "@" + myName;
+		}
+	} catch (_) { /* offline / not logged in - placeholder stays */ }
+})();
+
 function renderPreview() {
 	const t = (editing >= 0 ? editorTag() : null) || cfg.tags[0] || { label: "x9k_alt", color: "#ffd700" };
 	const badge = $("pvBadge");
 	badge.style.setProperty("--c", hex6(t.color) || "#6c80ff");
-	/* @username box mirrors the global options (plus rule override) */
+	/* @username box mirrors the global options (plus rule override);
+	   with the box off the @line still shows, just unboxed like in game */
 	const ubOn = t.userBox === "true" || (t.userBox === undefined && $("optUBox").checked);
 	const ub = $("pvUbox");
-	ub.style.display = ubOn ? "" : "none";
-	if (ubOn) {
-		ub.style.background = (hex6(t.userBoxColor) || $("optUBoxColor").value || "#1a1f2e").toLowerCase();
-		ub.style.borderRadius = (parseInt($("optUBoxRadius").value) || 0) + "px";
-		ub.style.border = $("optUBoxStroke").value.trim() ? "1px solid " + $("optUBoxStroke").value.trim() : "none";
-	}
+	ub.style.display = "";
+	ub.classList.toggle("plain", !ubOn);
+	ub.style.background = ubOn ? (hex6(t.userBoxColor) || $("optUBoxColor").value || "#1a1f2e").toLowerCase() : "";
+	ub.style.borderRadius = ubOn ? (parseInt($("optUBoxRadius").value) || 0) + "px" : "";
+	ub.style.border = ubOn && $("optUBoxStroke").value.trim() ? "1px solid " + $("optUBoxStroke").value.trim() : "none";
 	badge.style.setProperty("--pill", hex6(t.bg) || $("optPillColor").value || "#0c0c10");
-	$("pvLabel").textContent = t.label || "?";
+	/* contenteditable fields are skipped while the user is typing in them */
+	const lbl = $("pvLabel");
+	if (document.activeElement !== lbl) lbl.textContent = t.label || "?";
+	const usr = $("pvUser");
+	if (document.activeElement !== usr) usr.textContent = "@" + myName;
 	const img = $("pvImg");
 	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
 		img.src = t.image; img.classList.remove("hidden");
@@ -642,6 +670,34 @@ function renderPreview() {
 		img.classList.add("hidden");
 	}
 }
+
+/* edit the preview pill directly: clicking the name rewrites rule #1's
+   label live (the one the preview shows); clicking the @username line
+   updates the remembered Roblox username. Enter or click-away commits. */
+(function wirePreviewEdits() {
+	const lbl = $("pvLabel");
+	const usr = $("pvUser");
+	lbl.addEventListener("keydown", e => {
+		if (e.key === "Enter") { e.preventDefault(); lbl.blur(); }
+	});
+	lbl.addEventListener("input", () => {
+		if (editing >= 0 || !cfg.tags.length) return; // rule editor owns the label while open
+		const t = cfg.tags[0] = cfg.tags[0] || { match: "*", label: "" };
+		t.label = lbl.textContent.trim() || t.label || "?";
+		changed("preview label edit");
+	});
+	usr.addEventListener("keydown", e => {
+		if (e.key === "Enter") { e.preventDefault(); usr.blur(); }
+	});
+	lbl.addEventListener("blur", () => renderPreview());
+	usr.addEventListener("blur", () => {
+		const v = usr.textContent.replace(/@/g, "").trim() || myName;
+		myName = v;
+		localStorage.setItem("xyro_myName", v);
+		usr.textContent = "@" + v;
+		$("edUser").textContent = "@" + v;
+	});
+})();
 
 function renderRules() {
 	const q = ($("search").value || "").toLowerCase();
@@ -858,11 +914,13 @@ function renderEditorPreview() {
 	badge.style.setProperty("--c", hex6(t.color) || "#6c80ff");
 	badge.style.setProperty("--pill", hex6(t.bg) || "#0c0c10");
 	$("edLabel").textContent = t.label;
+	$("edUser").textContent = "@" + myName;
 	$("edBadgeCheck").style.display = t.badge ? "" : "none";
 	/* @username box on the mini preview: per-rule override or global default */
 	const ubOn = t.userBox === "true" || (t.userBox === undefined && $("optUBox").checked);
 	const ub = $("edUbox");
-	ub.style.display = ubOn ? "" : "none";
+	ub.style.display = "";
+	ub.classList.toggle("plain", !ubOn);
 	if (ubOn) {
 		ub.style.background = (hex6(t.userBoxColor) || $("optUBoxColor").value || "#1a1f2e").toLowerCase();
 		ub.style.borderRadius = (parseInt($("optUBoxRadius").value) || 0) + "px";
