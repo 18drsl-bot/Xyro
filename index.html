@@ -353,6 +353,7 @@
 	</div>
 	<div class="top-right">
 		<span class="chip" id="tokenChip" title="token status">no token</span>
+		<button class="subtle" id="refreshBtn" title="pull the latest published rules from GitHub now">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
 			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
 			nametags.json
@@ -521,6 +522,7 @@
 
 <div class="pubbar">
 	<span class="chip warn hidden" id="dirtyChip">unsaved changes</span>
+	<button class="subtle hidden" id="draftBtn">restore draft</button>
 	<button class="subtle" id="revertBtn">Revert</button>
 	<button class="subtle" id="exportBtn">Export</button>
 	<button class="subtle" id="importBtn">Import</button>
@@ -1022,27 +1024,69 @@ async function load() {
 		const json = await res.json();
 		live = { options: json.options || {}, tags: Array.isArray(json.tags) ? json.tags : [] };
 		liveSha = json.sha;
+		/* the PUBLISHED rules always win on open - a stale draft must never
+		   masquerade as the live config. A differing draft is offered as an
+		   explicit one-click restore instead. */
+		cfg = deepCopy(live);
 		const draft = localStorage.getItem(LS_DRAFT);
 		if (draft) {
 			try {
 				const d = JSON.parse(draft);
 				if (!sameJSON(d, live)) {
-					cfg = d;
-					toast("Restored your unsaved draft", "ok");
-				} else {
-					cfg = deepCopy(live);
+					$("draftBtn").classList.remove("hidden");
+					$("draftBtn").onclick = () => {
+						if (!confirm("Restore your saved draft? It may be older than the published rules and will overwrite your working copy.")) return;
+						cfg = d;
+						$("draftBtn").classList.add("hidden");
+						changed("draft restored");
+						toast("Draft restored", "info");
+					};
 				}
-			} catch (_) { cfg = deepCopy(live); }
-		} else {
-			cfg = deepCopy(live);
+			} catch (_) {}
 		}
 		renderOptions();
 		renderAll();
-		status(live.tags.length + " rules loaded" + (sameJSON(cfg, live) ? "" : " - you have unsaved changes"), sameJSON(cfg, live) ? "" : "info");
+		status(live.tags.length + " rules loaded from GitHub" + ($("draftBtn").classList.contains("hidden") ? "" : " - a saved draft is available"), "");
 	} catch (e) {
 		status("network error: " + e, "err");
 	}
 }
+
+/* keep the editor in sync with GitHub while it's open: anyone publishing
+   (you from another tab, a teammate) lands here within ~2 minutes, or
+   instantly via the refresh click. Never clobbers unsaved work or an
+   open rule editor. */
+let refreshing = false;
+async function refreshLive(sayIt) {
+	if (refreshing) return;
+	refreshing = true;
+	try {
+		const res = await fetch(API + "?t=" + Date.now());
+		if (!res.ok) return;
+		const json = await res.json();
+		const fresh = { options: json.options || {}, tags: Array.isArray(json.tags) ? json.tags : [] };
+		if (sameJSON(fresh, live)) return false;
+		const hadEdits = !sameJSON(cfg, live);
+		live = fresh;
+		liveSha = json.sha;
+		if (!hadEdits && editing < 0) {
+			cfg = deepCopy(live);
+			localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+			$("draftBtn").classList.add("hidden");
+			renderOptions();
+			renderAll();
+			if (sayIt) { status("rules refreshed from GitHub", "ok"); toast("Updated to the latest published rules", "ok"); }
+		} else if (sayIt) {
+			toast("Newer rules exist on GitHub - publish or revert to see them", "info", 8);
+		}
+		return true;
+	} catch (_) {
+		/* offline / rate limit: keep what we have */
+	} finally {
+		refreshing = false;
+	}
+}
+setInterval(() => refreshLive(true), 120000);
 
 function publishSummary() {
 	const a = live.tags, b = cfg.tags;
@@ -1094,6 +1138,7 @@ $("publishBtn").onclick = async () => {
 		liveSha = done.content && done.content.sha;
 		live = deepCopy(cfg);
 		localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+		$("draftBtn").classList.add("hidden");
 		renderAll();
 		status("published! in game within 60s - or run !nametagsfetch now", "ok");
 		toast("Published to GitHub", "ok");
@@ -1107,6 +1152,7 @@ $("revertBtn").onclick = () => {
 	if (!sameJSON(cfg, live) && !confirm("Discard your unsaved changes and go back to the last published version?")) return;
 	cfg = deepCopy(live);
 	localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+	$("draftBtn").classList.add("hidden");
 	closeEditor();
 	renderOptions();
 	renderAll();
@@ -1133,6 +1179,12 @@ $("importFile").onchange = e => {
 	const r = new FileReader();
 	r.onload = () => { $("importText").value = r.result; };
 	r.readAsText(f);
+};
+$("refreshBtn").onclick = async () => {
+	$("refreshBtn").classList.add("busy");
+	const got = await refreshLive(true).catch(() => false);
+	$("refreshBtn").classList.remove("busy");
+	if (!got) toast("Already up to date", "info");
 };
 $("importCancel").onclick = () => $("importDlg").close();
 $("importApply").onclick = () => {
