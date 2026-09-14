@@ -7172,14 +7172,9 @@ local function ntColor(hex)
 end
 
 local function ntFetch(manual)
-	if not game.HttpGet then
-		return manual and "no HttpGet on this executor" or nil
-	end
-	local okR, text = pcall(function()
-		return game:HttpGet(NT_RAW_URL .. "?t=" .. tostring(os.time()))
-	end)
-	if not okR or type(text) ~= "string" or #text == 0 then
-		return manual and ("fetch failed: " .. tostring(text)) or nil
+	local text = ntHttpGet(NT_RAW_URL .. "?t=" .. tostring(os.time()))
+	if not text or #text == 0 then
+		return manual and "fetch failed (no HttpGet on this executor?)" or nil
 	end
 	local decoded, cfg = pcall(function()
 		return H.HttpService:JSONDecode(text)
@@ -7327,7 +7322,7 @@ local function ntApplyImage(img, url)
 		img.Image = cached
 		return true
 	end
-	if getcustomasset and writefile and game.HttpGet then
+	if getcustomasset and writefile and ntMember("HttpGet") then
 		local ok, asset = pcall(function()
 			local data = game:HttpGet(url, true)
 			assert(type(data) == "string" and #data > 0, "empty download")
@@ -7380,8 +7375,36 @@ end
 
 connect(Players.PlayerRemoving, ntRemove)
 
+-- safe member reads: indexing a member the executor didn't add THROWS,
+-- it doesn't return nil ("HttpPost is not a valid member of DataModel")
+local function ntMember(name)
+	local ok, v = pcall(function()
+		return game[name]
+	end)
+	return ok and v or nil
+end
+
+local function ntHttpGet(url)
+	if ntMember("HttpGet") then
+		local ok, body = pcall(function()
+			return game:HttpGet(url, true)
+		end)
+		if ok and type(body) == "string" then
+			return body
+		end
+	end
+	local req = (syn and syn.request) or http_request or request
+	if req then
+		local ok, resp = pcall(req, { Url = url, Method = "GET" })
+		if ok and resp and type(resp.Body) == "string" then
+			return resp.Body
+		end
+	end
+	return nil
+end
+
 local function ntHttpPost(url, body)
-	if game.HttpPost then
+	if ntMember("HttpPost") then
 		local ok = pcall(function()
 			game:HttpPost(url, body)
 		end)
@@ -7402,24 +7425,26 @@ end
 -- heartbeat: announce self, then rebuild the online set from everyone's
 -- recent beats. Only players present in ntOnline get tags drawn.
 local function ntBeat(manual)
-	if not (game.HttpGet or game.HttpPost) then
-		return manual and "no Http on this executor" or nil
+	if not ntMember("HttpGet") then
+		return manual and "no HttpGet on this executor" or nil
 	end
-	ntHttpPost("https://ntfy.sh/" .. NT_TOPIC, player.Name)
-	local okR, text = pcall(function()
-		return game:HttpGet("https://ntfy.sh/" .. NT_TOPIC .. "/json?poll=1&since=3m")
-	end)
-	if okR and type(text) == "string" and #text > 0 then
+	local sent = ntHttpPost("https://ntfy.sh/" .. NT_TOPIC, player.Name)
+	local text = ntHttpGet("https://ntfy.sh/" .. NT_TOPIC .. "/json?poll=1&since=3m")
+	if text and #text > 0 then
 		local seen = {}
 		for line in text:gmatch("[^\r\n]+") do
 			local okD, msg = pcall(function()
 				return H.HttpService:JSONDecode(line).message
-			end)
-			if okD and type(msg) == "string" and #msg > 0 and #msg < 40 then
-				seen[ntNormalize(msg)] = true
-			end
+			end)		if okD and type(msg) == "string" and #msg > 0 and #msg < 40 then
+			seen[ntNormalize(msg)] = true
 		end
-		ntOnline = seen
+	end
+	ntOnline = seen
+	if not sent then
+		-- couldn't announce ourselves (no POST path on this executor):
+		-- at least count self as online so tags aren't dead silent
+		ntOnline[ntNormalize(player.Name)] = true
+	end
 	end
 	if manual and H.notify then
 		local n = 0
