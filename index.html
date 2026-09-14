@@ -355,12 +355,12 @@ function hex6(c) {
 	const v = (c || "").toString().trim();
 	return /^#[0-9a-fA-F]{6}$/.test(v) ? v : null;
 }
-function toast(msg, kind) {
+function toast(msg, kind, secs) {
 	const t = document.createElement("div");
 	t.className = "toast " + (kind || "");
 	t.textContent = msg;
 	$("toasts").appendChild(t);
-	setTimeout(() => t.remove(), 4200);
+	setTimeout(() => t.remove(), (secs || 4.2) * 1000);
 }
 function status(msg, cls) { const s = $("status"); s.textContent = msg; s.className = cls || ""; }
 function getToken() { return localStorage.getItem(LS_TOKEN) || ""; }
@@ -430,7 +430,7 @@ function renderRules() {
 		row.appendChild(order);
 		const edit = document.createElement("button");
 		edit.className = "icon";
-		edit.textContent = "&#9998;";
+		edit.innerHTML = "\u270E";
 		edit.title = "edit";
 		edit.onclick = () => openEditor(i);
 		row.appendChild(edit);
@@ -622,15 +622,19 @@ $("saveToken").onclick = async () => {
 		}
 		const repo = await res.json();
 		if (!repo.permissions || !repo.permissions.push) {
-			status("token cannot push to " + REPO, "err");
-			toast("Token needs Contents: Read and write on " + REPO, "err");
+			status("token cannot access " + REPO, "err");
+			toast("Token needs access to " + REPO + " (Only select repositories)", "err");
 			return;
 		}
+		// NOTE: for fine-grained tokens GitHub reports the ACCOUNT's repo
+		// permission here, not the token's scope - Contents: Read and write
+		// can only be truly verified by a publish attempt. Warn accordingly.
 		localStorage.setItem(LS_TOKEN, v);
 		$("token").value = "";
 		refreshTokenChip();
-		status("token saved and verified", "ok");
-		toast("Connected to " + REPO, "ok");
+		const fine = v.indexOf("github_pat_") === 0;
+		status(fine ? "token saved - make sure Contents: Read and write was set, publish verifies it" : "token saved and verified", fine ? "info" : "ok");
+		toast(fine ? "Connected - publish will verify write access" : "Connected to " + REPO, "ok");
 	} catch (e) {
 		status("network error while testing token", "err");
 	}
@@ -712,7 +716,11 @@ $("publishBtn").onclick = async () => {
 		if (!res.ok) {
 			const err = await res.json().catch(() => ({}));
 			status("GitHub said " + res.status + ": " + (err.message || "unknown"), "err");
-			toast("Publish failed: " + (err.message || res.status), "err");
+			if (res.status === 403 || res.status === 404) {
+				toast("Publish blocked: your token has Contents: Read only. Fix it at github.com/settings/personal-access-tokens \u2192 click your token \u2192 Repository permissions \u2192 Contents \u2192 Read and write \u2192 Update (no new token needed), then Publish again. Your draft is safe.", "err", 14);
+			} else {
+				toast("Publish failed: " + (err.message || res.status), "err");
+			}
 			return;
 		}
 		const done = await res.json();
