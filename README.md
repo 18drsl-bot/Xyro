@@ -27,17 +27,9 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/l
 
 Plus ~90 more: fly, speed, ESP, hitbox, teleports, serverhop, and the rest — see `!help` in game.
 
-## Tag editor website
-
-Once GitHub Pages is enabled for this repo (Settings → Pages → deploy from `main` /), the editor lives at:
-
-**https://vertxxy-1.github.io/Xyro/**
-
-It previews the pill badge exactly as it appears in game, lets you add/delete rules and tweak the global options, and publishes straight to `nametags.json` via the GitHub API. Sign in with a fine-grained token (Contents: Read and write on this repo only) — it's stored in your browser and can be revoked any time.
-
 ## Nametags — edit on this website
 
-Nametags are driven by **`nametags.json` in this repo**. Edit it right here on github.com (open the file → pencil icon → edit → Commit changes), with the tag editor site above, and every player running Xyro picks it up within **60 seconds**, or instantly with `!nametagsfetch`. Rules are only fetched when nametags are toggled on (or at startup) — no requests while off.
+Nametags are driven by **`nametags.json` in this repo**. Edit it right here on github.com (open the file → pencil icon → edit → Commit changes), and every player running Xyro picks it up within **60 seconds**, or instantly with `!nametagsfetch`. Rules are only fetched when nametags are toggled on (or at startup) — no requests while off.
 
 In game: `!nametags` (alias `!tags`) toggles them; `!nametagsfetch` re-fetches now. Tags render as pill badges above heads — no Drawing API needed, works on every executor.
 
