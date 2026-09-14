@@ -1139,6 +1139,9 @@ $("publishBtn").onclick = async () => {
 		const cur = await fetch(API + "?t=" + Date.now(), { headers: { Authorization: "Bearer " + token } });
 		if (!cur.ok) { status("cannot read current file (" + cur.status + ")", "err"); return; }
 		const meta = await cur.json();
+		/* one canonical body string for GitHub, the local server sync, and
+		   the draft (previously the sync silently referenced a shadowed
+		   outer body -> local copy never actually updated) */
 		const body = JSON.stringify({ options: cfg.options, tags: cfg.tags }, null, "\t") + "\n";
 		const res = await fetch(API, {
 			method: "PUT",

@@ -7220,7 +7220,9 @@ local NT_FETCH_EVERY = 60
 local NT_TOPIC = "xyro-presence-k2m9x7q" -- anonymous presence DB: every script user heartbeats here
 local NT_BEAT_EVERY = 45
 local ntBeatAcc = 0
+local NT_BEAT_WINDOW = 75 -- beats every 45s, so a stopped script drops out within ~75s (no ghost tags)
 local ntOnline = {} -- lowercase username -> true for everyone seen in the last few minutes
+local ntLastSource = "none" -- where the current rules came from: api | local | cdn | raw
 local ntOpts = {
 	size = 15,
 	userSize = 10,
@@ -7432,17 +7434,30 @@ local function ntFetch(manual)
 	local text = nil
 	if manual then
 		text = ntFromAPI(ntHttpGet(NT_API_URL) or "")
+		if text then
+			ntLastSource = "api"
+		end
 	end
 	if not text and ntLocalProbe() then
 		local body = ntHttpGet(NT_LOCAL_URL)
 		if type(body) == "string" and #body > 2 then
 			text = body
+			ntLastSource = "local"
 		else
 			ntLocalUp = false -- server died mid-session; fall through to CDN
 		end
 	end
 	if not text then
 		text = ntHttpGet(NT_RAW_URL .. "?t=" .. tostring(os.time()))
+		if text then
+			ntLastSource = "cdn"
+		end
+	end
+	if not text then
+		text = ntHttpGet(NT_FALLBACK_URL .. "?t=" .. tostring(os.time()))
+		if text then
+			ntLastSource = "raw"
+		end
 	end
 	if not text or #text == 0 then
 		return manual and "fetch failed (no HttpGet on this executor?)" or nil
@@ -7907,9 +7922,21 @@ local function ntApplyData(img, data, key)
 		if not (getcustomasset and writefile) then
 			return false
 		end
+		-- cache hit: replay frames without re-decoding (also resurrects
+			-- animation after the asset files were wiped by a re-exec)
 		local cached = ntImgCache[key]
-		if type(cached) == "table" then
-			return ntStartFrames(img, cached)
+		if type(cached) == "table" and #cached > 0 then
+			local alive = true
+			for _, fr in ipairs(cached) do
+				if type(fr.asset) ~= "string" or fr.asset == "" then
+					alive = false
+					break
+				end
+			end
+			if alive then
+				return ntStartFrames(img, cached)
+			end
+			ntImgCache[key] = nil -- frames reference deleted files: re-decode
 		end
 		local gif = ntDecodeGIF(data)
 		if not gif or #gif.frames == 0 then
@@ -8003,14 +8030,14 @@ local function ntApplyImage(img, url)
 	end
 	if getcustomasset and writefile and ntMember("HttpGet") then
 		local ok, asset = pcall(function()
-			local data = nil
-			local lurl = ntLocalMediaUrl(url) -- host PC copy when the local server is running
-			if lurl then
-				data = ntHttpGet(lurl)
-				if type(data) == "string" and #data > 0 then
-					ntLocalUp = true
+				local data = nil
+				local lurl = ntLocalMediaUrl(url) -- host PC copy when the local server is running
+				if lurl then
+					data = ntHttpGet(lurl)
+					if type(data) == "string" and #data > 0 then
+						ntLocalUp = true
+					end
 				end
-			end
 			if type(data) ~= "string" or #data == 0 then
 				data = ntHttpGet(url)
 			end
@@ -8338,7 +8365,7 @@ local function ntBeat(manual)
 		return manual and "no HttpGet on this executor" or nil
 	end
 	local sent = ntHttpPost("https://ntfy.sh/" .. NT_TOPIC, player.Name)
-	local text = ntHttpGet("https://ntfy.sh/" .. NT_TOPIC .. "/json?poll=1&since=3m")
+	local text = ntHttpGet("https://ntfy.sh/" .. NT_TOPIC .. "/json?poll=1&since=" .. NT_BEAT_WINDOW .. "s")
 	if text and #text > 0 then
 		local seen = {}
 		for line in text:gmatch("[^\r\n]+") do
@@ -8349,7 +8376,7 @@ local function ntBeat(manual)
 				seen[ntNormalize(msg)] = true
 			end
 		end
-		ntOnline = seen
+				ntOnline = seen
 	end
 	if not sent then
 		-- couldn't announce ourselves (no POST path on this executor):
@@ -8425,7 +8452,7 @@ connect(RunService.RenderStepped, function(dt)
 	end
 	if ntBeatAcc >= NT_BEAT_EVERY then
 		ntBeatAcc = 0
-		ntBeat(false)
+		task.spawn(ntBeat, false) -- blocking HTTP never runs on the render thread
 	end
 	if not ntEnabled then
 		return
@@ -8433,7 +8460,9 @@ connect(RunService.RenderStepped, function(dt)
 	ntFetchAcc += dt
 	if ntFetchAcc >= NT_FETCH_EVERY then
 		ntFetchAcc = 0
-		ntFetch(false)
+		-- HTTP must NEVER run on the render thread: a slow request here
+		-- freezes the whole game for its duration (the periodic stutter)
+		task.spawn(ntFetch, false)
 	end
 	local cam = workspace.CurrentCamera
 	if not cam then
@@ -8562,6 +8591,7 @@ add{
 		for _, l in ipairs(lines) do
 			print("  " .. l)
 		end
+		print("  rules source: " .. ntLastSource)
 		return #lines .. " player(s) checked - details in console (F9)"
 	end,
 }

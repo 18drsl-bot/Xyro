@@ -10,14 +10,10 @@ automatically, so leaving this running is always safe.
 Run:   python _server.py
 Stop:  Ctrl+C
 """
-import functools
 import json
 import os
-import re
 import socket
-import socketserver
 import sys
-from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.abspath(__file__))

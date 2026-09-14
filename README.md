@@ -8,9 +8,9 @@ Roblox script hub. Public repo, no auth needed.
 loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/refs/heads/main/xyro.lua"))()
 ```
 
-Executes the **latest commit every time** — no reinstalling after updates. (Raw's CDN
-lags a few minutes after a push; if the script seems stale, re-run or use the
-integrity-checked fallback loader below.)
+Executes the **latest commit every time** — no reinstalling after updates. Config and
+media load through the jsDelivr CDN (purged instantly on every editor publish), with
+the GitHub API and raw GitHub as fallbacks, so published changes land in seconds.
 
 **Fallback loader** (3x retry + always-fresh GitHub API source + truncation checks,
 for flaky executors):

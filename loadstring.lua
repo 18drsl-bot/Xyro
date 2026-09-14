@@ -118,8 +118,8 @@ local function fromAPI(jsonBody)
 end
 
 local function looksReal(src)
-	if #src < MIN_SIZE then
-		return false, ("too small (%d bytes)"):format(#src)
+	if type(src) ~= "string" or #src < MIN_SIZE then
+		return false, ("too small (%s bytes)"):format(type(src) == "string" and #src or tostring(src))
 	end
 	for _, m in ipairs(MARKERS) do
 		if not src:find(m, 1, true) then
@@ -145,12 +145,16 @@ do
 		local body = fetch(API_URL)
 		if body then
 			local got = fromAPI(body)
-			local good, why = got and looksReal(got) or false, got and select(2, looksReal(got))
-			if got and good then
-				src, how = got, "github api"
-				break
+			if got then
+				local good, why = looksReal(got)
+				if good then
+					src, how = got, "github api"
+					break
+				end
+				warnAll(("api attempt %d rejected (%s)"):format(attempt, why or "unknown"))
+			else
+				warnAll(("api attempt %d failed (decode)"):format(attempt))
 			end
-			warnAll(("api attempt %d failed (%s)"):format(attempt, why or "decode failed"))
 		end
 		task.wait(0.4)
 	end
