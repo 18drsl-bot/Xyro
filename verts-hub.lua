@@ -7134,6 +7134,55 @@ local Players = Players or game:GetService("Players")
 local RunService = RunService or game:GetService("RunService")
 local NT_RAW_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/nametags.json"
 local NT_ACCENT = Color3.fromRGB(108, 128, 255)
+
+-- safe HTTP helpers. IMPORTANT: declared before anything that uses them,
+-- and safe member reads because indexing a Roblox member the executor
+-- didn't add THROWS ("HttpPost is not a valid member of DataModel")
+local function ntMember(name)
+	local ok, v = pcall(function()
+		return game[name]
+	end)
+	return ok and v or nil
+end
+
+local function ntHttpGet(url)
+	if ntMember("HttpGet") then
+		local ok, body = pcall(function()
+			return game:HttpGet(url, true)
+		end)
+		if ok and type(body) == "string" then
+			return body
+		end
+	end
+	local req = (syn and syn.request) or http_request or request
+	if req then
+		local ok, resp = pcall(req, { Url = url, Method = "GET" })
+		if ok and resp and type(resp.Body) == "string" then
+			return resp.Body
+		end
+	end
+	return nil
+end
+
+local function ntHttpPost(url, body)
+	if ntMember("HttpPost") then
+		local ok = pcall(function()
+			game:HttpPost(url, body)
+		end)
+		if ok then
+			return true
+		end
+	end
+	local req = (syn and syn.request) or http_request or request
+	if req then
+		local ok = pcall(req, { Url = url, Method = "POST", Body = body })
+		if ok then
+			return true
+		end
+	end
+	return false
+end
+
 local ntEnabled = false
 local ntRules = nil
 local ntTags = {}
@@ -7374,53 +7423,6 @@ local function ntCleanup()
 end
 
 connect(Players.PlayerRemoving, ntRemove)
-
--- safe member reads: indexing a member the executor didn't add THROWS,
--- it doesn't return nil ("HttpPost is not a valid member of DataModel")
-local function ntMember(name)
-	local ok, v = pcall(function()
-		return game[name]
-	end)
-	return ok and v or nil
-end
-
-local function ntHttpGet(url)
-	if ntMember("HttpGet") then
-		local ok, body = pcall(function()
-			return game:HttpGet(url, true)
-		end)
-		if ok and type(body) == "string" then
-			return body
-		end
-	end
-	local req = (syn and syn.request) or http_request or request
-	if req then
-		local ok, resp = pcall(req, { Url = url, Method = "GET" })
-		if ok and resp and type(resp.Body) == "string" then
-			return resp.Body
-		end
-	end
-	return nil
-end
-
-local function ntHttpPost(url, body)
-	if ntMember("HttpPost") then
-		local ok = pcall(function()
-			game:HttpPost(url, body)
-		end)
-		if ok then
-			return true
-		end
-	end
-	local req = (syn and syn.request) or http_request or request
-	if req then
-		local ok = pcall(req, { Url = url, Method = "POST", Body = body })
-		if ok then
-			return true
-		end
-	end
-	return false
-end
 
 -- heartbeat: announce self, then rebuild the online set from everyone's
 -- recent beats. Only players present in ntOnline get tags drawn.
