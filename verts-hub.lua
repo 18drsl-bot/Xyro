@@ -7549,7 +7549,7 @@ local function ntBuild(plr, rule)
 
 	local nameW = ntTextWidth(shownName, nameSize, font)
 	local userW = ntTextWidth("@" .. plr.Name, userSize, Enum.Font.Gotham)
-	local badgeW = rule.badge and 16 or 0
+	local badgeW = rule.badge and (ntIsStaff(plr) and (nameSize + 6) or 16) or 0
 	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 320)
 
 	local bb = Instance.new("BillboardGui")
@@ -7623,18 +7623,25 @@ local function ntBuild(plr, rule)
 		local b = Instance.new("TextLabel")
 		b.Name = "Badge"
 		b.BackgroundTransparency = 1
-		b.Position = UDim2.fromOffset(math.ceil(nameW + 6), 0)
+		b.AnchorPoint = Vector2.new(0, 0.5)
 		b.Size = UDim2.fromOffset(badgeW, NAME_H)
 		b.Font = Enum.Font.GothamBold
 		b.TextSize = 12
-		b.TextColor3 = ntColor(rule.color, NT_ACCENT)
 		if ntIsStaff(plr) then
-			-- staff get the Roblox verified glyph, slightly larger and in blue
+			-- the EXACT Roblox verified seal: 0xE000 is the official artwork,
+			-- rendered with its own blue baked in (in-game TextColor3 is ignored
+			-- for it - that's why UIStroke excludes verified). We still set the
+			-- official blue so engines that do recolor it match. Rendered at
+			-- natural size, centered with the ~1px drop that fixes Roblox's
+			-- known off-center rendering of the private-use glyphs.
 			b.Text = NT_BADGE_GLYPH ~= "" and NT_BADGE_GLYPH or "\xE2\x9C\x93"
-			b.TextSize = math.max(nameSize + 6, 14)
+			b.TextSize = math.max(nameSize + 5, 15)
 			b.TextColor3 = Color3.fromRGB(0, 170, 255)
+			b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 1)
 		else
 			b.Text = "\xE2\x9C\x93"
+			b.TextColor3 = ntColor(rule.color, NT_ACCENT)
+			b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
 		end
 		b.Parent = nameRow
 	end

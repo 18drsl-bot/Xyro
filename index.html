@@ -680,7 +680,8 @@ function renderEditorPreview() {
 	badge.style.setProperty("--pill", hex6(t.bg) || "#0c0c10");
 	$("edLabel").textContent = t.label;
 	$("edBadgeCheck").style.display = t.badge ? "" : "none";
-	$("edBadgeCheck").style.color = hex6(t.color) || "#6c80ff";
+	/* match in-game: the badge renders as the Roblox verified seal in blue */
+	$("edBadgeCheck").style.color = "#00aaff";
 	const img = $("edImg");
 	if (t.image && /^https:\/\//i.test(t.image)) {
 		img.src = t.image; img.classList.remove("hidden");
