@@ -8088,8 +8088,11 @@ local function ntBuild(plr, rule)
 	avatar.Size = UDim2.fromOffset(iconSize, iconSize)
 	avatar.Position = UDim2.new(0, ICON_LEFT, 0.5, 0)
 	avatar.AnchorPoint = Vector2.new(0, 0.5)
-	avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(plr.UserId) .. "&w=150&h=150"
-	avatar.ScaleType = Enum.ScaleType.Fit
+	avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(plr.UserId) .. "&w=420&h=420"
+	-- Crop (not Fit) fills the whole circle edge to edge - Fit letterboxes
+	-- the headshot's built-in margins and makes the face look tiny
+	avatar.ScaleType = Enum.ScaleType.Crop
+	avatar.ResampleMode = Enum.ResamplerMode.Default
 	avatar.Parent = pill
 	local avCorner = Instance.new("UICorner")
 	avCorner.CornerRadius = UDim.new(0.36, 0)
