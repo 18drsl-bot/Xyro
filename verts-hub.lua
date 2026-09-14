@@ -7481,6 +7481,7 @@ local function ntSignature(plr, rule)
 		tostring(rule.bg or ntOpts.pillColor),
 		tostring(rule.bgTransparency or ntOpts.pillTransparency),
 		tostring(rule.image or ""),
+		tostring(rule.bgImage or ""),
 		tostring(rule.font or ntOpts.font),
 		tostring(rule.size or ntOpts.size),
 		tostring(rule.badge and 1 or 0),
@@ -7493,7 +7494,375 @@ local function ntSignature(plr, rule)
 	}, "|")
 end
 
+local ntEnsureDirDone = false
+local function ntEnsureDir()
+	if ntEnsureDirDone or not makefolder then
+		return
+	end
+	pcall(makefolder, "Xyro")
+	pcall(makefolder, "Xyro/ntmedia")
+	ntEnsureDirDone = true
+end
+
+-- GIF87a/89a decoder -> frames of RGBA rows + per-frame delays.
+-- Roblox can only show a GIF's FIRST frame, so animated tags need this.
+local function ntDecodeGIF(data)
+	if #data < 13 or data:sub(1, 3) ~= "GIF" then
+		return nil
+	end
+	local w = data:byte(7) + data:byte(8) * 256
+	local h = data:byte(9) + data:byte(10) * 256
+	local flags = data:byte(11)
+	local bgIndex = data:byte(12)
+	if w < 1 or h < 1 or w > 512 or h > 512 or #data < 13 + 3 * 2 ^ (flags % 8 + 1) then
+		return nil
+	end
+	local pos = 14
+	local gct = {}
+	if math.floor(flags / 128) % 2 == 1 then
+		for i = 0, 2 ^ (flags % 8 + 1) - 1 do
+			gct[i] = { data:byte(pos + i * 3, pos + i * 3 + 2) }
+		end
+		pos += 3 * 2 ^ (flags % 8 + 1)
+	end
+	local frames = {}
+	local canvas = table.create(w * h, 0)
+	local delay = 0
+	local transparent = -1
+	local disposal = 0
+	local function readBlock()
+		local chunks = {}
+		while true do
+			local n = data:byte(pos)
+			pos += 1
+			if not n or n == 0 then
+				break
+			end
+			chunks[#chunks + 1] = data:sub(pos, pos + n - 1)
+			pos += n
+			if pos > #data then
+				break
+			end
+		end
+		return table.concat(chunks)
+	end
+	local function lzw(minCode)
+		local blob = readBlock()
+		local clear, endCode = 2 ^ minCode, 2 ^ minCode + 1
+		local size = minCode + 1
+		local dict, nextCode = {}, endCode + 1
+		for i = 0, clear - 1 do
+			dict[i] = { i }
+		end
+		local out, bitpos, cur, prev = {}, 0, 0, nil
+		for i = 1, #blob do
+			local byte = blob:byte(i)
+			for b = 0, 7 do
+				cur = cur + (math.floor(byte / 2 ^ b) % 2) * 2 ^ bitpos
+				bitpos += 1
+				if bitpos == size then
+					bitpos, cur = 0, 0
+					if cur == clear then
+						dict, nextCode, size = {}, endCode + 1, minCode + 1
+						for j = 0, clear - 1 do
+							dict[j] = { j }
+						end
+						prev = nil
+					elseif cur == endCode then
+						return out
+					elseif dict[cur] then
+						local seq = dict[cur]
+						for _, idx in ipairs(seq) do
+							out[#out + 1] = idx
+						end
+						if prev and nextCode < 4096 then
+							dict[nextCode] = { dict[prev][1], table.unpack(seq) }
+							nextCode += 1
+							if nextCode >= 2 ^ size and size < 12 then
+								size += 1
+							end
+						end
+						prev = cur
+					elseif prev then
+						local pseq = dict[prev]
+						local seq = { table.unpack(pseq) }
+						seq[#seq + 1] = pseq[1]
+						for _, idx in ipairs(seq) do
+							out[#out + 1] = idx
+						end
+						if nextCode < 4096 then
+							dict[nextCode] = seq
+							nextCode += 1
+							if nextCode >= 2 ^ size and size < 12 then
+								size += 1
+							end
+						end
+						prev = cur
+					end
+				end
+			end
+		end
+		return out
+	end
+	while pos < #data do
+		local b = data:byte(pos)
+		pos += 1
+		if b == 0x21 then
+			local label = data:byte(pos)
+			pos += 1
+			if label == 0xF9 then
+				pos += 1
+				local pf = data:byte(pos)
+				delay = (data:byte(pos + 1) + data:byte(pos + 2) * 256) * 10
+				transparent = pf % 2 == 1 and data:byte(pos + 3) or -1
+				disposal = math.floor(pf / 4) % 8 or 0
+				pos += 4
+				pos += 1
+			elseif label == 0xFF then
+				pos += 1
+				readBlock()
+			else
+				readBlock()
+			end
+		elseif b == 0x2C then
+			local fx = data:byte(pos) + data:byte(pos + 1) * 256
+			local fy = data:byte(pos + 2) + data:byte(pos + 3) * 256
+			local fw = data:byte(pos + 4) + data:byte(pos + 5) * 256
+			local fh = data:byte(pos + 6) + data:byte(pos + 7) * 256
+			local lf = data:byte(pos + 8)
+			pos += 9
+			local lct
+			if math.floor(lf / 128) % 2 == 1 then
+				lct = {}
+				for i = 0, 2 ^ (lf % 8 + 1) - 1 do
+					lct[i] = { data:byte(pos + i * 3, pos + i * 3 + 2) }
+				end
+				pos += 3 * 2 ^ (lf % 8 + 1)
+			end
+			local pal = lct or gct
+			pos += 1
+			if delay < 20 then
+				delay = 100
+			end
+			local snap = (disposal == 3 or #frames == 0) and table.clone(canvas) or nil
+			local idxs = lzw(lf % 8 + 1)
+			for i = 0, #idxs - 1 do
+				local cx, cy = i % fw, math.floor(i / fw)
+				if cx < fw and cy < fh and fx + cx < w and fy + cy < h then
+					local ci = idxs[i + 1]
+					local cell = (fy + cy) * w + fx + cx + 1
+					if ci == transparent then
+						if disposal == 3 then
+							canvas[cell] = 0
+						end
+					else
+						canvas[cell] = ci
+					end
+				end
+			end				local rgba = table.create(w * h * 4, 0)
+				for i = 1, w * h do
+					local ci = canvas[i]
+					local c = pal and (pal[ci] or pal[0]) or nil
+					if ci == transparent then
+						c = nil
+					end
+				if c then
+					local o = (i - 1) * 4
+					rgba[o + 1], rgba[o + 2], rgba[o + 3], rgba[o + 4] = c[1] or 0, c[2] or 0, c[3] or 0, 255
+				end
+			end
+			table.insert(frames, { w = w, h = h, rgba = rgba, delay = delay / 1000 })
+			if disposal == 3 and snap then
+				canvas = snap
+			elseif disposal == 2 then
+				for yy = fy, math.min(fy + fh - 1, h - 1) do
+					for xx = fx, math.min(fx + fw - 1, w - 1) do
+						canvas[yy * w + xx + 1] = 0					end
+				end
+			end
+		elseif b == 0x3B then
+			break
+		end
+	end
+	if #frames == 0 then
+		return nil
+	end
+	return { w = w, h = h, frames = frames }
+end
+
+-- minimal PNG encoder (zlib stored blocks + CRC32/Adler32) so decoded
+-- GIF frames become image assets Roblox can actually load
+local function ntEncodePNG(w, h, rgba)
+	local function be32(v)
+		return string.char(math.floor(v / 16777216) % 256, math.floor(v / 65536) % 256, math.floor(v / 256) % 256, v % 256)
+	end
+	local function adler(s)
+		local a, b = 1, 0
+		for i = 1, #s do
+			a = (a + s:byte(i)) % 65521
+			b = (b + a) % 65521
+		end
+		return b * 65536 + a
+	end
+	local crcTable = {}
+	for n = 0, 255 do
+		local c = n
+		for _ = 1, 8 do
+			c = (c % 2 == 1) and (0xEDB88320 ~ (c >> 1)) or (c >> 1)
+		end
+		crcTable[n] = c
+	end
+	local function crc32(s)
+		local c = 0xFFFFFFFF
+		for i = 1, #s do
+			c = crcTable[(c ~ s:byte(i)) % 256] ~ (c >> 8)
+		end
+		return c ~ 0xFFFFFFFF
+	end
+	local function chunk(tag, payload)
+		local body = tag .. payload
+		return be32(#payload) .. body .. be32(crc32(body))
+	end
+	-- filter byte 0 + raw RGBA rows
+	local rowBytes = w * 4
+	local parts = table.create(h + 1, 0)
+	for y = 0, h - 1 do
+		parts[y + 1] = "\x00" .. rgba:sub(y * rowBytes + 1, (y + 1) * rowBytes)
+	end
+	local raw = table.concat(parts)
+	-- zlib header + stored (uncompressed) deflate blocks, each capped at 65535
+	local z = table.create(2 + math.ceil(#raw / 65535), 0)
+	z[1] = "\x78\x01"
+	local zi = 2
+	local off = 1
+	while off <= #raw do
+		local piece = raw:sub(off, off + 65535)
+		off += #piece
+		local fin = off > #raw
+		z[zi] = string.char(fin and 1 or 0, #piece % 256, math.floor(#piece / 256) % 256, ~#piece % 256, ~math.floor(#piece / 256) % 256) .. piece
+		zi += 1
+	end
+	z[zi] = be32(adler(raw))
+	local ihdr = be32(w) .. be32(h) .. "\x08\x06\x00\x00\x00"
+	return "\137PNG\r\n\26\n" .. chunk("IHDR", ihdr) .. chunk("IDAT", table.concat(z)) .. chunk("IEND", "")
+end
+
+-- load a GIF/PNG/JPG from URL or base64 data URI into an ImageLabel.
+-- returns true if something was applied. GIFs animate frame by frame.
 local ntImgCache = {}
+local ntAnims = {}
+
+local function ntStopAnim(img)
+	local a = ntAnims[img]
+	if a then
+		a.dead = true
+		ntAnims[img] = nil
+	end
+end
+
+-- drive a decoded frame list on one ImageLabel (shared by fresh decodes
+-- and cache hits so a rebuilt tag resumes animating without re-decoding)
+local function ntStartFrames(img, frames)
+	ntStopAnim(img)
+	img.Image = frames[1].asset
+	if #frames < 2 then
+		return true
+	end
+	local anim = { i = 1, dead = false }
+	ntAnims[img] = anim
+	task.spawn(function()
+		while not anim.dead and img.Parent do
+			task.wait(frames[anim.i].delay or 0.1)
+			if anim.dead or not img.Parent then
+				break
+			end
+			anim.i = anim.i % #frames + 1
+			img.Image = frames[anim.i].asset
+		end
+		ntAnims[img] = nil
+	end)
+	return true
+end
+
+local function ntApplyData(img, data, key)
+	if type(data) ~= "string" or #data < 24 then
+		return false
+	end
+	local sig = data:sub(1, 4)
+	if sig == "GIF8" then
+		if not (getcustomasset and writefile) then
+			return false
+		end
+		local cached = ntImgCache[key]
+		if type(cached) == "table" then
+			return ntStartFrames(img, cached)
+		end
+		local gif = ntDecodeGIF(data)
+		if not gif or #gif.frames == 0 then
+			return false
+		end
+		ntEnsureDir()
+		local stem = "Xyro/ntmedia/" .. tostring((key:gsub("%W", "")):sub(-16)) .. "_"
+		local frames = {}
+		for fi, fr in ipairs(gif.frames) do
+			local fname = stem .. fi .. ".png"
+			local encoded = ntEncodePNG(fr.w, fr.h, fr.rgba)
+			if not encoded then
+				break
+			end
+			local okW = pcall(writefile, fname, encoded)
+			local okA, asset = pcall(getcustomasset, fname)
+			if not (okW and okA and type(asset) == "string" and asset ~= "") then
+				break
+			end
+			frames[fi] = { asset = asset, delay = fr.delay }
+		end
+		if #frames == 0 then
+			return false
+		end
+		ntImgCache[key] = frames
+		return ntStartFrames(img, frames)
+	end
+	local head = data:sub(1, 8)
+	if head == "\137PNG\r\n\26\n" or (data:byte(1) == 0xFF and data:byte(2) == 0xD8) then
+		if getcustomasset and writefile then
+			ntEnsureDir()
+			local fname = "Xyro/ntmedia/" .. tostring((key:gsub("%W", "")):sub(-16)) .. (data:byte(1) == 0xFF and ".jpg" or ".png")
+			local okW = pcall(writefile, fname, data)
+			local okA, asset = pcall(getcustomasset, fname)
+			if okW and okA and type(asset) == "string" and asset ~= "" then
+				img.Image = asset
+				return true
+			end
+		end
+		return false
+	end
+	return false
+end
+
+local function ntDataFromUri(url)
+	local b64 = url:match("^data:image/%w+;base64,(.+)$")
+	if not b64 then
+		return nil
+	end
+	b64 = b64:gsub("%s", "")
+	local ok, out = pcall(function()
+		if syn and syn.crypt and syn.crypt.base64decode then
+			return syn.crypt.base64decode(b64)
+		end
+		if type(crypt) == "table" and crypt.base64decode then
+			return crypt.base64decode(b64)
+		end
+		if H and H.HttpService and H.HttpService.Base64Decode then
+			return H.HttpService:Base64Decode(b64)
+		end
+		return nil
+	end)
+	if ok and type(out) == "string" and #out > 0 then
+		return out
+	end
+	return nil
+end
 
 local function ntApplyImage(img, url)
 	if url:match("^%d+$") then
@@ -7503,22 +7872,33 @@ local function ntApplyImage(img, url)
 		img.Image = url
 		return true
 	end
+	local b64 = ntDataFromUri(url)
+	if b64 then
+		return ntApplyData(img, b64, url:sub(1, 120))
+	end
 	local cached = ntImgCache[url]
-	if cached then
+	if type(cached) == "string" then
 		img.Image = cached
 		return true
+	end
+	if type(cached) == "table" then
+		return ntStartFrames(img, cached)
 	end
 	if getcustomasset and writefile and ntMember("HttpGet") then
 		local ok, asset = pcall(function()
 			local data = ntHttpGet(url)
 			assert(type(data) == "string" and #data > 0, "empty download")
-			if makefolder then
-				pcall(makefolder, "Xyro")
+			if ntApplyData(img, data, url) then
+				return "__handled__"
 			end
-			local fname = "Xyro/ntimg_" .. tostring((url:gsub("%W", "")):sub(-16)) .. ".png"
+			ntEnsureDir()
+			local fname = "Xyro/ntmedia/" .. tostring((url:gsub("%W", "")):sub(-16)) .. ".raw"
 			writefile(fname, data)
 			return getcustomasset(fname)
 		end)
+		if ok and asset == "__handled__" then
+			return true
+		end
 		if ok and asset then
 			ntImgCache[url] = asset
 			img.Image = asset
@@ -7588,6 +7968,27 @@ local function ntBuild(plr, rule)
 	stroke.Transparency = 0.15
 	stroke.Thickness = 1.5
 	stroke.Parent = pill
+
+	-- optional custom background image behind the text (URL or base64 data
+	-- URI, GIFs animate). ZIndex 0 keeps it under avatar/name/user layers
+	local bgImg = nil
+	local bgUrl = type(rule.bgImage) == "string" and rule.bgImage or ""
+	if bgUrl ~= "" then
+		pill.BackgroundTransparency = 1
+		bgImg = Instance.new("ImageLabel")
+		bgImg.Name = "BgImage"
+		bgImg.BackgroundTransparency = 1
+		bgImg.Size = UDim2.fromScale(1, 1)
+		bgImg.ScaleType = Enum.ScaleType.Crop
+		bgImg.ZIndex = 0
+		bgImg.Parent = pill
+		local bgCorner = Instance.new("UICorner")
+		bgCorner.CornerRadius = UDim.new(0.5, 0)
+		bgCorner.Parent = bgImg
+		task.spawn(function()
+			pcall(ntApplyImage, bgImg, bgUrl)
+		end)
+	end
 
 	local avatar = Instance.new("ImageLabel")
 	avatar.Name = "Avatar"
@@ -7687,7 +8088,7 @@ local function ntBuild(plr, rule)
 		end)
 	end
 
-	local o = { gui = bb, head = head, pill = pill, stroke = stroke, name = name, user = user, avatar = avatar }
+	local o = { gui = bb, head = head, pill = pill, stroke = stroke, name = name, user = user, avatar = avatar, bgImg = bgImg }
 
 	-- avatar: custom icon, else Roblox headshot thumbnail
 	local url = type(rule.image) == "string" and rule.image or ""

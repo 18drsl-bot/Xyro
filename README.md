@@ -80,4 +80,4 @@ always) · `showDistance` · `showHealth` · `showBox` (pill background on/off) 
 only Xyro staff get tags at all — non-staff see nothing, cache nothing).
 
 Tags render as plain billboard UI, so **any executor works** — no Drawing API needed.
-Icons use `getcustomasset` when available and silently fall back to text-only otherwise.
+Icons support PNG/JPG/GIF by URL, asset id, or base64 `data:` URI - **GIFs fully animate** (decoded frame-by-frame in script, since Roblox only shows a GIF's first frame). Rules also take `bgImage` (URL or data URI) to fill the pill background; the editor's **Choose file** buttons upload images to `media/` in this repo (base64-embeds them without a token).

@@ -263,6 +263,10 @@
 	.rrow .meta .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.rrow .order { display: flex; gap: 4px; }
 	.mark { font-size: 10.5px; color: var(--sub); border: 1px solid var(--stroke); border-radius: 6px; padding: 1.5px 7px; margin-right: 4px; letter-spacing: .03em; }
+.filepick { white-space: nowrap; padding: 0 14px; border-radius: 10px; border: 1px solid var(--stroke); background: var(--card2, rgba(255,255,255,.04)); color: var(--sub); cursor: pointer; font: inherit; font-size: 12px; transition: all .15s ease; }
+.filepick:hover { color: var(--text); border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #6c80ff) 18%, transparent); }
+.filepick.busy { opacity: .55; pointer-events: none; }
+.filepick.done { color: #4ade80; border-color: rgba(74,222,128,.5); }
 
 	/* ---------- rule editor ---------- */
 	#editor { border-color: rgba(109,125,255,.55); box-shadow: 0 0 0 1px rgba(109,125,255,.22), 0 18px 50px rgba(0,0,0,.5), 0 0 60px rgba(109,125,255,.08); }
@@ -469,8 +473,20 @@
 						<input id="fBgTrans" type="number" min="0" max="1" step="0.05" placeholder="default">
 					</div>
 					<div style="grid-column:1/-1">
-						<label>Icon image &mdash; https://... URL, asset id, or rbxassetid://...</label>
-						<input id="fImage" placeholder="https://i.imgur.com/xxxx.png">
+						<label>Icon image &mdash; URL, asset id, or upload a file (GIF/PNG/JPG, GIFs animate)</label>
+						<div class="row">
+							<input id="fImage" placeholder="https://i.imgur.com/xxxx.png or data:image/gif;base64,...">
+							<button class="filepick" id="edIconFileBtn" type="button">Choose file</button>
+						</div>
+						<input type="file" id="edIconFile" accept="image/png,image/jpeg,image/gif" class="hidden">
+					</div>
+					<div style="grid-column:1/-1">
+						<label>Background image &mdash; fills the pill behind the text (GIFs animate)</label>
+						<div class="row">
+							<input id="fBgImage" placeholder="https://... or upload">
+							<button class="filepick" id="edBgFileBtn" type="button">Choose file</button>
+						</div>
+						<input type="file" id="edBgFile" accept="image/png,image/jpeg,image/gif" class="hidden">
 					</div>
 					<div class="checks" style="grid-column:1/-1">
 						<label><input id="fBadge" type="checkbox"> show check badge next to name</label>
@@ -552,7 +568,7 @@ function badgeHTML(t, big, mini) {
 	const color = hex6(t.color) || "#6c80ff";
 	const pill = hex6(t.bg) || "#0c0c10";
 	let inner = "";
-	if (t.image && /^https:\/\//i.test(t.image)) {
+	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
 		inner += '<img src="' + esc(t.image) + '" onerror="this.style.display=\'none\'">';
 	} else if (t.image && t.image !== "") {
 		inner += "&#127917; ";
@@ -570,7 +586,7 @@ function renderPreview() {
 	badge.style.setProperty("--pill", hex6(t.bg) || $("optPillColor").value || "#0c0c10");
 	$("pvLabel").textContent = t.label || "?";
 	const img = $("pvImg");
-	if (t.image && /^https:\/\//i.test(t.image)) {
+	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
 		img.src = t.image; img.classList.remove("hidden");
 	} else {
 		img.classList.add("hidden");
@@ -590,6 +606,7 @@ function renderRules() {
 		row.className = "rrow";
 		const marks =
 			(t.image ? '<span class="mark">&#127917; icon</span>' : "") +
+			(t.bgImage ? '<span class="mark">&#127917; bg</span>' : "") +
 			(t.bg ? '<span class="mark">bg</span>' : "") +
 			(t.size ? '<span class="mark">s' + esc(t.size) + "</span>" : "");
 		row.innerHTML =
@@ -662,6 +679,89 @@ function changed(why) {
 }
 
 /* ---------- rule editor ---------- */
+/* media uploads: files go to media/<hash>.<ext> in the repo (keeps
+   nametags.json small); without a token we fall back to a base64 data
+   URI embedded straight into the rule, which the in-game decoder reads */
+let edMedia = { icon: false, bg: false };
+
+function fileToDataURI(file) {
+	return new Promise((res, rej) => {
+		const r = new FileReader();
+		r.onload = () => res(r.result);
+		r.onerror = () => rej(new Error("read failed"));
+		r.readAsDataURL(file);
+	});
+}
+
+async function fileToBlobURL(file) {
+	const buf = await file.arrayBuffer();
+	const hash = await crypto.subtle.digest("SHA-1", buf);
+	const name = [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, "0")).join("");
+	const ext = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "") || "png";
+	const path = "media/" + name + "." + ext;
+	const rawURL = "https://raw.githubusercontent.com/" + REPO + "/main/" + path;
+	const token = getToken();
+	if (!token) throw Object.assign(new Error("no token"), { code: "notoken" });
+	// file already in the repo? then its URL is instantly valid
+	const head = await fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, { headers: { Authorization: "Bearer " + token } });
+	if (head.ok) return rawURL;
+	if (head.status !== 404) throw new Error("github said " + head.status);
+	const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+	const put = await fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, {
+		method: "PUT",
+		headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+		body: JSON.stringify({ message: "Add tag media " + name.slice(0, 8), content: b64 }),
+	});
+	if (!put.ok) {
+		const err = await put.json().catch(() => ({}));
+		// 422 = already exists (race) - the URL is still good
+		if (put.status === 422) return rawURL;
+		throw new Error(err.message || put.status);
+	}
+	return rawURL;
+}
+
+function wireFilePicker(fileInputId, btnId, urlInputId, mediaKey) {
+	$(btnId).onclick = () => $(fileInputId).click();
+	$(fileInputId).onchange = async e => {
+		const f = e.target.files[0];
+		e.target.value = "";
+		if (!f) return;
+		if (f.size > 3 * 1024 * 1024) { toast("Image too large (max 3 MB)", "err"); return; }
+		const btn = $(btnId);
+		btn.classList.remove("done"); btn.classList.add("busy");
+		btn.textContent = "uploading...";
+		try {
+			const url = await fileToBlobURL(f);
+			$(urlInputId).value = url;
+			btn.classList.remove("busy"); btn.classList.add("done");
+			btn.textContent = "uploaded!";
+			toast("Image uploaded to the repo - remember to publish", "ok");
+		} catch (err) {
+			btn.classList.remove("busy");
+			if (err && err.code === "notoken") {
+				try {
+					const uri = await fileToDataURI(f);
+					$(urlInputId).value = uri;
+					edMedia[mediaKey] = true;
+					btn.textContent = "embedded";
+					toast("No token connected - embedded as base64 (heavier publish). Connect a token to upload instead.", "info", 8);
+				} catch (_) {
+					btn.textContent = "Choose file";
+					toast("Could not read that file", "err");
+				}
+			} else {
+				btn.textContent = "failed - retry";
+				toast("Upload failed: " + (err.message || err), "err");
+			}
+		}
+		renderEditorPreview();
+	};
+}
+
+wireFilePicker("edIconFile", "edIconFileBtn", "fImage", "icon");
+wireFilePicker("edBgFile", "edBgFileBtn", "fBgImage", "bg");
+
 function editorTag() {
 	return {
 		match: $("fMatch").value.trim(),
@@ -669,6 +769,7 @@ function editorTag() {
 		color: $("fColorHex").value,
 		size: $("fSize").value ? parseInt($("fSize").value) : undefined,
 		image: $("fImage").value.trim(),
+		bgImage: $("fBgImage").value.trim(),
 		bg: hex6($("fBgHex").value) ? $("fBgHex").value : undefined,
 		bgTransparency: $("fBgTrans").value !== "" ? parseFloat($("fBgTrans").value) : undefined,
 		badge: $("fBadge").checked || undefined,
@@ -685,12 +786,20 @@ function renderEditorPreview() {
 	/* match in-game: the badge renders as the Roblox verified seal in blue */
 	$("edBadgeCheck").style.color = "#00aaff";
 	const img = $("edImg");
-	if (t.image && /^https:\/\//i.test(t.image)) {
+	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
 		img.src = t.image; img.classList.remove("hidden");
 	} else {
 		img.classList.add("hidden");
 	}
-	$("edImg").style.display = t.image && /^https:\/\//i.test(t.image) ? "" : "none";
+	$("edImg").style.display = t.image && /^(https:\/\/|data:image\/)/i.test(t.image) ? "" : "none";
+	/* live background-image preview fills the pill itself */
+	if (t.bgImage && /^(https:\/\/|data:image\/)/i.test(t.bgImage)) {
+		badge.style.backgroundImage = 'url("' + t.bgImage + '")';
+		badge.style.backgroundSize = "cover";
+		badge.style.backgroundPosition = "center";
+	} else {
+		badge.style.backgroundImage = "none";
+	}
 }
 
 function openEditor(i) {
@@ -704,6 +813,12 @@ function openEditor(i) {
 	$("fColorHex").value = (t.color || "#6C80FF").toUpperCase();
 	$("fSize").value = t.size || "";
 	$("fImage").value = t.image || "";
+	$("fBgImage").value = t.bgImage || "";
+	edMedia = { icon: false, bg: false };
+	$("edIconFileBtn").textContent = "Choose file";
+	$("edBgFileBtn").textContent = "Choose file";
+	$("edIconFileBtn").classList.remove("done", "busy");
+	$("edBgFileBtn").classList.remove("done", "busy");
 	$("fBg").value = (hex6(t.bg) || "#0c0c10").toLowerCase();
 	$("fBgHex").value = t.bg ? t.bg.toUpperCase() : "";
 	$("fBgTrans").value = t.bgTransparency != null ? t.bgTransparency : "";
@@ -720,7 +835,7 @@ function closeEditor() {
 	renderPreview();
 }
 
-["fMatch", "fLabel", "fColorHex", "fSize", "fImage", "fBgHex", "fBgTrans"].forEach(id => {
+["fMatch", "fLabel", "fColorHex", "fSize", "fImage", "fBgImage", "fBgHex", "fBgTrans"].forEach(id => {
 	$(id).addEventListener("input", renderEditorPreview);
 });
 $("fBadge").addEventListener("change", renderEditorPreview);
@@ -739,6 +854,7 @@ $("edSave").onclick = () => {
 	const clean = Object.assign({}, prev, { match: t.match, label: t.label, color: t.color || undefined });
 	if (t.size) clean.size = t.size; else delete clean.size;
 	if (t.image) clean.image = t.image; else delete clean.image;
+	if (t.bgImage) clean.bgImage = t.bgImage; else delete clean.bgImage;
 	if (t.bg) clean.bg = t.bg; else delete clean.bg;
 	if (t.bgTransparency != null && !isNaN(t.bgTransparency)) clean.bgTransparency = t.bgTransparency; else delete clean.bgTransparency;
 	if (t.badge) clean.badge = true; else delete clean.badge;
