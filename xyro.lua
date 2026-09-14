@@ -531,7 +531,7 @@ H.chrome = function(frame, opts)
 	return minBtn, closeBtn
 end
 
-local titleBar = make("Frame", { Size = UDim2.new(0, 190, 0, 40), BackgroundTransparency = 1 }, main)
+local titleBar = make("Frame", { Size = UDim2.new(1, -50, 0, 40), BackgroundTransparency = 1 }, main) -- full-width drag handle (clears the search button)
 
 round(make("Frame", {
 	Size = UDim2.new(0, 7, 0, 7),
@@ -717,8 +717,7 @@ local function makeTab(name, onClick, display)
 	return page
 end
 
-local speedPage = makeTab("Speed")
-local gravPage = makeTab("Gravity")
+local speedPage = makeTab("Speed") -- gravity controls live on this tab too (no separate Gravity tab)
 local espPage = makeTab("ESP")
 local hitboxPage = makeTab("Hitbox")
 local playerPage = makeTab("Player")
@@ -1040,7 +1039,7 @@ H.clampV = function(v, lo, hi)
 	return math.clamp(v, lo, hi)
 end
 H.titleBar, H.conns = titleBar, conns
-H.speedPage, H.gravPage, H.espPage, H.hitboxPage = speedPage, gravPage, espPage, hitboxPage
+H.speedPage, H.gravPage, H.espPage, H.hitboxPage = speedPage, speedPage, espPage, hitboxPage -- gravPage aliases Speed (merged tab)
 H.playerPage, H.flyPage, H.movePage, H.toolsPage = playerPage, flyPage, movePage, toolsPage
 H.world = world
 
@@ -1439,15 +1438,15 @@ local customGravity = normalGravity
 local gravEnabled = false
 local applyingGravity = false
 
-local gravRow = row(gravPage, 0, "Custom gravity")
+local gravRow = row(gravPage, 110, "Custom gravity")
 H.keyRefreshers[#H.keyRefreshers + 1] = function()
 	gravRow.Text = "Custom gravity" .. H.keySuffix("gravity")
 end
 
-row(gravPage, 36, "Gravity (0-500)")
+row(gravPage, 146, "Gravity (0-500)")
 local gravBox = make("TextBox", {
 	Size = UDim2.new(0, 78, 0, 26),
-	Position = UDim2.new(1, -78, 0, 34),
+	Position = UDim2.new(1, -78, 0, 144),
 	BackgroundColor3 = COL.element,
 	Font = Enum.Font.Gotham,
 	TextSize = 13,
@@ -1461,7 +1460,7 @@ round(gravBox, 6)
 
 local gravLbl = make("TextLabel", {
 	Size = UDim2.new(1, 0, 0, 18),
-	Position = UDim2.new(0, 0, 0, 72),
+	Position = UDim2.new(0, 0, 0, 182),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
 	TextSize = 12,
@@ -1482,7 +1481,7 @@ local function applyGravity(value)
 	applyingGravity = false
 end
 
-local toggleGrav = select(2, makeSwitch(gravPage, 0, false, function(on)
+local toggleGrav = select(2, makeSwitch(gravPage, 110, false, function(on)
 	gravEnabled = on
 	applyGravity(on and customGravity or normalGravity)
 	updateGravUI()
@@ -3725,6 +3724,7 @@ local function gatherConfig()
 		espColors[k] = toHex(v)
 	end
 	return {
+		paletteVer = 2, -- 2 = periwinkle palette; configs saved by older builds are ignored on load
 		colors = colors,
 		espColors = espColors,
 		cframeSpeed = _G.CFrameSpeed,
@@ -3753,7 +3753,7 @@ local function applyConfig(cfg)
 	if type(cfg) ~= "table" then
 		return
 	end
-	if type(cfg.colors) == "table" then
+	if cfg.paletteVer == 2 and type(cfg.colors) == "table" then
 		for k, hex in pairs(cfg.colors) do
 			if COL[k] ~= nil then
 				local c = fromHex(hex)
@@ -7086,7 +7086,7 @@ local hubRunCommand
 
 local cmdBox = make("TextBox", {
 	Size = UDim2.new(0, 190, 0, 26),
-	Position = UDim2.new(1, -212, 1, -32), -- right-aligned, just left of the Unload button
+	Position = UDim2.new(1, -342, 1, -32), -- beside the Unload button (which sits at -146..-88), not behind it
 	Font = Enum.Font.Gotham,
 	TextSize = 12,
 	TextColor3 = COL.text,
