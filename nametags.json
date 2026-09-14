@@ -1,6 +1,6 @@
 {
 	"options": {
-		"size": 24,
+		"size": 18,
 		"maxDistance": 0,
 		"showDistance": false,
 		"showHealth": false,
@@ -8,9 +8,9 @@
 		"onlyScriptUsers": true,
 		"pillColor": "#0000BD",
 		"pillTransparency": 0.12,
-		"imageSize": 52,
-		"userSize": 10,
-		"height": 48,
+		"imageSize": 36,
+		"userSize": 9,
+		"height": 44,
 		"font": "GothamBlack",
 		"textColor": "#FFFFFF",
 		"userColor": "#8B92A5",
