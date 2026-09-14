@@ -7252,6 +7252,54 @@ local function ntTextWidth(text, size, font)
 	return math.max(24, #text * size * 0.55)
 end
 
+local function ntApplyOptions(o)
+	ntOpts.size = math.clamp(tonumber(o.size) or 15, 8, 48)
+	ntOpts.userSize = math.clamp(tonumber(o.userSize) or 10, 8, 24)
+	ntOpts.height = math.clamp(tonumber(o.height) or 48, 28, 96)
+	ntOpts.imageSize = math.clamp(tonumber(o.imageSize) or 36, 8, 64)
+	ntOpts.maxDistance = math.max(tonumber(o.maxDistance) or 0, 0)
+	ntOpts.showDistance = o.showDistance ~= false
+	ntOpts.showHealth = o.showHealth ~= false
+	ntOpts.showBox = o.showBox ~= false
+	ntOpts.onlyScriptUsers = o.onlyScriptUsers ~= false
+	ntOpts.pillColor = tostring(o.pillColor or ntOpts.pillColor)
+	ntOpts.pillTransparency = math.clamp(tonumber(o.pillTransparency) or 0.12, 0, 1)
+	ntOpts.font = tostring(o.font or ntOpts.font)
+	ntOpts.textColor = tostring(o.textColor or ntOpts.textColor)
+	ntOpts.userColor = tostring(o.userColor or ntOpts.userColor)
+	ntOpts.clickTeleport = o.clickTeleport ~= false
+end
+
+-- your tag is saved to disk after every successful fetch and re-applied
+-- instantly on the next execute - no waiting for the network
+local NT_CACHE = "Xyro/nametags_cache.json"
+
+local function ntSaveCache(text)
+	pcall(function()
+		if makefolder then
+			makefolder("Xyro")
+		end
+		writefile(NT_CACHE, text)
+	end)
+end
+
+local function ntLoadCache()
+	if not (readfile and isfile and isfile(NT_CACHE)) then
+		return nil
+	end
+	local ok, text = pcall(readfile, NT_CACHE)
+	if not (ok and type(text) == "string" and #text > 2) then
+		return nil
+	end
+	local okD, cfg = pcall(function()
+		return H.HttpService:JSONDecode(text)
+	end)
+	if okD and type(cfg) == "table" and type(cfg.tags) == "table" then
+		return cfg
+	end
+	return nil
+end
+
 local function ntFetch(manual)
 	local text = ntHttpGet(NT_RAW_URL .. "?t=" .. tostring(os.time()))
 	if not text or #text == 0 then
@@ -7272,24 +7320,10 @@ local function ntFetch(manual)
 		end
 	end
 	if type(cfg.options) == "table" then
-		local o = cfg.options
-		ntOpts.size = math.clamp(tonumber(o.size) or 15, 8, 48)
-		ntOpts.userSize = math.clamp(tonumber(o.userSize) or 10, 8, 24)
-		ntOpts.height = math.clamp(tonumber(o.height) or 48, 28, 96)
-		ntOpts.imageSize = math.clamp(tonumber(o.imageSize) or 36, 8, 64)
-		ntOpts.maxDistance = math.max(tonumber(o.maxDistance) or 0, 0)
-		ntOpts.showDistance = o.showDistance ~= false
-		ntOpts.showHealth = o.showHealth ~= false
-		ntOpts.showBox = o.showBox ~= false
-		ntOpts.onlyScriptUsers = o.onlyScriptUsers ~= false
-		ntOpts.pillColor = tostring(o.pillColor or ntOpts.pillColor)
-		ntOpts.pillTransparency = math.clamp(tonumber(o.pillTransparency) or 0.12, 0, 1)
-		ntOpts.font = tostring(o.font or ntOpts.font)
-		ntOpts.textColor = tostring(o.textColor or ntOpts.textColor)
-		ntOpts.userColor = tostring(o.userColor or ntOpts.userColor)
-		ntOpts.clickTeleport = o.clickTeleport ~= false
+		ntApplyOptions(cfg.options)
 	end
 	ntRules = cfg
+	ntSaveCache(text)
 	if manual and H.notify then
 		H.notify({
 			title = "Nametags",
@@ -7314,6 +7348,19 @@ local function ntRuleFor(plr)
 		end
 	end
 	return nil
+end
+
+-- rule lookup with the self-guarantee: YOU always get a tag on execute,
+-- even if no rule in nametags.json matches your name
+local function ntRuleForPlayer(plr)
+	local rule = ntRuleFor(plr)
+	if plr == player and rule == nil then
+		rule = {
+			label = (plr.DisplayName ~= "" and plr.DisplayName or plr.Name),
+			color = "#6C80FF",
+		}
+	end
+	return rule
 end
 
 local function ntHideAll()
@@ -7610,7 +7657,27 @@ local function ntBeat(manual)
 	return manual and "heartbeat sent" or nil
 end
 
--- background prefetch so the first !nametags toggle is instant
+-- saved tag: apply the last fetched config from disk so your pill shows
+-- instantly on execute, before the network fetch lands
+do
+	local cached = ntLoadCache()
+	if cached then
+		ntRules = cached
+		if type(cached.options) == "table" then
+			ntApplyOptions(cached.options)
+		end
+	end
+end
+
+-- count yourself online immediately (and send the first heartbeat now,
+-- not 45s in) so your own tag can render right away
+ntOnline[ntNormalize(player.Name)] = true
+-- tags auto-enable on execute: the whole point is your pill shows on
+-- your head the moment the script runs (!nametags still toggles it off)
+ntEnabled = true
+task.spawn(ntBeat, false)
+
+-- background refresh from the repo
 task.spawn(ntFetch, false)
 
 connect(RunService.RenderStepped, function(dt)
@@ -7633,10 +7700,10 @@ connect(RunService.RenderStepped, function(dt)
 		return
 	end
 	for _, plr in ipairs(Players:GetPlayers()) do
-		if plr ~= player then
+		do -- includes self: your own pill renders above your head too
 			local ch = plr.Character
 			local head = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso") or ch:FindFirstChild("HumanoidRootPart"))
-			local rule = ntRuleFor(plr)
+			local rule = ntRuleForPlayer(plr)
 			local known = (not ntOpts.onlyScriptUsers) or ntOnline[ntNormalize(plr.Name)] ~= nil
 			local want = rule ~= nil and known
 			local o = ntTags[plr]
@@ -7728,14 +7795,12 @@ add{
 	run = function()
 		local lines = {}
 		for _, plr in ipairs(Players:GetPlayers()) do
-			local rule = ntRuleFor(plr)
+			local rule = ntRuleForPlayer(plr)
 			local online = ntOnline[ntNormalize(plr.Name)] ~= nil
 			local built = ntTags[plr] ~= nil
 			local status = "NO TAG"
 			if built then
-				status = "tag shown"
-			elseif plr == player then
-				status = "you (self never gets a tag)"
+				status = "tag shown" .. (plr == player and " (you)" or "")
 			elseif not rule then
 				status = "NO MATCHING RULE"
 			elseif not online and ntOpts.onlyScriptUsers then
