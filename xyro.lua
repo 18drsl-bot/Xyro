@@ -100,14 +100,16 @@ H.setBind = function(action, keyName)
 end
 
 local COL = {
-	bg = Color3.fromRGB(19, 20, 26),
-	element = Color3.fromRGB(38, 41, 52),
-	stroke = Color3.fromRGB(55, 60, 74),
-	accent = Color3.fromRGB(108, 128, 255),
+	-- periwinkle shell + dark content card (HaxterHub-style layered UI)
+	bg = Color3.fromRGB(87, 89, 138),
+	element = Color3.fromRGB(80, 82, 128),
+	stroke = Color3.fromRGB(64, 66, 106),
+	accent = Color3.fromRGB(122, 124, 184),
 	on = Color3.fromRGB(235, 76, 76),
-	text = Color3.fromRGB(238, 241, 248),
-	sub = Color3.fromRGB(139, 146, 165),
-	off = Color3.fromRGB(70, 75, 90),
+	text = Color3.fromRGB(255, 255, 255),
+	sub = Color3.fromRGB(219, 222, 240),
+	off = Color3.fromRGB(106, 108, 156),
+	contentBg = Color3.fromRGB(30, 30, 52), -- always re-derived from bg in applyTheme
 }
 
 local ESPCOL = {
@@ -292,14 +294,39 @@ local function click()
 end
 
 local main = make("Frame", {
-	Size = UDim2.new(0, 380, 0, 254),
-	Position = UDim2.new(0, 16, 0.5, -127),
+	Size = UDim2.new(0, 540, 0, 340), -- wide shell: pill sidebar left, dark content card right
+	Position = UDim2.new(0, 16, 0.5, -170),
 	BackgroundColor3 = COL.bg,
 	BorderSizePixel = 0,
 	Active = true,
 }, gui)
-round(main, 12)
+round(main, 14)
 make("UIStroke", { Color = COL.stroke, Thickness = 1 }, main)
+
+-- soft vertical gradient over the shell (lighter top, deeper bottom)
+make("UIGradient", {
+	Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(172, 172, 205)),
+	Rotation = 90,
+}, main)
+
+-- dark content card inset on the right (pages render on top of this)
+local contentCard = make("Frame", {
+	Name = "ContentCard",
+	Position = UDim2.new(1, -352, 0, 10),
+	Size = UDim2.new(0, 342, 1, -20),
+	BackgroundColor3 = COL.bg,
+	BackgroundTransparency = 0,
+	BorderSizePixel = 0,
+}, main)
+round(contentCard, 10)
+contentCard.ZIndex = 0
+-- its color tracks the shell via the theme system
+themeRefreshers[#themeRefreshers + 1] = function()
+	if contentCard then
+		contentCard.BackgroundColor3 = COL.contentBg
+	end
+end
+contentCard.BackgroundColor3 = Color3.fromRGB(30, 30, 52)
 
 H.scales = {}
 local liveScales = {}
@@ -381,7 +408,7 @@ H.scaleOf = function(obj)
 end
 
 main.Name = "Main"
-H.makeResizable(main, 380, 254)
+H.makeResizable(main, 540, 340)
 
 H.makeDraggable = function(frame, handle, conn)
 	handle = handle or frame
@@ -495,7 +522,7 @@ H.chrome = function(frame, opts)
 	return minBtn, closeBtn
 end
 
-local titleBar = make("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1 }, main)
+local titleBar = make("Frame", { Size = UDim2.new(0, 190, 0, 40), BackgroundTransparency = 1 }, main)
 
 round(make("Frame", {
 	Size = UDim2.new(0, 7, 0, 7),
@@ -505,20 +532,43 @@ round(make("Frame", {
 }, titleBar), 4)
 
 make("TextLabel", {
-	Size = UDim2.new(1, -66, 1, 0),
-	Position = UDim2.new(0, 26, 0, 0),
+	Size = UDim2.new(1, -40, 1, 0),
+	Position = UDim2.new(0, 30, 0, 0),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.GothamBold,
-	TextSize = 14,
+	TextSize = 17,
 	TextColor3 = COL.text,
 	Text = "Xyro",
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, titleBar)
 
+-- circular search button, top-right of the shell like the reference UI:
+-- opens the command list (the built-in "cmds"-style help window)
+local searchBtn = make("TextButton", {
+	Size = UDim2.new(0, 34, 0, 34),
+	Position = UDim2.new(1, -44, 0, 3),
+	BackgroundColor3 = COL.bg,
+	BackgroundTransparency = 0.35,
+	Text = "🔍",
+	TextSize = 15,
+	Font = Enum.Font.GothamBold,
+	TextColor3 = COL.text,
+	AutoButtonColor = false,
+	BorderSizePixel = 0,
+}, main)
+round(searchBtn, 17)
+connect(searchBtn.MouseButton1Click, function()
+	click()
+	if H.openCommandList then
+		H.openCommandList()
+	elseif openHelp then
+		openHelp()
+	end
+end)
+
 local keyChip = make("TextButton", {
 	Size = UDim2.new(0, 28, 0, 20),
-	Position = UDim2.new(1, -36, 0, 8),
-	BackgroundColor3 = COL.element,
+	Position = UDim2.new(0, 158, 0, 10), -- under the title, right edge of the sidebar column
 	Font = Enum.Font.Gotham,
 	TextSize = 11,
 	TextColor3 = COL.sub,
@@ -565,8 +615,8 @@ connect(keyChip.MouseButton1Click, function()
 end)
 
 make("Frame", {
-	Size = UDim2.new(1, -16, 0, 1),
-	Position = UDim2.new(0, 8, 0, 36),
+	Size = UDim2.new(0, 176, 0, 1),
+	Position = UDim2.new(0, 7, 0, 44),
 	BackgroundColor3 = COL.stroke,
 	BorderSizePixel = 0,
 }, main)
@@ -575,71 +625,75 @@ local pages, tabs = {}, {}
 local selectTab
 local currentTab
 
-local TAB_WIDTH = 62
+local TAB_WIDTH = 178
 
+-- vertical pill sidebar on the left (each tab a full-width pill)
 local tabStrip = make("ScrollingFrame", {
-	Size = UDim2.new(1, -16, 0, 30),
-	Position = UDim2.new(0, 8, 0, 44),
+	Size = UDim2.new(0, 188, 1, -124),
+	Position = UDim2.new(0, 7, 0, 52),
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	ScrollBarThickness = 3,
+	ScrollBarThickness = 2,
 	ScrollBarImageColor3 = COL.sub,
-	ScrollingDirection = Enum.ScrollingDirection.X,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
 	CanvasSize = UDim2.new(0, 0, 0, 0),
 }, main)
 
 local tabLayout = make("UIListLayout", {
-	FillDirection = Enum.FillDirection.Horizontal,
-	Padding = UDim.new(0, 5),
+	FillDirection = Enum.FillDirection.Vertical,
+	Padding = UDim.new(0, 6),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, tabStrip)
-make("UIPadding", { PaddingLeft = UDim.new(0, 4) }, tabStrip)
+make("UIPadding", { PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 4), PaddingTop = UDim.new(0, 2) }, tabStrip)
 
 local tabOrder = 0
 
 local function makeTab(name, onClick, display)
 	tabOrder += 1
 	local btn = make("TextButton", {
-		Size = UDim2.new(0, TAB_WIDTH, 0, 26),
+		Size = UDim2.new(0, TAB_WIDTH, 0, 30),
 		BackgroundColor3 = COL.element,
 		Font = Enum.Font.GothamMedium,
-		TextSize = 11,
+		TextSize = 12,
 		TextColor3 = COL.sub,
 		Text = display or name,
+		TextXAlignment = Enum.TextXAlignment.Left,
 		AutoButtonColor = false,
 		BorderSizePixel = 0,
 		LayoutOrder = tabOrder,
 	}, tabStrip)
-	round(btn, 7)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 12) }, btn)
+	round(btn, 9)
 	btn:SetAttribute("NoAnim", true)
 
 	local underline = make("Frame", {
 		Name = "Underline",
-		AnchorPoint = Vector2.new(0.5, 1),
-		Position = UDim2.new(0.5, 0, 1, -3),
-		Size = UDim2.new(0, 0, 0, 2),
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 5, 0.5, 0),
+		Size = UDim2.new(0, 0, 0, 14),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
 	}, btn)
-	round(underline, 1)
+	round(underline, 2)
 	local page = make("Frame", {
-		Size = UDim2.new(1, -24, 1, -132),
-		Position = UDim2.new(0, 12, 0, 80),
+		Size = UDim2.new(0, 326, 1, -70),
+		Position = UDim2.new(0, 200, 0, 44),
 		BackgroundTransparency = 1,
 		Visible = false,
+		ZIndex = 5,
 	}, main)
 	pages[name], tabs[name] = page, btn
 
 	connect(btn.MouseEnter, function()
 		if currentTab ~= name then
 			tween(btn, { BackgroundColor3 = COL.stroke, TextColor3 = COL.text })
-			tween(underline, { Size = UDim2.new(0.45, 0, 0, 2) })
+			tween(underline, { Size = UDim2.new(0, 3, 0, 14) })
 		end
 	end)
 	connect(btn.MouseLeave, function()
 		if currentTab ~= name then
 			tween(btn, { BackgroundColor3 = COL.element, TextColor3 = COL.sub })
-			tween(underline, { Size = UDim2.new(0, 0, 0, 2) })
+			tween(underline, { Size = UDim2.new(0, 0, 0, 14) })
 		end
 	end)
 
@@ -674,18 +728,60 @@ if isAdmin then
 end
 
 local function sizeTabCanvas()
-	tabStrip.CanvasSize = UDim2.new(0, tabLayout.AbsoluteContentSize.X / H.scaleOf(tabStrip) + 8, 0, 0)
+	tabStrip.CanvasSize = UDim2.new(0, 0, 0, tabLayout.AbsoluteContentSize.Y / H.scaleOf(tabStrip) + 8)
 end
 connect(tabLayout:GetPropertyChangedSignal("AbsoluteContentSize"), sizeTabCanvas)
 sizeTabCanvas()
 
 connect(tabStrip.InputChanged, function(i)
 	if i.UserInputType == Enum.UserInputType.MouseWheel then
-		local maxX = math.max(tabStrip.CanvasSize.X.Offset - tabStrip.AbsoluteSize.X, 0)
-		local x = math.clamp(tabStrip.CanvasPosition.X - i.Position.Z * 40, 0, maxX)
-		tabStrip.CanvasPosition = Vector2.new(x, 0)
+		local maxY = math.max(tabStrip.CanvasSize.Y.Offset - tabStrip.AbsoluteSize.Y, 0)
+		local y = math.clamp(tabStrip.CanvasPosition.Y - i.Position.Z * 40, 0, maxY)
+		tabStrip.CanvasPosition = Vector2.new(0, y)
 	end
 end)
+
+-- user card, bottom-left of the shell (avatar + name + role, like the reference)
+local userCard = make("Frame", {
+	Name = "UserCard",
+	Position = UDim2.new(0, 7, 1, -54),
+	Size = UDim2.new(0, 188, 0, 46),
+	BackgroundColor3 = COL.element,
+	BorderSizePixel = 0,
+}, main)
+round(userCard, 10)
+make("UIStroke", { Color = COL.stroke, Thickness = 1 }, userCard)
+local userAvatar = make("ImageLabel", {
+	Size = UDim2.new(0, 34, 0, 34),
+	Position = UDim2.new(0, 6, 0.5, -17),
+	BackgroundColor3 = COL.contentBg,
+	BorderSizePixel = 0,
+	Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(player.UserId) .. "&w=150&h=150",
+	ScaleType = Enum.ScaleType.Crop,
+}, userCard)
+round(userAvatar, 17)
+make("TextLabel", {
+	Size = UDim2.new(1, -54, 0, 16),
+	Position = UDim2.new(0, 46, 0, 6),
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold,
+	TextSize = 12,
+	TextColor3 = COL.text,
+	Text = player.DisplayName,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+}, userCard)
+make("TextLabel", {
+	Size = UDim2.new(1, -54, 0, 13),
+	Position = UDim2.new(0, 46, 0, 23),
+	BackgroundTransparency = 1,
+	Font = Enum.Font.Gotham,
+	TextSize = 10,
+	TextColor3 = COL.sub,
+	Text = isAdmin and "Administrator" or "Member",
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+}, userCard)
 
 function selectTab(name)
 	currentTab = name
@@ -694,8 +790,8 @@ function selectTab(name)
 		page.Visible = active
 		if active then
 
-			page.Position = UDim2.new(0, 12, 0, 88)
-			tween(page, { Position = UDim2.new(0, 12, 0, 80) })
+			page.Position = UDim2.new(0, 200, 0, 52)
+			tween(page, { Position = UDim2.new(0, 200, 0, 44) })
 		end
 		tween(tabs[n], {
 			BackgroundColor3 = active and COL.accent or COL.element,
@@ -703,7 +799,7 @@ function selectTab(name)
 		})
 		local ul = tabs[n]:FindFirstChild("Underline")
 		if ul then
-			tween(ul, { Size = UDim2.new(active and 0.7 or 0, 0, 0, 2) })
+			tween(ul, { Size = UDim2.new(0, active and 3 or 0, 0, 14) })
 		end
 	end
 end
@@ -725,7 +821,7 @@ local function makeSwitch(parent, y, initial, onChanged)
 	local btn = make("TextButton", {
 		Size = UDim2.new(0, 40, 0, 22),
 		Position = UDim2.new(1, -40, 0, y),
-		BackgroundColor3 = initial and COL.on or COL.off,
+		BackgroundColor3 = initial and COL.accent or COL.contentBg,
 		Text = "",
 		AutoButtonColor = false,
 		BorderSizePixel = 0,
@@ -741,7 +837,7 @@ local function makeSwitch(parent, y, initial, onChanged)
 	round(knob, 8)
 	local state = initial
 	local function render()
-		tween(btn, { BackgroundColor3 = state and COL.on or COL.off })
+		tween(btn, { BackgroundColor3 = state and COL.accent or COL.contentBg })
 		tween(knob, { Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8) })
 	end
 	themeRefreshers[#themeRefreshers + 1] = render
@@ -3595,6 +3691,9 @@ local function keyFromName(name)
 end
 
 local function applyTheme()
+	-- the dark content card always follows the shell color (heavily
+	-- darkened), so custom themes and presets keep the layered look
+	COL.contentBg = Color3.new(COL.bg.R * 0.34, COL.bg.G * 0.34, COL.bg.B * 0.34)
 	for _, ref in ipairs(themedRefs) do
 		local c = COL[ref.role]
 		if c and ref.obj then
@@ -3779,16 +3878,16 @@ end
 
 local cogBtn = make("TextButton", {
 	Size = UDim2.new(0, 26, 0, 26),
-	Position = UDim2.new(0, 8, 1, -32),
-	BackgroundColor3 = COL.element,
+	Position = UDim2.new(1, -32, 0.5, -13), -- right edge of the user card, like the reference's "..." button
+	BackgroundColor3 = COL.contentBg,
 	Font = Enum.Font.GothamBold,
 	TextSize = 14,
 	TextColor3 = COL.text,
 	Text = "⚙",
 	AutoButtonColor = false,
 	BorderSizePixel = 0,
-}, main)
-round(cogBtn, 6)
+}, userCard)
+round(cogBtn, 13)
 
 local setFrame = make("Frame", {
 	Name = "SettingsPanel",
@@ -4218,8 +4317,8 @@ end
 local PRESETS = {
 	{
 		name = "Default",
-		colors = { bg = "#13141A", element = "#262934", stroke = "#373C4A", accent = "#6C80FF",
-			on = "#EB4C4C", text = "#EEF1F8", sub = "#8B92A5", off = "#464B5A" },
+		colors = { bg = "#57598A", element = "#505280", stroke = "#40426A", accent = "#7A7CB8",
+			on = "#EB4C4C", text = "#FFFFFF", sub = "#DBDEF0", off = "#6A6C9C" },
 		espColors = { box = "#E64444", name = "#FFFFFF", skeleton = "#E64444" },
 	},
 	{
@@ -8834,6 +8933,7 @@ local GROUP_ORDER = {
 }
 
 local function openHelp()
+	H.openCommandList = openHelp -- the title-bar search button (created earlier) routes here
 	local rows = {}
 	local seen = {}
 	local function emit(group)
