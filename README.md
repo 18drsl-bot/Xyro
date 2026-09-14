@@ -1,75 +1,81 @@
 # Xyro
-A Script Hub made by x9kzx and Vertxxy
 
-discords: @vertxxy @x9kzx
+Roblox script hub. Public repo, no auth needed.
 
-## Load (executor one-liner)
+## Load
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/refs/heads/main/xyro.lua"))()
 ```
 
-This runs `xyro.lua` straight from the repo, so script updates go live for everyone the moment they're pushed here — no re-copying code.
+Executes the **latest commit every time** — no reinstalling after updates. (Raw's CDN
+lags a few minutes after a push; if the script seems stale, re-run or use the
+integrity-checked fallback loader below.)
 
-Prefer extra protection against flaky downloads? This variant retries 3x and rejects truncated files before running:
+**Fallback loader** (3x retry + always-fresh GitHub API source + truncation checks,
+for flaky executors):
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/loadstring.lua"))()
 ```
 
-## Commands (default prefix `!`)
+The console prints `Loaded Version: vX.Y.Z` — that is what's live in version.txt, so
+you can always confirm you're on the latest build.
+
+## Commands
 
 | Command | Aliases | What it does |
 |---|---|---|
-| `!help` | | Opens the searchable command list |
-| `!nametags` | `!tags` | Toggles website nametags on/off |
-| `!nametagsfetch` | `!tagsfetch` | Re-fetches nametags.json right now |
+| `!nametags` | `!tags` | Toggle the nametag badges |
+| `!nametagsfetch` | `!tagsfetch` | Re-fetch nametags.json from this repo immediately |
 
-Plus ~90 more: fly, speed, ESP, hitbox, teleports, serverhop, and the rest — see `!help` in game.
+## Nametags
 
-## Nametags — edit on this website
+Badges float above the heads of people **running Xyro** (presence-gated — players not
+running the script never get tagged). The current design: avatar icon + display name
+row + `@username` row on a dark rounded pill, visible through walls, with live health
+and distance, click-to-teleport, and the game's default overhead name hidden.
 
-Nametags are driven by **`nametags.json` in this repo**. Edit it right here on github.com (open the file → pencil icon → edit → Commit changes), and every player running Xyro picks it up within **60 seconds**, or instantly with `!nametagsfetch`. Rules are only fetched when nametags are toggled on (or at startup) — no requests while off.
-
-In game: `!nametags` (alias `!tags`) toggles them; `!nametagsfetch` re-fetches now. Tags render as pill badges above heads — no Drawing API needed, works on every executor.
-
-**Only script users get tagged.** Every running copy heartbeats its username to a shared presence feed every 45s; a tag is drawn only over players seen in the last few minutes. Non-users never show up, even if they match a rule. (Turn off with `"onlyScriptUsers": false`.)
+`nametags.json` controls everything. It re-fetches automatically every 60 seconds, or
+run `!nametagsfetch` for instant reload.
 
 ```json
 {
 	"options": {
-		"size": 14,
+		"size": 15,
+		"userSize": 10,
+		"height": 48,
+		"imageSize": 36,
 		"maxDistance": 0,
 		"showDistance": true,
 		"showHealth": true,
-		"showBox": true
+		"showBox": true,
+		"onlyScriptUsers": true,
+		"pillColor": "#0C0C10",
+		"pillTransparency": 0.12,
+		"font": "GothamBlack",
+		"textColor": "#FFFFFF",
+		"userColor": "#8B92A5",
+		"clickTeleport": true
 	},
 	"tags": [
-		{ "match": "x9ksa", "label": "OWNER", "color": "#FFD700", "size": 16 },
-		{ "match": "vert", "label": "DEV", "color": "#6C80FF" },
-		{ "match": "*", "label": "GUEST", "color": "#FFFFFF" }
+		{ "match": "x9ksa", "label": "OWNER", "color": "#FFD700", "size": 16, "badge": true }
 	]
 }
 ```
 
-**`options`** (all optional, apply to everyone):
-- `size` — default text size for tags (8–60, default 14)
-- `maxDistance` — hide tags past this many studs (0 = always show)
-- `showDistance` — append `[123m]` to tags
-- `showHealth` — append `[87hp]` to tags
-- `showBox` — dark box behind text for readability
-- `onlyScriptUsers` — only draw tags over players confirmed to be running Xyro (default on)
-- `pillColor` — default pill background hex (default `#0C0C10`)
-- `pillTransparency` — default pill transparency, 0 = solid (default `0.12`)
-- `imageSize` — icon size inside the pill in px, 8–28 (default `20`)
+**Rule keys:** `match` (start of username/display name, case-insensitive; `*` = all) ·
+`label` (text above the head) · `color` (border color) · `image` (icon: https URL,
+asset id, or rbxassetid) · `bg` / `bgTransparency` (pill background) · `size` (name
+size) · `userSize` · `font` (GothamBlack, Bangers, Arcade, ...) · `textColor` ·
+`userColor` · `badge` (check mark) · `height` · `imageSize`. First matching rule wins —
+put exact names above the `*` catch-all.
 
-**`tags`** rules, first match wins (put exact names before broad prefixes):
-- `match` — start of username or display name, case-insensitive (`"x9ksa"` matches `x9ksa123`); `"*"` matches everyone
-- `label` — the text drawn above the player's head
-- `color` — optional hex color (default white)
-- `size` — optional per-rule text size override
-- `image` — optional icon shown inside the pill: an `https://...` image URL (png/jpg/webp), a bare asset id number, or `rbxassetid://...`. URLs are downloaded once and cached locally
-- `bg` — optional per-rule pill background hex color
-- `bgTransparency` — optional per-rule pill transparency (0 = solid, 1 = invisible)
+**Options:** `size` · `userSize` · `height` · `imageSize` · `maxDistance` (studs, 0 =
+always) · `showDistance` · `showHealth` · `showBox` (pill background on/off) ·
+`onlyScriptUsers` (tags require presence — set false to tag everyone matching) ·
+`pillColor` / `pillTransparency` (defaults for rules without `bg`) · `font` ·
+`textColor` · `userColor` · `clickTeleport` (click a pill to teleport to that player).
 
-Requires nothing special — tags are plain billboard UI, so any executor that runs the hub can show them. `maxDistance` hides tags past that many studs (0 = always).
+Tags render as plain billboard UI, so **any executor works** — no Drawing API needed.
+Icons use `getcustomasset` when available and silently fall back to text-only otherwise.
