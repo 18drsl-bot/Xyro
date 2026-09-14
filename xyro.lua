@@ -8376,7 +8376,12 @@ local function ntBeat(manual)
 				seen[ntNormalize(msg)] = true
 			end
 		end
-				ntOnline = seen
+		-- ntfy is load-balanced: our own POST can land on a different edge
+		-- server than this poll reads, so the echo can miss self - the rebuild
+		-- must never drop the local player (this executor IS running the
+		-- script, which is the only fact presence needs for your own tag)
+		seen[ntNormalize(player.Name)] = true
+		ntOnline = seen
 	end
 	if not sent then
 		-- couldn't announce ourselves (no POST path on this executor):
