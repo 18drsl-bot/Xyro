@@ -737,7 +737,14 @@ async function fileToBlobURL(file) {
 	const head = await fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, { headers: { Authorization: "Bearer " + token } });
 	if (head.ok) return rawURL;
 	if (head.status !== 404) throw new Error("github said " + head.status);
-	const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+	/* chunked base64: spreading 100k+ bytes into String.fromCharCode
+	   blows the call stack on big GIFs */
+	const bytes = new Uint8Array(buf);
+	let bin = "";
+	for (let i = 0; i < bytes.length; i += 0x8000) {
+		bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+	}
+	const b64 = btoa(bin);
 	const put = await fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, {
 		method: "PUT",
 		headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
@@ -1016,13 +1023,33 @@ $("forgetToken").onclick = () => {
 $("tokenChip").onclick = () => $("tokenCard").scrollIntoView({ behavior: "smooth" });
 
 /* ---------- load / publish ---------- */
+/* the contents API returns an envelope {sha, content:"<base64>"} - decode
+   it to the real nametags.json. Falls back to raw.githubusercontent (plain
+   text, no sha) when the API is rate-limited or unreachable. */
+async function fetchConfig() {
+	try {
+		const res = await fetch(API + "?t=" + Date.now());
+		if (res.ok) {
+			const env = await res.json();
+			if (typeof env.content === "string") {
+				const bin = atob(env.content.replace(/\s/g, ""));
+				const bytes = new Uint8Array(bin.length);
+				for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+				const text = JSON.parse(new TextDecoder("utf-8").decode(bytes));
+				return { config: text, sha: env.sha };
+			}
+		}
+	} catch (_) { /* fall through to raw */ }
+	const res = await fetch("https://raw.githubusercontent.com/" + REPO + "/main/" + PATH + "?t=" + Date.now());
+	if (!res.ok) throw new Error("github " + res.status);
+	return { config: await res.json(), sha: null };
+}
+
 async function load() {
 	status("loading nametags.json from GitHub...", "info");
 	try {
-		const res = await fetch(API + "?t=" + Date.now());
-		if (!res.ok) { status("failed to load from GitHub (" + res.status + ")", "err"); return; }
-		const json = await res.json();
-		live = { options: json.options || {}, tags: Array.isArray(json.tags) ? json.tags : [] };
+		const json = await fetchConfig();
+		live = { options: json.config.options || {}, tags: Array.isArray(json.config.tags) ? json.config.tags : [] };
 		liveSha = json.sha;
 		/* the PUBLISHED rules always win on open - a stale draft must never
 		   masquerade as the live config. A differing draft is offered as an
@@ -1058,13 +1085,11 @@ async function load() {
    open rule editor. */
 let refreshing = false;
 async function refreshLive(sayIt) {
-	if (refreshing) return;
+	if (refreshing) return false;
 	refreshing = true;
 	try {
-		const res = await fetch(API + "?t=" + Date.now());
-		if (!res.ok) return;
-		const json = await res.json();
-		const fresh = { options: json.options || {}, tags: Array.isArray(json.tags) ? json.tags : [] };
+		const json = await fetchConfig();
+		const fresh = { options: json.config.options || {}, tags: Array.isArray(json.config.tags) ? json.config.tags : [] };
 		if (sameJSON(fresh, live)) return false;
 		const hadEdits = !sameJSON(cfg, live);
 		live = fresh;
