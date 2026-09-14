@@ -87,9 +87,38 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         # the tag editor calls this right after publishing to GitHub, so the
         # local copy is always the newest published state (never stale)
-        if self.path.split("?")[0] != "/sync":
-            self._send(404, b'{"error":"unknown endpoint"}', "application/json")
+        path = self.path.split("?")[0]
+        if path == "/sync":
+            self._do_sync()
             return
+        if path.startswith("/media/"):
+            self._do_media(path[len("/media/"):])
+            return
+        self._send(404, b'{"error":"unknown endpoint"}', "application/json")
+
+    def _do_media(self, name):
+        # the editor uploads media to GitHub, then mirrors the bytes here so
+        # the local fast lane can serve them without waiting for a git pull
+        import re
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}", name or "") or ".." in name:
+            self._send(400, b'{"error":"bad media name"}', "application/json")
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0 or length > 4 * 1024 * 1024:
+                raise ValueError("bad body size %d" % length)
+            raw = self.rfile.read(length)
+            os.makedirs(os.path.join(ROOT, "media"), exist_ok=True)
+            tmp = os.path.join(ROOT, "media", name + ".tmp")
+            with open(tmp, "wb") as f:
+                f.write(raw)
+            os.replace(tmp, os.path.join(ROOT, "media", name))
+            self._send(200, b'{"ok":true}', "application/json")
+            print("  [media] %s synced from editor (%d bytes)" % (name, length))
+        except Exception as e:
+            self._send(400, json.dumps({"error": str(e)}).encode(), "application/json")
+
+    def _do_sync(self):
         try:
             length = int(self.headers.get("Content-Length") or 0)
             if length <= 0 or length > 5 * 1024 * 1024:

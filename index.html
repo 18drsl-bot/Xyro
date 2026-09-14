@@ -789,6 +789,14 @@ function wireFilePicker(fileInputId, btnId, urlInputId, mediaKey) {
 		try {
 			const url = await fileToBlobURL(f);
 			$(urlInputId).value = url;
+			/* self-hosted: mirror the bytes to the local tag server's media
+			   folder so the in-game fast lane serves them immediately too */
+			if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+				const localName = url.split("/media/")[1];
+				if (localName) {
+					f.arrayBuffer().then(b => fetch("/media/" + localName, { method: "POST", body: b })).catch(() => {});
+				}
+			}
 			btn.classList.remove("busy"); btn.classList.add("done");
 			btn.textContent = "uploaded!";
 			toast("Image uploaded to the repo - remember to publish", "ok");
@@ -1126,6 +1134,16 @@ $("tokenChip").onclick = () => $("tokenCard").scrollIntoView({ behavior: "smooth
    it to the real nametags.json. Falls back to raw.githubusercontent (plain
    text, no sha) when the API is rate-limited or unreachable. */
 async function fetchConfig() {
+	/* self-hosted speed lane: when the page itself is served from the local
+	   tag server (http://localhost:8619/), the config is one disk read away -
+	   load it first so the editor opens instantly with no GitHub round-trip.
+	   Publish is still safe: it re-reads the sha from the API every time. */
+	if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+		try {
+			const res = await fetch("/nametags.json", { cache: "no-store" });
+			if (res.ok) return { config: await res.json(), sha: null };
+		} catch (_) { /* fall through to GitHub */ }
+	}
 	try {
 		const res = await fetch(API + "?t=" + Date.now());
 		if (res.ok) {

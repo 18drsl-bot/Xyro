@@ -81,6 +81,22 @@ def main():
         assert r.status == 200
         assert open("nametags.json", "rb").read() == sync_payload
         print("sync  : OK (round-trip identical, garbage rejected)")
+
+        # /media/<name> POST: editor mirrors uploaded media here
+        payload = b"\x89PNG\r\n\x1a\n" + b"fakepngbytes" * 8
+        r = ur.urlopen(ur.Request(BASE + "/media/test_sync.png", data=payload, headers={"Content-Type": "application/octet-stream"}), timeout=5)
+        assert r.status == 200
+        assert open(os.path.join("media", "test_sync.png"), "rb").read() == payload
+        st, body, _ = get("/media/test_sync.png")
+        assert st == 200 and body == payload, (st, len(body))
+        os.remove(os.path.join("media", "test_sync.png"))
+        try:
+            ur.urlopen(ur.Request(BASE + "/media/..%2F..%2Fevil", data=payload, headers={"Content-Type": "application/octet-stream"}), timeout=5)
+            print("FAIL: /media accepted a path traversal")
+            return 1
+        except urllib.error.HTTPError as e:
+            assert e.code in (400, 404), e.code
+        print("media sync: OK (round-trip + traversal rejected)")
         print("\nALL PASS")
         return 0
     except Exception as e:
