@@ -22,7 +22,7 @@
 		"clickTeleport": true,
 		"seeThroughWalls": true,
 		"collapseFar": true,
-		"collapseDistance": 60,
+		"collapseDistance": 40,
 		"collapsedIcon": 28,
 		"refreshSeconds": 15
 	},

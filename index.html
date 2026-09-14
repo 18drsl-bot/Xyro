@@ -433,8 +433,7 @@
 					<div><label>@username box roundness (0-24)</label><input id="optUBoxRadius" type="number" min="0" max="24" placeholder="8"></div>
 					<div><label>@username box border (hex or blank)</label><input id="optUBoxStroke" placeholder="none"></div>
 				</div>
-				<div class="row">
-					<div><label>Collapse distance (studs, 0 = off)</label><input id="optCollapseDist" type="number" min="0" placeholder="60"></div>
+				<div class="row">						<div><label>Collapse distance (studs, 0 = off)</label><input id="optCollapseDist" type="number" min="0" placeholder="40"></div>
 					<div><label>Collapsed icon size (px)</label><input id="optCollapseIcon" type="number" min="16" max="128" placeholder="28"></div>
 					<div><label>Tag refresh every (sec, 10&ndash;300)</label><input id="optRefresh" type="number" min="10" max="300" placeholder="15"></div>
 				</div>
@@ -779,8 +778,8 @@ function renderOptions() {
 	$("optScriptUsers").checked = o.onlyScriptUsers !== false;
 	$("optClickTp").checked = o.clickTeleport !== false;
 	$("optWalls").checked = o.seeThroughWalls !== false;
-	$("optCollapse").checked = (o.collapseDistance != null ? o.collapseDistance : 60) > 0;
-	$("optCollapseDist").value = o.collapseDistance != null ? o.collapseDistance : 60;
+	$("optCollapse").checked = (o.collapseDistance != null ? o.collapseDistance : 40) > 0;
+	$("optCollapseDist").value = o.collapseDistance != null ? o.collapseDistance : 40;
 	$("optCollapseIcon").value = o.collapsedIcon != null ? o.collapsedIcon : 28;
 	$("optRefresh").value = o.refreshSeconds != null ? o.refreshSeconds : 15;
 }

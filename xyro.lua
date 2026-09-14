@@ -7252,7 +7252,7 @@ local ntOpts = {
 	userBoxTransparency = 0.25,
 	userBoxRadius = 8,
 	userBoxStroke = "",
-	collapseDistance = 60, -- closer than this the full pill shows; 0 = never collapse
+	collapseDistance = 40, -- closer than this the full pill shows; 0 = never collapse
 	collapsedIcon = 28, -- avatar-only size while collapsed (still click-teleports)
 }
 
@@ -7320,7 +7320,7 @@ local function ntApplyOptions(o)
 	ntOpts.userBoxTransparency = math.clamp(tonumber(o.userBoxTransparency) or 0.25, 0, 1)
 	ntOpts.userBoxRadius = math.clamp(tonumber(o.userBoxRadius) or 8, 0, 24)
 	ntOpts.userBoxStroke = tostring(o.userBoxStroke or "")
-	ntOpts.collapseDistance = math.max(tonumber(o.collapseDistance) or 60, 0)
+	ntOpts.collapseDistance = math.max(tonumber(o.collapseDistance) or 40, 0)
 	ntOpts.collapsedIcon = math.clamp(tonumber(o.collapsedIcon) or 28, 16, 128)
 	ntOpts.collapseFar = o.collapseFar ~= false
 	if not ntOpts.collapseFar then
@@ -8113,10 +8113,10 @@ local function ntBuild(plr, rule)
 	if type(rule.userText) == "string" and rule.userText ~= "" then
 		userText0 = rule.userText:sub(1, 1) == "@" and rule.userText or ("@" .. rule.userText)
 	end
-	local nameW = ntTextWidth(shownName, nameSize, font)
-	local userW = ntTextWidth(userText0, userSize, Enum.Font.Gotham)
+	local nameW = math.min(ntTextWidth(shownName, nameSize, font), 150) -- cap so long labels never stretch the pill
+	local userW = math.min(ntTextWidth(userText0, userSize, Enum.Font.Gotham), 150)
 	local badgeW = rule.badge and (ntIsStaff(plr) and (nameSize + 6) or 16) or 0
-	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 420)
+	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 260)
 
 	local bb = Instance.new("BillboardGui")
 	bb.Name = "XyroTag"
@@ -8337,10 +8337,10 @@ local function ntBuild(plr, rule)
 	local o = { gui = bb, head = head, pill = pill, stroke = stroke, shadow = shadow, name = name, user = user, avatar = avatar, bgImg = bgImg }
 
 	-- distance collapse: beyond collapseDistance the pill shrinks to the
-	-- avatar alone (name/user rows hidden) but stays click-teleportable;
-	-- walk closer and it expands again. openObject keeps the pill full-size
-	-- while the user is interacting with it.
-	if ntOpts.collapseDistance > 0 and plr ~= player then
+	-- avatar alone (name/user rows hidden) - zooming out triggers it too,
+	-- and it applies to YOUR OWN tag as well. Others' icons stay click-
+	-- teleportable; openObject keeps the pill full-size while interacting.
+	if ntOpts.collapseDistance > 0 then
 		o.openObject = Instance.new("BoolValue")
 		o.openObject.Name = "XyroTagOpen"
 		o.openObject.Value = true
@@ -8374,13 +8374,15 @@ local function ntBuild(plr, rule)
 		o.collapsed = collapsed
 		o.baseSize = bb.Size
 		o.collapsedIconSize = ntOpts.collapsedIcon
-		collapsed.MouseButton1Click:Connect(function()
-			local target = plr.Character and (plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Torso"))
-			local me = player.Character and (player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChild("Torso"))
-			if target and me then
-				me.CFrame = target.CFrame + Vector3.new(0, 2.5, 0)
-			end
-		end)
+		if plr ~= player then -- no teleporting to yourself
+			collapsed.MouseButton1Click:Connect(function()
+				local target = plr.Character and (plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Torso"))
+				local me = player.Character and (player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChild("Torso"))
+				if target and me then
+					me.CFrame = target.CFrame + Vector3.new(0, 2.5, 0)
+				end
+			end)
+		end
 	end
 
 	-- avatar: custom icon, else Roblox headshot thumbnail
@@ -8606,7 +8608,7 @@ connect(RunService.RenderStepped, function(dt)
 					-- Hover the mouse near the icon and the full pill expands
 					-- again until the mouse moves off it (screen-space check:
 					-- a raycast would false-positive on empty sky).
-					local wantCollapsed = ntOpts.collapseDistance > 0 and o.collapsed ~= nil and dist > ntOpts.collapseDistance
+					local wantCollapsed = ntOpts.collapseDistance > 0 and o.collapsed ~= nil and dist > ntOpts.collapseDistance -- includes self: zoom out and your pill collapses to the icon too
 					local hoverOpen = false
 					if wantCollapsed and o.collapsedState and mouse then
 						local okPt, sp = pcall(function()
