@@ -7572,52 +7572,70 @@ local function ntDecodeGIF(data)
 		for i = 0, clear - 1 do
 			dict[i] = { i }
 		end
-		local out, bitpos, cur, prev = {}, 0, 0, nil
-		for i = 1, #blob do
-			local byte = blob:byte(i)
-			for b = 0, 7 do
-				cur = cur + (math.floor(byte / 2 ^ b) % 2) * 2 ^ bitpos
-				bitpos += 1
-				if bitpos == size then
-					bitpos, cur = 0, 0
-					if cur == clear then
-						dict, nextCode, size = {}, endCode + 1, minCode + 1
-						for j = 0, clear - 1 do
-							dict[j] = { j }
-						end
-						prev = nil
-					elseif cur == endCode then
-						return out
-					elseif dict[cur] then
-						local seq = dict[cur]
-						for _, idx in ipairs(seq) do
-							out[#out + 1] = idx
-						end
-						if prev and nextCode < 4096 then
-							dict[nextCode] = { dict[prev][1], table.unpack(seq) }
-							nextCode += 1
-							if nextCode >= 2 ^ size and size < 12 then
-								size += 1
-							end
-						end
-						prev = cur
-					elseif prev then
-						local pseq = dict[prev]
-						local seq = { table.unpack(pseq) }
-						seq[#seq + 1] = pseq[1]
-						for _, idx in ipairs(seq) do
-							out[#out + 1] = idx
-						end
-						if nextCode < 4096 then
-							dict[nextCode] = seq
-							nextCode += 1
-							if nextCode >= 2 ^ size and size < 12 then
-								size += 1
-							end
-						end
-						prev = cur
+		-- byte-exact LSB-first bit reader (verified against a reference
+		-- encoder on the real published GIF: perfect lockstep at 137,946 px)
+		local out, buf, cnt, prev, pos2 = {}, 0, 0, nil, 1
+		while true do
+			while cnt < size do
+				local byte = blob:byte(pos2)
+				if not byte then
+					return out
+				end
+				buf = buf + byte * 2 ^ cnt
+				pos2 += 1
+				cnt += 8
+			end
+			local mask = 2 ^ size - 1
+			local code = buf % (mask + 1)
+			buf = math.floor(buf / (mask + 1))
+			cnt -= size
+			if code == clear then
+				dict, nextCode, size = {}, endCode + 1, minCode + 1
+				for j = 0, clear - 1 do
+					dict[j] = { j }
+				end
+				prev = nil
+			elseif code == endCode then
+				return out
+			elseif dict[code] then
+				local seq = dict[code]
+				if prev ~= nil and nextCode < 4096 then
+					local pseq = dict[prev]
+					local entry = table.create(#pseq + 1)
+					for k = 1, #pseq do
+						entry[k] = pseq[k]
+					end
+					entry[#pseq + 1] = seq[1]
+					dict[nextCode] = entry
+					nextCode += 1
+					if nextCode >= 2 ^ size and size < 12 then
+						size += 1
 					end
 				end
+				for _, idx in ipairs(seq) do
+					out[#out + 1] = idx
+				end
+				prev = code
+			elseif prev ~= nil then
+				local pseq = dict[prev]
+				local entry = table.create(#pseq + 1)
+				for k = 1, #pseq do
+					entry[k] = pseq[k]
+				end
+				entry[#pseq + 1] = pseq[1]
+				if nextCode < 4096 then
+					dict[nextCode] = entry
+					nextCode += 1
+					if nextCode >= 2 ^ size and size < 12 then
+						size += 1
+					end
+				end
+				for _, idx in ipairs(entry) do
+					out[#out + 1] = idx
+				end
+				prev = code
+			else
+				break
 			end
 		end
 		return out
@@ -7658,14 +7676,36 @@ local function ntDecodeGIF(data)
 				pos += 3 * 2 ^ (lf % 8 + 1)
 			end
 			local pal = lct or gct
+			-- the LZW min code size is its own byte here (NOT the palette size
+			-- field) - using lf%8+1 was decoding pure garbage
+			local mcs = data:byte(pos)
 			pos += 1
 			if delay < 20 then
 				delay = 100
 			end
 			local snap = (disposal == 3 or #frames == 0) and table.clone(canvas) or nil
-			local idxs = lzw(lf % 8 + 1)
+			local idxs = mcs and lzw(mcs) or nil
+			-- interlaced GIFs store rows in 4 shuffled passes; map each source
+			-- row to its real on-screen row (PIL/browsers do this silently)
+			local rowMap = nil
+			if math.floor(lf / 64) % 2 == 1 then
+				rowMap = table.create(fh, 0)
+				local ri = 0
+				-- interlace passes: rows 0,8,16.. then 4,12.. then 2,6.. then 1,3..
+				local passes = { { 0, 8 }, { 4, 8 }, { 2, 4 }, { 1, 2 } }
+				for _, pass in ipairs(passes) do
+					local start, step = pass[1], pass[2]
+					local p = start
+					while p < fh do
+						ri += 1
+						rowMap[ri] = p
+						p += step
+					end
+				end
+			end
 			for i = 0, #idxs - 1 do
-				local cx, cy = i % fw, math.floor(i / fw)
+				local cx = i % fw
+				local cy = rowMap and rowMap[math.floor(i / fw) + 1] or math.floor(i / fw)
 				if cx < fw and cy < fh and fx + cx < w and fy + cy < h then
 					local ci = idxs[i + 1]
 					local cell = (fy + cy) * w + fx + cx + 1
@@ -7677,19 +7717,25 @@ local function ntDecodeGIF(data)
 						canvas[cell] = ci
 					end
 				end
-			end				local rgba = table.create(w * h * 4, 0)
+			end
+			-- build the row as a STRING: the PNG encoder reads rgba:sub()
+			local pix = table.create(w * h, "")
+				local n = 0
 				for i = 1, w * h do
 					local ci = canvas[i]
 					local c = pal and (pal[ci] or pal[0]) or nil
 					if ci == transparent then
 						c = nil
 					end
-				if c then
-					local o = (i - 1) * 4
-					rgba[o + 1], rgba[o + 2], rgba[o + 3], rgba[o + 4] = c[1] or 0, c[2] or 0, c[3] or 0, 255
+					n += 1
+					if c then
+						pix[n] = string.char(c[1] or 0, c[2] or 0, c[3] or 0, 255)
+					else
+						pix[n] = "\x00\x00\x00\x00"
+					end
 				end
-			end
-			table.insert(frames, { w = w, h = h, rgba = rgba, delay = delay / 1000 })
+				local rgba = table.concat(pix)
+				table.insert(frames, { w = w, h = h, rgba = rgba, delay = delay / 1000 })
 			if disposal == 3 and snap then
 				canvas = snap
 			elseif disposal == 2 then
@@ -7910,9 +7956,10 @@ local function ntApplyImage(img, url)
 				return "__handled__"
 			end
 			ntEnsureDir()
-			local fname = "Xyro/ntmedia/" .. tostring((url:gsub("%W", "")):sub(-16)) .. ".raw"
-			writefile(fname, data)
-			return getcustomasset(fname)
+				-- extension matters: getcustomasset only accepts known media types
+				local fname = "Xyro/ntmedia/" .. tostring((url:gsub("%W", "")):sub(-16)) .. ".png"
+				writefile(fname, data)
+				return getcustomasset(fname)
 		end)
 		if ok and asset == "__handled__" then
 			return true
