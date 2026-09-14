@@ -7133,7 +7133,8 @@ end
 -- colors, backgrounds and badge. Only drawn over confirmed script users.
 local Players = Players or game:GetService("Players")
 local RunService = RunService or game:GetService("RunService")
-local NT_RAW_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/nametags.json"
+local NT_RAW_URL = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/nametags.json" -- fast global edge (jsDelivr); editor purges its cache on every publish so this is never stale
+local NT_FALLBACK_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/nametags.json" -- used if jsDelivr hiccups
 local NT_API_URL = "https://api.github.com/repos/vertxxy-1/Xyro/contents/nametags.json"
 local NT_ACCENT = Color3.fromRGB(108, 128, 255)
 
@@ -7394,7 +7395,7 @@ local function ntFetch(manual)
 		text = ntFromAPI(ntHttpGet(NT_API_URL) or "")
 	end
 	if not text then
-		text = ntHttpGet(NT_RAW_URL .. "?t=" .. tostring(os.time()))
+		text = ntHttpGet(NT_FALLBACK_URL .. "?t=" .. tostring(os.time()))
 	end
 	if not text or #text == 0 then
 		return manual and "fetch failed (no HttpGet on this executor?)" or nil
@@ -7931,6 +7932,9 @@ local function ntDataFromUri(url)
 end
 
 local function ntApplyImage(img, url)
+	-- serve repo media from jsDelivr's edge instead of raw.githubusercontent
+	-- (faster worldwide, same file)
+	url = url:gsub("^https://raw%.githubusercontent%.com/([%w%-%_%.]+)/([%w%-%_%.]+)/main/", "https://cdn.jsdelivr.net/gh/%1/%2@main/")
 	if url:match("^%d+$") then
 		url = "rbxassetid://" .. url
 	end

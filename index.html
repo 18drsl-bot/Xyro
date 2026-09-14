@@ -730,7 +730,7 @@ async function fileToBlobURL(file) {
 	const name = [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, "0")).join("");
 	const ext = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "") || "png";
 	const path = "media/" + name + "." + ext;
-	const rawURL = "https://raw.githubusercontent.com/" + REPO + "/main/" + path;
+	const rawURL = "https://cdn.jsdelivr.net/gh/" + REPO + "@main/" + path; // fast global edge instead of raw.githubusercontent
 	const token = getToken();
 	if (!token) throw Object.assign(new Error("no token"), { code: "notoken" });
 	// file already in the repo? then its URL is instantly valid
@@ -1165,8 +1165,10 @@ $("publishBtn").onclick = async () => {
 		localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
 		$("draftBtn").classList.add("hidden");
 		renderAll();
-		status("published! in game within 60s - or run !nametagsfetch now", "ok");
-		toast("Published to GitHub", "ok");
+		/* kick the game's CDN so the update lands in seconds, not minutes */
+		fetch("https://purge.jsdelivr.net/gh/" + REPO + "@main/" + PATH).catch(() => {});
+		status("published! in game in seconds - or run !nametagsfetch now", "ok");
+		toast("Published + CDN purged - live in seconds", "ok");
 	} catch (e) {
 		status("network error: " + e, "err");
 	}
