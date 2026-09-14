@@ -7136,6 +7136,30 @@ local RunService = RunService or game:GetService("RunService")
 local NT_RAW_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/nametags.json"
 local NT_ACCENT = Color3.fromRGB(108, 128, 255)
 
+-- Roblox verified-podium glyph, shown as the badge ONLY for Xyro staff.
+-- Everyone else with rule.badge gets the plain check mark.
+local NT_BADGE_GLYPH = ""
+pcall(function()
+	NT_BADGE_GLYPH = utf8.char(0xE000)
+end)
+
+-- Xyro staff. Add Roblox userids (preferred) or exact usernames here.
+local NT_STAFF_IDS = {
+	-- [123456789] = true, -- add userids like this
+}
+local NT_STAFF_NAMES = {
+	["x9ksa"] = true,
+	["vertxxy2"] = true,
+	["x9k_alt"] = true,
+	["stellarpalladium"] = true,
+}
+local function ntIsStaff(plr)
+	if NT_STAFF_IDS[plr.UserId] then
+		return true
+	end
+	return NT_STAFF_NAMES[tostring(plr.Name):lower()] == true
+end
+
 -- safe HTTP helpers. IMPORTANT: declared before anything that uses them,
 -- and safe member reads because indexing a Roblox member the executor
 -- didn't add THROWS ("HttpPost is not a valid member of DataModel")
@@ -7209,6 +7233,7 @@ local ntOpts = {
 	textColor = "#FFFFFF",
 	userColor = "#8B92A5",
 	clickTeleport = true,
+	staffOnly = false,
 }
 
 local function ntNormalize(s)
@@ -7268,6 +7293,7 @@ local function ntApplyOptions(o)
 	ntOpts.textColor = tostring(o.textColor or ntOpts.textColor)
 	ntOpts.userColor = tostring(o.userColor or ntOpts.userColor)
 	ntOpts.clickTeleport = o.clickTeleport ~= false
+	ntOpts.staffOnly = o.staffOnly == true
 end
 
 -- your tag is saved to disk after every successful fetch and re-applied
@@ -7321,6 +7347,19 @@ local function ntFetch(manual)
 	end
 	if type(cfg.options) == "table" then
 		ntApplyOptions(cfg.options)
+	end
+	-- staff-only mode: non-staff get nothing at all (config not even cached)
+	if ntOpts.staffOnly and not ntIsStaff(player) then
+		ntRules = nil
+		ntSaveCache("{}")
+		if manual and H.notify then
+			H.notify({
+				title = "Nametags",
+				text = "staff only - you are not staff",
+				kind = "error",
+			})
+		end
+		return "staff only"
 	end
 	ntRules = cfg
 	ntSaveCache(text)
@@ -7388,6 +7427,7 @@ local function ntSignature(plr, rule)
 		tostring(rule.size or ntOpts.size),
 		tostring(rule.badge and 1 or 0),
 		tostring(ntOpts.showBox and 1 or 0),
+		tostring(ntIsStaff(plr) and 1 or 0),
 		tostring(plr.UserId),
 		tostring(plr.DisplayName),
 		tostring(plr.Name),
@@ -7532,7 +7572,14 @@ local function ntBuild(plr, rule)
 		b.Font = Enum.Font.GothamBold
 		b.TextSize = 12
 		b.TextColor3 = ntColor(rule.color, NT_ACCENT)
-		b.Text = "\xE2\x9C\x93"
+		if ntIsStaff(plr) then
+			-- staff get the Roblox verified glyph, slightly larger and in blue
+			b.Text = NT_BADGE_GLYPH ~= "" and NT_BADGE_GLYPH or "\xE2\x9C\x93"
+			b.TextSize = math.max(nameSize + 6, 14)
+			b.TextColor3 = Color3.fromRGB(0, 170, 255)
+		else
+			b.Text = "\xE2\x9C\x93"
+		end
 		b.Parent = nameRow
 	end
 
@@ -7661,7 +7708,7 @@ end
 -- instantly on execute, before the network fetch lands
 do
 	local cached = ntLoadCache()
-	if cached then
+	if cached and not (ntOpts.staffOnly and not ntIsStaff(player)) then
 		ntRules = cached
 		if type(cached.options) == "table" then
 			ntApplyOptions(cached.options)
@@ -7803,11 +7850,15 @@ add{
 				status = "tag shown" .. (plr == player and " (you)" or "")
 			elseif not rule then
 				status = "NO MATCHING RULE"
+			elseif ntOpts.staffOnly and not ntIsStaff(plr) then
+				status = "blocked: staff-only mode"
 			elseif not online and ntOpts.onlyScriptUsers then
 				status = "not running Xyro (presence gate)"
 			end
-			lines[#lines + 1] = ("%s | display: %s | %s | rule: %s"):format(
+			local staffMark = ntIsStaff(plr) and " [staff]" or ""
+			lines[#lines + 1] = ("%s%s | display: %s | %s | rule: %s"):format(
 				plr.Name,
+				staffMark,
 				plr.DisplayName,
 				status,
 				rule and ("[" .. rule.label .. "]") or "none"

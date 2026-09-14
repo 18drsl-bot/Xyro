@@ -68,14 +68,16 @@ run `!nametagsfetch` for instant reload.
 `label` (text above the head) · `color` (border color) · `image` (icon: https URL,
 asset id, or rbxassetid) · `bg` / `bgTransparency` (pill background) · `size` (name
 size) · `userSize` · `font` (GothamBlack, Bangers, Arcade, ...) · `textColor` ·
-`userColor` · `badge` (check mark) · `height` · `imageSize`. First matching rule wins —
+`userColor` · `badge` (mark after the name — Xyro staff get the Roblox verified glyph,
+everyone else a plain check) · `height` · `imageSize`. First matching rule wins —
 put exact names above the `*` catch-all.
 
 **Options:** `size` · `userSize` · `height` · `imageSize` · `maxDistance` (studs, 0 =
 always) · `showDistance` · `showHealth` · `showBox` (pill background on/off) ·
 `onlyScriptUsers` (tags require presence — set false to tag everyone matching) ·
 `pillColor` / `pillTransparency` (defaults for rules without `bg`) · `font` ·
-`textColor` · `userColor` · `clickTeleport` (click a pill to teleport to that player).
+`textColor` · `userColor` · `clickTeleport` (click a pill to teleport to that player) · `staffOnly` (when true,
+only Xyro staff get tags at all — non-staff see nothing, cache nothing).
 
 Tags render as plain billboard UI, so **any executor works** — no Drawing API needed.
 Icons use `getcustomasset` when available and silently fall back to text-only otherwise.
