@@ -8,15 +8,13 @@
 		"onlyScriptUsers": true,
 		"pillColor": "#0000BD",
 		"pillTransparency": 0.12,
-		"imageSize": 20,
-		"seeThroughWalls": true,
-		"staffOnly": false
+		"imageSize": 20
 	},
 	"tags": [
 		{
 			"match": "Vertxxy2",
 			"label": "Vert",
-			"color": "#3D27B0",
+			"color": "#6C80FF",
 			"badge": true
 		},
 		{
@@ -24,7 +22,8 @@
 			"label": "x9k",
 			"color": "#DEDEDE",
 			"badge": true,
-			"bg": "#07070E"
+			"bg": "#07070E",
+			"image": "https://i.imgur.com/fN8ZDcZ.jpeg"
 		}
 	]
 }
