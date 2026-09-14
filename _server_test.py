@@ -12,9 +12,9 @@ BASE = "http://localhost:8619"
 def get(path, expect=200):
     try:
         r = urllib.request.urlopen(BASE + path, timeout=5)
-        return r.status, r.read(), dict(r.headers)
+        return r.status, r.read(), {k.lower(): v for k, v in r.headers.items()}
     except urllib.error.HTTPError as e:
-        return e.code, e.read(), dict(e.headers)
+        return e.code, e.read(), {k.lower(): v for k, v in e.headers.items()}
 
 
 def wait_up(deadline=10.0):
@@ -42,7 +42,7 @@ def main():
         cfg = json.loads(body)
         assert st == 200 and isinstance(cfg, dict), (st, type(cfg))
         assert isinstance(cfg.get("tags"), list), "tags missing"
-        assert hdrs.get("Cache-Control") == "no-store", hdrs.get("Cache-Control")
+        assert hdrs.get("cache-control") == "no-store", hdrs.get("cache-control")
         print("config: OK (%d rules, no-store)" % len(cfg["tags"]))
 
         import os
@@ -57,6 +57,14 @@ def main():
         st, body, _ = get("/does-not-exist")
         assert st == 404, st
         print("404   : OK")
+
+        # / must serve the tag editor itself (index.html from this folder)
+        st, body, hdrs = get("/")
+        text = body.decode("utf-8", "replace")
+        assert st == 200 and "<html" in text.lower(), (st, len(body))
+        assert hdrs.get("content-type", "").startswith("text/html"), hdrs.get("content-type")
+        assert "Xyro" in text or "xyro" in text.lower(), "editor html marker missing"
+        print("editor: OK (/ serves index.html as %s)" % hdrs.get("content-type"))
 
         # /sync must update the local file and reject garbage
         import urllib.request as ur

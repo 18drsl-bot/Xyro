@@ -7,6 +7,11 @@ instant reads (localhost, no internet round-trip). Everyone else keeps
 using the GitHub CDN. The script tries localhost first and falls back
 automatically, so leaving this running is always safe.
 
+It also hosts the TAG EDITOR itself: http://localhost:8619/ serves
+index.html straight from this folder - the full editor, loaded from your
+disk (no GitHub Pages round-trip). Publishing from it still writes to
+GitHub, so the two copies always agree.
+
 Run:   python _server.py
 Stop:  Ctrl+C
 """
@@ -40,6 +45,16 @@ class Handler(SimpleHTTPRequestHandler):
 
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=ROOT, **kw)
+
+    # Windows Python guesses types from the registry, which can be broken
+    # (missing/bogus .html mapping) - pin the ones we actually serve
+    def guess_type(self, path):
+        low = path.lower()
+        if low.endswith(".html") or low.endswith(".htm"):
+            return "text/html"
+        if low.endswith(".json"):
+            return "application/json"
+        return super().guess_type(path)
 
     # no caching: localhost is instant anyway, and edits show up on the
     # very next !nametagsfetch
@@ -129,12 +144,15 @@ def main():
         print("port %d busy (%s) - is the server already running?" % (PORT, e))
         sys.exit(1)
     print("Xyro local tag server")
+    print("  editor : http://localhost:%d/            <- full tag editor, served from this PC" % PORT)
     print("  config : http://localhost:%d/nametags.json" % PORT)
     if HOST == "0.0.0.0":
         for ip in lan_ips():
             print("           http://%s:%d/nametags.json  (LAN)" % (ip, PORT))
     print("  media  : http://localhost:%d/media/<file>" % PORT)
     print("  sync   : POST /sync (the tag editor updates your local copy on publish)")
+    print("  note   : the local editor keeps its own saved token (browser storage is" )
+    print("           per-origin) - paste your GitHub token once in the local copy")
     print("  root   : %s" % ROOT)
     print("  bound to %s (set XYRO_LAN=1 to share on your network)" % HOST)
     print("  Ctrl+C to stop. Game script falls back to the GitHub CDN")
