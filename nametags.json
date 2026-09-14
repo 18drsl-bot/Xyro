@@ -8,7 +8,9 @@
 		"onlyScriptUsers": true,
 		"pillColor": "#0000BD",
 		"pillTransparency": 0.12,
-		"imageSize": 20
+		"imageSize": 20,
+		"seeThroughWalls": true,
+		"staffOnly": false
 	},
 	"tags": [
 		{

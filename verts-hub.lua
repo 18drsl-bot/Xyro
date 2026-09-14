@@ -7234,6 +7234,7 @@ local ntOpts = {
 	textColor = "#FFFFFF",
 	userColor = "#8B92A5",
 	clickTeleport = true,
+	seeThroughWalls = true,
 	staffOnly = false,
 }
 
@@ -7294,6 +7295,7 @@ local function ntApplyOptions(o)
 	ntOpts.textColor = tostring(o.textColor or ntOpts.textColor)
 	ntOpts.userColor = tostring(o.userColor or ntOpts.userColor)
 	ntOpts.clickTeleport = o.clickTeleport ~= false
+	ntOpts.seeThroughWalls = o.seeThroughWalls ~= false
 	ntOpts.staffOnly = o.staffOnly == true
 end
 
@@ -7484,6 +7486,7 @@ local function ntSignature(plr, rule)
 		tostring(rule.badge and 1 or 0),
 		tostring(ntOpts.showBox and 1 or 0),
 		tostring(ntIsStaff(plr) and 1 or 0),
+		tostring(ntOpts.seeThroughWalls and 1 or 0),
 		tostring(plr.UserId),
 		tostring(plr.DisplayName),
 		tostring(plr.Name),
@@ -7557,7 +7560,10 @@ local function ntBuild(plr, rule)
 	bb.Adornee = head
 	bb.Size = UDim2.fromOffset(width, height)
 	bb.StudsOffset = Vector3.new(0, 2.4, 0)
-	bb.AlwaysOnTop = true
+	-- AlwaysOnTop = visible through walls; Active = REQUIRED for the pill
+	-- to receive clicks (without it TP-on-click silently does nothing)
+	bb.AlwaysOnTop = ntOpts.seeThroughWalls
+	bb.Active = ntOpts.clickTeleport and plr ~= player
 	bb.LightInfluence = 0
 	bb.MaxDistance = ntOpts.maxDistance > 0 and ntOpts.maxDistance or 10000
 	bb.Enabled = false
@@ -7669,6 +7675,7 @@ local function ntBuild(plr, rule)
 		click.BackgroundTransparency = 1
 		click.Text = ""
 		click.AutoButtonColor = false
+		click.Active = true
 		click.ZIndex = 10
 		click.Parent = pill
 		click.MouseButton1Click:Connect(function()

@@ -422,6 +422,7 @@
 					<label><input id="optBox" type="checkbox" checked> pill background</label>
 					<label><input id="optScriptUsers" type="checkbox" checked> only tag script users</label>
 					<label><input id="optClickTp" type="checkbox" checked> click pill = teleport</label>
+					<label><input id="optWalls" type="checkbox" checked> see through walls</label>
 				</div>
 				<div class="hint">Options apply to everyone; per-rule settings override them.</div>
 			</div>
@@ -644,6 +645,7 @@ function renderOptions() {
 	$("optBox").checked = o.showBox !== false;
 	$("optScriptUsers").checked = o.onlyScriptUsers !== false;
 	$("optClickTp").checked = o.clickTeleport !== false;
+	$("optWalls").checked = o.seeThroughWalls !== false;
 }
 
 function renderDirty() {
@@ -764,7 +766,7 @@ function moveRule(i, dir) {
 
 /* ---------- options wiring ---------- */
 /* merge with existing options so keys the form doesn't own survive a publish */
-["optSize", "optUserSize", "optHeight", "optFont", "optDist", "optImgSize", "optPillColor", "optPillTrans", "optTextColor", "optUserColor", "optDistOn", "optHp", "optBox", "optScriptUsers", "optClickTp"].forEach(id => {
+["optSize", "optUserSize", "optHeight", "optFont", "optDist", "optImgSize", "optPillColor", "optPillTrans", "optTextColor", "optUserColor", "optDistOn", "optHp", "optBox", "optScriptUsers", "optClickTp", "optWalls"].forEach(id => {
 	$(id).addEventListener("input", () => {
 		cfg.options = Object.assign({}, cfg.options, readOptions());
 		changed("options");
@@ -788,6 +790,7 @@ function readOptions() {
 		textColor: $("optTextColor").value.toUpperCase(),
 		userColor: $("optUserColor").value.toUpperCase(),
 		clickTeleport: $("optClickTp").checked,
+		seeThroughWalls: $("optWalls").checked,
 	};
 }
 
