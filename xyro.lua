@@ -87,6 +87,15 @@ H.keyFor = function(action)
 	return "-"
 end
 
+-- "Custom gravity [G]" normally; when no key is bound, no dangling brackets
+H.keySuffix = function(action)
+	local k = H.keyFor(action)
+	if k == "-" then
+		return ""
+	end
+	return " [" .. k .. "]"
+end
+
 H.setBind = function(action, keyName)
 	for k, v in pairs(H.Binds) do
 		if v == action then
@@ -1346,7 +1355,7 @@ local speedEnabled = false
 
 local speedRow = row(speedPage, 0, "CFrame movement")
 H.keyRefreshers[#H.keyRefreshers + 1] = function()
-	speedRow.Text = "CFrame movement [" .. H.keyFor("cframe") .. "]"
+	speedRow.Text = "CFrame movement" .. H.keySuffix("cframe")
 end
 local toggleSpeed = select(2, makeSwitch(speedPage, 0, false, function(on)
 	speedEnabled = on
@@ -1432,7 +1441,7 @@ local applyingGravity = false
 
 local gravRow = row(gravPage, 0, "Custom gravity")
 H.keyRefreshers[#H.keyRefreshers + 1] = function()
-	gravRow.Text = "Custom gravity [" .. H.keyFor("gravity") .. "]"
+	gravRow.Text = "Custom gravity" .. H.keySuffix("gravity")
 end
 
 row(gravPage, 36, "Gravity (0-500)")
@@ -7077,8 +7086,7 @@ local hubRunCommand
 
 local cmdBox = make("TextBox", {
 	Size = UDim2.new(0, 190, 0, 26),
-	Position = UDim2.new(0, 40, 1, -32),
-	BackgroundColor3 = COL.element,
+	Position = UDim2.new(1, -212, 1, -32), -- right-aligned, just left of the Unload button
 	Font = Enum.Font.Gotham,
 	TextSize = 12,
 	TextColor3 = COL.text,
