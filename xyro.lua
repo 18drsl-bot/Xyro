@@ -7572,6 +7572,7 @@ local function ntSignature(plr, rule)
 		tostring(rule.bgTransparency or ntOpts.pillTransparency),
 		tostring(rule.image or ""),
 		tostring(rule.bgImage or ""),
+		tostring(rule.userText or ""),
 		tostring((rule.userBox == nil and ntOpts.userBox or rule.userBox) and 1 or 0),
 		tostring(rule.userBoxColor or ntOpts.userBoxColor),
 		tostring(rule.userBoxTransparency or ntOpts.userBoxTransparency),
@@ -8106,8 +8107,14 @@ local function ntBuild(plr, rule)
 		height = math.min(iconSize + 8, 160)
 	end
 
+	-- custom @line: rule.userText replaces the real @username (a leading @
+	-- is optional); blank/absent keeps the genuine @username
+	local userText0 = "@" .. plr.Name
+	if type(rule.userText) == "string" and rule.userText ~= "" then
+		userText0 = rule.userText:sub(1, 1) == "@" and rule.userText or ("@" .. rule.userText)
+	end
 	local nameW = ntTextWidth(shownName, nameSize, font)
-	local userW = ntTextWidth("@" .. plr.Name, userSize, Enum.Font.Gotham)
+	local userW = ntTextWidth(userText0, userSize, Enum.Font.Gotham)
 	local badgeW = rule.badge and (ntIsStaff(plr) and (nameSize + 6) or 16) or 0
 	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 420)
 
@@ -8296,7 +8303,7 @@ local function ntBuild(plr, rule)
 	user.TextYAlignment = Enum.TextYAlignment.Center
 	user.TextColor3 = ntColor(rule.userColor, ntColor(ntOpts.userColor, Color3.fromRGB(139, 146, 165)))
 	user.TextTruncate = Enum.TextTruncate.AtEnd
-	user.Text = "@" .. plr.Name
+	user.Text = userText0
 	if userBox then
 		user.Position = UDim2.fromOffset(6, 0)
 		user.Size = UDim2.new(1, -12, 0, USER_H)
@@ -8626,7 +8633,11 @@ connect(RunService.RenderStepped, function(dt)
 							suffix[#suffix + 1] = math.floor(dist + 0.5) .. "m"
 						end
 						local info = table.concat(suffix, " | ")
-						local newText = "@" .. plr.Name .. (#info > 0 and ("   " .. info) or "")
+						local userBase = "@" .. plr.Name
+						if type(rule.userText) == "string" and rule.userText ~= "" then
+							userBase = rule.userText:sub(1, 1) == "@" and rule.userText or ("@" .. rule.userText)
+						end
+						local newText = userBase .. (#info > 0 and ("   " .. info) or "")
 						if o.user.Text ~= newText then
 							o.user.Text = newText
 						end

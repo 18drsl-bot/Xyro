@@ -527,6 +527,10 @@
 							<option value="false">hide</option>
 						</select>
 					</div>
+					<div>
+						<label>Custom @line (blank = real @username)</label>
+						<input id="fUserText" placeholder="@anything-you-want">
+					</div>
 					<div class="checks" style="grid-column:1/-1">
 						<label><input id="fBadge" type="checkbox"> show check badge next to name</label>
 					</div>
@@ -662,7 +666,7 @@ function renderPreview() {
 	const lbl = $("pvLabel");
 	if (document.activeElement !== lbl) lbl.textContent = t.label || "?";
 	const usr = $("pvUser");
-	if (document.activeElement !== usr) usr.textContent = "@" + myName;
+	if (document.activeElement !== usr) usr.textContent = t.userText ? (t.userText.indexOf("@") === 0 ? t.userText : "@" + t.userText) : "@" + myName;
 	const img = $("pvImg");
 	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
 		img.src = t.image; img.classList.remove("hidden");
@@ -904,6 +908,7 @@ function editorTag() {
 		bg: hex6($("fBgHex").value) ? $("fBgHex").value : undefined,
 		bgTransparency: $("fBgTrans").value !== "" ? parseFloat($("fBgTrans").value) : undefined,
 		userBox: $("fUserBox").value,
+		userText: $("fUserText").value.trim(),
 		badge: $("fBadge").checked || undefined,
 	};
 }
@@ -914,7 +919,7 @@ function renderEditorPreview() {
 	badge.style.setProperty("--c", hex6(t.color) || "#6c80ff");
 	badge.style.setProperty("--pill", hex6(t.bg) || "#0c0c10");
 	$("edLabel").textContent = t.label;
-	$("edUser").textContent = "@" + myName;
+	$("edUser").textContent = t.userText ? (t.userText.indexOf("@") === 0 ? t.userText : "@" + t.userText) : "@" + myName;
 	$("edBadgeCheck").style.display = t.badge ? "" : "none";
 	/* @username box on the mini preview: per-rule override or global default */
 	const ubOn = t.userBox === "true" || (t.userBox === undefined && $("optUBox").checked);
@@ -966,6 +971,7 @@ function openEditor(i) {
 	$("fBgHex").value = t.bg ? t.bg.toUpperCase() : "";
 	$("fBgTrans").value = t.bgTransparency != null ? t.bgTransparency : "";
 	$("fUserBox").value = t.userBox === true ? "true" : t.userBox === false ? "false" : "";
+	$("fUserText").value = t.userText || "";
 	$("fBadge").checked = t.badge === true;
 	$("edDelete").style.display = i < cfg.tags.length ? "" : "none";
 	$("editor").classList.remove("hidden");
@@ -979,7 +985,7 @@ function closeEditor() {
 	renderPreview();
 }
 
-["fMatch", "fLabel", "fColorHex", "fSize", "fImage", "fBgImage", "fBgHex", "fBgTrans", "fUserBox"].forEach(id => {
+["fMatch", "fLabel", "fColorHex", "fSize", "fImage", "fBgImage", "fBgHex", "fBgTrans", "fUserBox", "fUserText"].forEach(id => {
 	$(id).addEventListener("input", renderEditorPreview);
 });
 $("fBadge").addEventListener("change", renderEditorPreview);
@@ -1005,6 +1011,7 @@ $("edSave").onclick = () => {
 	if (t.userBox === "true") clean.userBox = true;
 	else if (t.userBox === "false") clean.userBox = false;
 	else delete clean.userBox;
+	if (t.userText) clean.userText = t.userText; else delete clean.userText;
 	if (editing >= cfg.tags.length) cfg.tags.push(clean);
 	else cfg.tags[editing] = clean;
 	toast("Rule saved (not published yet)");
