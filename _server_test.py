@@ -89,7 +89,13 @@ def main():
         assert open(os.path.join("media", "test_sync.png"), "rb").read() == payload
         st, body, _ = get("/media/test_sync.png")
         assert st == 200 and body == payload, (st, len(body))
-        os.remove(os.path.join("media", "test_sync.png"))
+        for _ in range(10):  # Windows can hold the file briefly after the GET; retry
+            try:
+                os.remove(os.path.join("media", "test_sync.png"))
+                break
+            except PermissionError:
+                import time
+                time.sleep(0.2)
         try:
             ur.urlopen(ur.Request(BASE + "/media/..%2F..%2Fevil", data=payload, headers={"Content-Type": "application/octet-stream"}), timeout=5)
             print("FAIL: /media accepted a path traversal")

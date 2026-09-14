@@ -578,6 +578,7 @@ end)
 local keyChip = make("TextButton", {
 	Size = UDim2.new(0, 28, 0, 20),
 	Position = UDim2.new(0, 158, 0, 10), -- under the title, right edge of the sidebar column
+	BackgroundColor3 = COL.contentBg, -- themed dark chip (default gray without this)
 	Font = Enum.Font.Gotham,
 	TextSize = 11,
 	TextColor3 = COL.sub,
@@ -7087,6 +7088,7 @@ local hubRunCommand
 local cmdBox = make("TextBox", {
 	Size = UDim2.new(0, 190, 0, 26),
 	Position = UDim2.new(1, -342, 1, -32), -- beside the Unload button (which sits at -146..-88), not behind it
+	BackgroundColor3 = COL.contentBg, -- themed dark field (default gray without this)
 	Font = Enum.Font.Gotham,
 	TextSize = 12,
 	TextColor3 = COL.text,
@@ -7326,8 +7328,9 @@ local function ntHttpPost(url, body)
 end
 
 local ntEnabled = false
-local ntRules = nil
-local ntTags = {}
+	local ntRules = nil
+	local ntTags = {}
+	local ntMouse = player and player.GetMouse and player:GetMouse() or nil -- hover-expand reads this in the render loop
 local ntFetchAcc = 0
 local NT_FETCH_EVERY = 15 -- tag rules re-check; editor-tunable via options.refreshSeconds (10-300)
 local NT_TOPIC = "xyro-presence-k2m9x7q" -- anonymous presence DB: every script user heartbeats here
@@ -8688,9 +8691,7 @@ connect(RunService.RenderStepped, function(dt)
 			local o = ntTags[plr]
 
 			-- (re)build when missing, on respawn, after game cleanup, or when the rule changed
-			-- collapsedState == nil marks a fresh build so an old state never
-			-- leaks onto a rebuilt tag (rebuilds happen on rule/respawn changes)
-			local fresh = o and o.gui and o.gui.Parent and o.head == head and o.collapsedState == nil
+			local fresh = o and o.gui and o.gui.Parent and o.head == head
 			if want and fresh and o.sig ~= ntSignature(plr, rule) then
 				ntRemove(plr)
 				o = nil
@@ -8717,13 +8718,13 @@ connect(RunService.RenderStepped, function(dt)
 					-- a raycast would false-positive on empty sky).
 					local wantCollapsed = ntOpts.collapseDistance > 0 and o.collapsed ~= nil and dist > ntOpts.collapseDistance -- includes self: zoom out and your pill collapses to the icon too
 					local hoverOpen = false
-					if wantCollapsed and o.collapsedState and mouse then
+					if wantCollapsed and o.collapsedState and ntMouse then
 						local okPt, sp = pcall(function()
 							return cam:WorldToViewportPoint(head.Position)
 						end)
 						if okPt and type(sp) == "table" and sp.Z > 0 then
-							local dx, dy = mouse.X - sp.X, mouse.Y - sp.Y
-							hoverOpen = dx * dx + dy * dy <= 2304 -- 48px radius squared
+						local dx, dy = ntMouse.X - sp.X, ntMouse.Y - sp.Y
+						hoverOpen = dx * dx + dy * dy <= 2304 -- 48px radius squared
 						end
 					end
 					if o.collapsed then
