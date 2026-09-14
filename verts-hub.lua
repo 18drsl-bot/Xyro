@@ -7288,7 +7288,7 @@ local function ntApplyOptions(o)
 	ntOpts.size = math.clamp(tonumber(o.size) or 15, 8, 48)
 	ntOpts.userSize = math.clamp(tonumber(o.userSize) or 10, 8, 24)
 	ntOpts.height = math.clamp(tonumber(o.height) or 48, 28, 96)
-	ntOpts.imageSize = math.clamp(tonumber(o.imageSize) or 36, 8, 64)
+	ntOpts.imageSize = math.clamp(tonumber(o.imageSize) or 36, 8, 128)
 	ntOpts.maxDistance = math.max(tonumber(o.maxDistance) or 0, 0)
 	ntOpts.showDistance = o.showDistance ~= false
 	ntOpts.showHealth = o.showHealth ~= false
@@ -7499,6 +7499,9 @@ local function ntSignature(plr, rule)
 		tostring(rule.userBoxStroke or ntOpts.userBoxStroke),
 		tostring(rule.font or ntOpts.font),
 		tostring(rule.size or ntOpts.size),
+		tostring(rule.userSize or ntOpts.userSize),
+		tostring(rule.imageSize or ntOpts.imageSize),
+		tostring(rule.height or ntOpts.height),
 		tostring(rule.badge and 1 or 0),
 		tostring(ntOpts.showBox and 1 or 0),
 		tostring(ntIsStaff(plr) and 1 or 0),
@@ -7942,13 +7945,17 @@ local function ntBuild(plr, rule)
 	local font = ntFont(rule.font or ntOpts.font)
 	local nameSize = math.clamp(tonumber(rule.size) or ntOpts.size, 8, 48)
 	local userSize = math.clamp(tonumber(rule.userSize) or ntOpts.userSize, 8, 24)
-	local iconSize = math.clamp(tonumber(rule.imageSize) or ntOpts.imageSize, 8, 64)
+	local iconSize = math.clamp(tonumber(rule.imageSize) or ntOpts.imageSize, 8, 128)
 	local height = math.clamp(tonumber(rule.height) or ntOpts.height, 28, 96)
+	-- a big icon grows the pill automatically so it never gets clipped
+	if iconSize + 8 > height then
+		height = math.min(iconSize + 8, 160)
+	end
 
 	local nameW = ntTextWidth(shownName, nameSize, font)
 	local userW = ntTextWidth("@" .. plr.Name, userSize, Enum.Font.Gotham)
 	local badgeW = rule.badge and (ntIsStaff(plr) and (nameSize + 6) or 16) or 0
-	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 320)
+	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 420)
 
 	local bb = Instance.new("BillboardGui")
 	bb.Name = "XyroTag"
