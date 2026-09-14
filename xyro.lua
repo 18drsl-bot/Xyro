@@ -7772,16 +7772,16 @@ local function ntEncodePNG(w, h, rgba)
 	for n = 0, 255 do
 		local c = n
 		for _ = 1, 8 do
-			c = (c % 2 == 1) and (0xEDB88320 ~ (c >> 1)) or (c >> 1)
+			c = (c % 2 == 1) and bit32.bxor(0xEDB88320, bit32.rshift(c, 1)) or bit32.rshift(c, 1)
 		end
 		crcTable[n] = c
 	end
 	local function crc32(s)
 		local c = 0xFFFFFFFF
 		for i = 1, #s do
-			c = crcTable[(c ~ s:byte(i)) % 256] ~ (c >> 8)
+			c = bit32.bxor(crcTable[bit32.band(bit32.bxor(c, s:byte(i)), 255)], bit32.rshift(c, 8))
 		end
-		return c ~ 0xFFFFFFFF
+		return bit32.bxor(c, 0xFFFFFFFF)
 	end
 	local function chunk(tag, payload)
 		local body = tag .. payload
@@ -7789,9 +7789,9 @@ local function ntEncodePNG(w, h, rgba)
 	end
 	-- filter byte 0 + raw RGBA rows
 	local rowBytes = w * 4
-	local parts = table.create(h + 1, 0)
-	for y = 0, h - 1 do
-		parts[y + 1] = "\x00" .. rgba:sub(y * rowBytes + 1, (y + 1) * rowBytes)
+	local parts = table.create(h, 0)
+	for y = 1, h do
+		parts[y] = "\x00" .. rgba:sub((y - 1) * rowBytes + 1, y * rowBytes)
 	end
 	local raw = table.concat(parts)
 	-- zlib header + stored (uncompressed) deflate blocks, each capped at 65535
@@ -7803,7 +7803,7 @@ local function ntEncodePNG(w, h, rgba)
 		local piece = raw:sub(off, off + 65535)
 		off += #piece
 		local fin = off > #raw
-		z[zi] = string.char(fin and 1 or 0, #piece % 256, math.floor(#piece / 256) % 256, ~#piece % 256, ~math.floor(#piece / 256) % 256) .. piece
+		z[zi] = string.char(fin and 1 or 0, #piece % 256, math.floor(#piece / 256) % 256, bit32.bnot(#piece) % 256, bit32.bnot(math.floor(#piece / 256)) % 256) .. piece
 		zi += 1
 	end
 	z[zi] = be32(adler(raw))
