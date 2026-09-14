@@ -57,6 +57,22 @@ def main():
         st, body, _ = get("/does-not-exist")
         assert st == 404, st
         print("404   : OK")
+
+        # /sync must update the local file and reject garbage
+        import urllib.request as ur
+        cfg0 = open("nametags.json", "rb").read()
+        bad = json.dumps({"oops": True}).encode()
+        try:
+            ur.urlopen(ur.Request(BASE + "/sync", data=bad, headers={"Content-Type": "application/json"}), timeout=5)
+            print("FAIL: /sync accepted garbage")
+            return 1
+        except urllib.error.HTTPError as e:
+            assert e.code == 400, e.code
+        sync_payload = cfg0 if cfg0.endswith(b"\n") else cfg0 + b"\n"
+        r = ur.urlopen(ur.Request(BASE + "/sync", data=sync_payload, headers={"Content-Type": "application/json"}), timeout=5)
+        assert r.status == 200
+        assert open("nametags.json", "rb").read() == sync_payload
+        print("sync  : OK (round-trip identical, garbage rejected)")
         print("\nALL PASS")
         return 0
     except Exception as e:

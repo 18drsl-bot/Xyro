@@ -7,9 +7,11 @@
 
 	Mirrors, in order:
 	  1. api.github.com contents API  -> base64 of the file, never cached
-	  2. raw.githubusercontent.com/.../refs/heads/main/xyro.lua (cache-busted)
-	  3. vertxxy-1.github.io/Xyro/xyro.lua (GitHub Pages, rebuilt on push)
-	  4. raw.githubusercontent.com/.../main/xyro.lua (last resort)
+	  2. cdn.jsdelivr.net/gh/...@main/xyro.lua (global edge; editor purges
+	     its cache on every publish)
+	  3. raw.githubusercontent.com/.../refs/heads/main/xyro.lua (cache-busted)
+	  4. vertxxy-1.github.io/Xyro/xyro.lua (GitHub Pages, rebuilt on push)
+	  5. raw.githubusercontent.com/.../main/xyro.lua (last resort)
 
 	Every download is size-checked, marker-checked and tail-checked
 	before running; a truncated or stale-looking file is never executed.
@@ -24,6 +26,7 @@
 
 local API_URL = "https://api.github.com/repos/vertxxy-1/Xyro/contents/xyro.lua"
 local SOURCES = {
+	"https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/xyro.lua",
 	"https://raw.githubusercontent.com/vertxxy-1/Xyro/refs/heads/main/xyro.lua",
 	"https://vertxxy-1.github.io/Xyro/xyro.lua",
 	"https://raw.githubusercontent.com/vertxxy-1/Xyro/main/xyro.lua",

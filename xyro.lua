@@ -7426,19 +7426,20 @@ local function ntLocalMediaUrl(url)
 end
 
 local function ntFetch(manual)
-	-- priority: your PC's local server (if running) -> GitHub API on manual
-	-- fetches (never stale) -> jsDelivr edge for the 60s background cycle
+	-- priority: GitHub API on manual fetches (never stale, always the
+	-- published truth) -> your PC's local server (kept in sync by the
+	-- editor on every publish) -> jsDelivr edge for the 60s background
 	local text = nil
-	if ntLocalProbe() then
+	if manual then
+		text = ntFromAPI(ntHttpGet(NT_API_URL) or "")
+	end
+	if not text and ntLocalProbe() then
 		local body = ntHttpGet(NT_LOCAL_URL)
 		if type(body) == "string" and #body > 2 then
 			text = body
 		else
 			ntLocalUp = false -- server died mid-session; fall through to CDN
 		end
-	end
-	if not text and manual then
-		text = ntFromAPI(ntHttpGet(NT_API_URL) or "")
 	end
 	if not text then
 		text = ntHttpGet(NT_RAW_URL .. "?t=" .. tostring(os.time()))

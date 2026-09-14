@@ -1133,7 +1133,7 @@ $("publishBtn").onclick = async () => {
 	}
 	if (live && sameJSON(cfg, live)) { toast("Nothing to publish - no changes"); return; }
 	const summary = live ? publishSummary() : cfg.tags.length + " rules";
-	if (!confirm("Publish to " + REPO + "?\n\n" + summary + "\n\nEvery player running Xyro gets this within 60 seconds.")) return;
+	if (!confirm("Publish to " + REPO + "?\n\n" + summary + "\n\nEvery player running Xyro gets this within seconds (CDN purged instantly).")) return;
 	status("publishing...", "info");
 	try {
 		const cur = await fetch(API + "?t=" + Date.now(), { headers: { Authorization: "Bearer " + token } });
@@ -1167,6 +1167,14 @@ $("publishBtn").onclick = async () => {
 		renderAll();
 		/* kick the game's CDN so the update lands in seconds, not minutes */
 		fetch("https://purge.jsdelivr.net/gh/" + REPO + "@main/" + PATH).catch(() => {});
+		/* keep the local tag server's copy fresh too (silently no-op if it
+		   isn't running; http://localhost is exempt from https mixed-content
+		   blocking in modern browsers) */
+		fetch("http://localhost:8619/sync", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body,
+		}).catch(() => {});
 		status("published! in game in seconds - or run !nametagsfetch now", "ok");
 		toast("Published + CDN purged - live in seconds", "ok");
 	} catch (e) {

@@ -22,6 +22,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PORT = 8619
+# loopback-only by default (nothing leaves your PC); set XYRO_LAN=1 to
+# also serve other devices on your network
+HOST = "0.0.0.0" if os.environ.get("XYRO_LAN") == "1" else "127.0.0.1"
 
 # public (non-loopback) interfaces, so the console can show a LAN URL too
 def lan_ips():
@@ -46,7 +49,19 @@ class Handler(SimpleHTTPRequestHandler):
     # very next !nametagsfetch
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         super().end_headers()
+
+    def do_OPTIONS(self):
+        # CORS preflight (the https tag editor posts to this http origin)
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def log_message(self, fmt, *args):
         sys.stdout.write("  %s %s\n" % (self.log_date_time_string(), fmt % args))
@@ -57,6 +72,31 @@ class Handler(SimpleHTTPRequestHandler):
             self._serve_json()
         else:
             super().do_GET()
+
+    def do_POST(self):
+        # the tag editor calls this right after publishing to GitHub, so the
+        # local copy is always the newest published state (never stale)
+        if self.path.split("?")[0] != "/sync":
+            self._send(404, b'{"error":"unknown endpoint"}', "application/json")
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0 or length > 5 * 1024 * 1024:
+                raise ValueError("bad body size %d" % length)
+            raw = self.rfile.read(length)
+            cfg = json.loads(raw)  # validate BEFORE touching the file
+            if not isinstance(cfg, dict) or not isinstance(cfg.get("tags"), list):
+                raise ValueError("config needs a tags list")
+            if not raw.endswith(b"\n"):
+                raw += b"\n"
+            tmp = os.path.join(ROOT, "nametags.json.tmp")
+            with open(tmp, "wb") as f:
+                f.write(raw)
+            os.replace(tmp, os.path.join(ROOT, "nametags.json"))
+            self._send(200, b'{"ok":true}', "application/json")
+            print("  [sync] nametags.json updated from editor (%d rules)" % len(cfg["tags"]))
+        except Exception as e:
+            self._send(400, json.dumps({"error": str(e)}).encode(), "application/json")
 
     def _serve_json(self):
         path = os.path.join(ROOT, "nametags.json")
@@ -88,16 +128,19 @@ class Server(ThreadingHTTPServer):
 
 def main():
     try:
-        srv = Server(("0.0.0.0", PORT), Handler)
+        srv = Server((HOST, PORT), Handler)
     except OSError as e:
         print("port %d busy (%s) - is the server already running?" % (PORT, e))
         sys.exit(1)
     print("Xyro local tag server")
     print("  config : http://localhost:%d/nametags.json" % PORT)
-    for ip in lan_ips():
-        print("           http://%s:%d/nametags.json  (LAN)" % (ip, PORT))
+    if HOST == "0.0.0.0":
+        for ip in lan_ips():
+            print("           http://%s:%d/nametags.json  (LAN)" % (ip, PORT))
     print("  media  : http://localhost:%d/media/<file>" % PORT)
+    print("  sync   : POST /sync (the tag editor updates your local copy on publish)")
     print("  root   : %s" % ROOT)
+    print("  bound to %s (set XYRO_LAN=1 to share on your network)" % HOST)
     print("  Ctrl+C to stop. Game script falls back to the GitHub CDN")
     print("  automatically whenever this is off.\n")
     try:
