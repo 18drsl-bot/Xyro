@@ -7236,6 +7236,11 @@ local ntOpts = {
 	clickTeleport = true,
 	seeThroughWalls = true,
 	staffOnly = false,
+	userBox = false,
+	userBoxColor = "#1A1F2E",
+	userBoxTransparency = 0.25,
+	userBoxRadius = 8,
+	userBoxStroke = "",
 }
 
 local function ntNormalize(s)
@@ -7297,6 +7302,11 @@ local function ntApplyOptions(o)
 	ntOpts.clickTeleport = o.clickTeleport ~= false
 	ntOpts.seeThroughWalls = o.seeThroughWalls ~= false
 	ntOpts.staffOnly = o.staffOnly == true
+	ntOpts.userBox = o.userBox == true
+	ntOpts.userBoxColor = tostring(o.userBoxColor or ntOpts.userBoxColor)
+	ntOpts.userBoxTransparency = math.clamp(tonumber(o.userBoxTransparency) or 0.25, 0, 1)
+	ntOpts.userBoxRadius = math.clamp(tonumber(o.userBoxRadius) or 8, 0, 24)
+	ntOpts.userBoxStroke = tostring(o.userBoxStroke or "")
 end
 
 -- your tag is saved to disk after every successful fetch and re-applied
@@ -7482,6 +7492,11 @@ local function ntSignature(plr, rule)
 		tostring(rule.bgTransparency or ntOpts.pillTransparency),
 		tostring(rule.image or ""),
 		tostring(rule.bgImage or ""),
+		tostring((rule.userBox == nil and ntOpts.userBox or rule.userBox) and 1 or 0),
+		tostring(rule.userBoxColor or ntOpts.userBoxColor),
+		tostring(rule.userBoxTransparency or ntOpts.userBoxTransparency),
+		tostring(rule.userBoxRadius or ntOpts.userBoxRadius),
+		tostring(rule.userBoxStroke or ntOpts.userBoxStroke),
 		tostring(rule.font or ntOpts.font),
 		tostring(rule.size or ntOpts.size),
 		tostring(rule.badge and 1 or 0),
@@ -8053,11 +8068,36 @@ local function ntBuild(plr, rule)
 		b.Parent = nameRow
 	end
 
+	-- optional customizable box/chip behind the @username line (per-rule
+	-- userBox/userBoxColor/userBoxTransparency/userBoxRadius/userBoxStroke
+	-- override the global options)
+	local ubOn = rule.userBox == nil and ntOpts.userBox or rule.userBox
+	local userBox = nil
+	if ubOn then
+		userBox = Instance.new("Frame")
+		userBox.Name = "UserBox"
+		userBox.Position = UDim2.fromOffset(textLeft, nameTop + NAME_H - 2)
+		userBox.Size = UDim2.new(1, -(textLeft + PAD_RIGHT), 0, USER_H + 4)
+		userBox.BackgroundColor3 = ntColor(rule.userBoxColor, ntColor(ntOpts.userBoxColor, Color3.fromRGB(26, 31, 46)))
+		userBox.BackgroundTransparency = math.clamp(tonumber(rule.userBoxTransparency) or ntOpts.userBoxTransparency, 0, 1)
+		userBox.BorderSizePixel = 0
+		userBox.Parent = pill
+		local ubCorner = Instance.new("UICorner")
+		ubCorner.CornerRadius = UDim.new(0, math.clamp(tonumber(rule.userBoxRadius) or ntOpts.userBoxRadius, 0, 24))
+		ubCorner.Parent = userBox
+		local strokeHex = rule.userBoxStroke or ntOpts.userBoxStroke
+		if type(strokeHex) == "string" and strokeHex ~= "" and strokeHex ~= "none" then
+			local ubStroke = Instance.new("UIStroke")
+			ubStroke.Color = ntColor(strokeHex, NT_ACCENT)
+			ubStroke.Transparency = 0.35
+			ubStroke.Thickness = 1
+			ubStroke.Parent = userBox
+		end
+	end
+
 	local user = Instance.new("TextLabel")
 	user.Name = "User"
 	user.BackgroundTransparency = 1
-	user.Position = UDim2.fromOffset(textLeft, nameTop + NAME_H)
-	user.Size = UDim2.new(1, -(textLeft + PAD_RIGHT), 0, USER_H)
 	user.Font = Enum.Font.Gotham
 	user.TextSize = userSize
 	user.TextTransparency = 0.25
@@ -8066,7 +8106,15 @@ local function ntBuild(plr, rule)
 	user.TextColor3 = ntColor(rule.userColor, ntColor(ntOpts.userColor, Color3.fromRGB(139, 146, 165)))
 	user.TextTruncate = Enum.TextTruncate.AtEnd
 	user.Text = "@" .. plr.Name
-	user.Parent = pill
+	if userBox then
+		user.Position = UDim2.fromOffset(6, 0)
+		user.Size = UDim2.new(1, -12, 0, USER_H)
+		user.Parent = userBox
+	else
+		user.Position = UDim2.fromOffset(textLeft, nameTop + NAME_H)
+		user.Size = UDim2.new(1, -(textLeft + PAD_RIGHT), 0, USER_H)
+		user.Parent = pill
+	end
 
 	-- click the pill to teleport to that player (off by default for self)
 	if ntOpts.clickTeleport and plr ~= player then

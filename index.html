@@ -263,6 +263,7 @@
 	.rrow .meta .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.rrow .order { display: flex; gap: 4px; }
 	.mark { font-size: 10.5px; color: var(--sub); border: 1px solid var(--stroke); border-radius: 6px; padding: 1.5px 7px; margin-right: 4px; letter-spacing: .03em; }
+.ubox { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 8px; border-radius: 8px; background: rgba(255,255,255,.09); font-size: 9px; color: var(--sub, #8b92a5); letter-spacing: .02em; }
 .filepick { white-space: nowrap; padding: 0 14px; border-radius: 10px; border: 1px solid var(--stroke); background: var(--card2, rgba(255,255,255,.04)); color: var(--sub); cursor: pointer; font: inherit; font-size: 12px; transition: all .15s ease; }
 .filepick:hover { color: var(--text); border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #6c80ff) 18%, transparent); }
 .filepick.busy { opacity: .55; pointer-events: none; }
@@ -384,7 +385,7 @@
 			<div class="card">
 				<h2><span class="hl">Preview</span></h2>
 				<div class="stage">
-					<span class="badge big" id="pvBadge"><img id="pvImg" alt="" class="hidden"><span id="pvLabel">x9k_alt</span></span>
+					<span class="badge big" id="pvBadge"><img id="pvImg" alt="" class="hidden"><span id="pvLabel">x9k_alt</span><span class="ubox" id="pvUbox" style="display:none"><span id="pvUser">@user</span></span></span>
 					<span class="stage-cap">exactly how it renders in game</span>
 				</div>
 			</div>
@@ -419,6 +420,10 @@
 				<div class="row">
 					<div><label>Name color</label><input id="optTextColor" type="color" value="#ffffff"></div>
 					<div><label>@username color</label><input id="optUserColor" type="color" value="#8b92a5"></div>
+					<div><label>@username box color</label><input id="optUBoxColor" type="color" value="#1a1f2e"></div>
+					<div><label>@username box transparency (0=solid)</label><input id="optUBoxTrans" type="number" min="0" max="1" step="0.05" placeholder="0.25"></div>
+					<div><label>@username box roundness (0-24)</label><input id="optUBoxRadius" type="number" min="0" max="24" placeholder="8"></div>
+					<div><label>@username box border (hex or blank)</label><input id="optUBoxStroke" placeholder="none"></div>
 				</div>
 				<div class="checks">
 					<label><input id="optDistOn" type="checkbox" checked> distance</label>
@@ -426,6 +431,7 @@
 					<label><input id="optBox" type="checkbox" checked> pill background</label>
 					<label><input id="optScriptUsers" type="checkbox" checked> only tag script users</label>
 					<label><input id="optClickTp" type="checkbox" checked> click pill = teleport</label>
+					<label><input id="optUBox" type="checkbox"> @username box</label>
 					<label><input id="optWalls" type="checkbox" checked> see through walls</label>
 				</div>
 				<div class="hint">Options apply to everyone; per-rule settings override them.</div>
@@ -488,11 +494,19 @@
 						</div>
 						<input type="file" id="edBgFile" accept="image/png,image/jpeg,image/gif" class="hidden">
 					</div>
+					<div>
+						<label>@username box (blank = default, on/off)</label>
+						<select id="fUserBox">
+							<option value="">default</option>
+							<option value="true">show</option>
+							<option value="false">hide</option>
+						</select>
+					</div>
 					<div class="checks" style="grid-column:1/-1">
 						<label><input id="fBadge" type="checkbox"> show check badge next to name</label>
 					</div>
 				</div>
-				<div class="mini-stage"><span class="badge mini" id="edBadge"><img id="edImg" alt="" class="hidden"><span id="edLabel">?</span><span id="edBadgeCheck" style="display:none">&#10003;</span></span></div>
+				<div class="mini-stage"><span class="badge mini" id="edBadge"><img id="edImg" alt="" class="hidden"><span id="edLabel">?</span><span id="edBadgeCheck" style="display:none">&#10003;</span><span class="ubox" id="edUbox" style="display:none"><span>@user</span></span></span></div>
 				<div class="eactions">
 					<button class="subtle" id="edCancel">Cancel</button>
 					<button class="ghost" id="edDelete" style="border-color:rgba(255,93,93,.45);color:var(--danger)">Delete rule</button>
@@ -583,6 +597,15 @@ function renderPreview() {
 	const t = (editing >= 0 ? editorTag() : null) || cfg.tags[0] || { label: "x9k_alt", color: "#ffd700" };
 	const badge = $("pvBadge");
 	badge.style.setProperty("--c", hex6(t.color) || "#6c80ff");
+	/* @username box mirrors the global options (plus rule override) */
+	const ubOn = t.userBox === "true" || (t.userBox === undefined && $("optUBox").checked);
+	const ub = $("pvUbox");
+	ub.style.display = ubOn ? "" : "none";
+	if (ubOn) {
+		ub.style.background = (hex6(t.userBoxColor) || $("optUBoxColor").value || "#1a1f2e").toLowerCase();
+		ub.style.borderRadius = (parseInt($("optUBoxRadius").value) || 0) + "px";
+		ub.style.border = $("optUBoxStroke").value.trim() ? "1px solid " + $("optUBoxStroke").value.trim() : "none";
+	}
 	badge.style.setProperty("--pill", hex6(t.bg) || $("optPillColor").value || "#0c0c10");
 	$("pvLabel").textContent = t.label || "?";
 	const img = $("pvImg");
@@ -608,6 +631,7 @@ function renderRules() {
 			(t.image ? '<span class="mark">&#127917; icon</span>' : "") +
 			(t.bgImage ? '<span class="mark">&#127917; bg</span>' : "") +
 			(t.bg ? '<span class="mark">bg</span>' : "") +
+			(t.userBox === true ? '<span class="mark">@box</span>' : t.userBox === false ? '<span class="mark">no @box</span>' : "") +
 			(t.size ? '<span class="mark">s' + esc(t.size) + "</span>" : "");
 		row.innerHTML =
 			badgeHTML(t, false, true) +
@@ -657,6 +681,11 @@ function renderOptions() {
 	$("optPillTrans").value = (o.pillTransparency != null ? o.pillTransparency : 0.12);
 	$("optTextColor").value = (o.textColor || "#ffffff").toLowerCase();
 	$("optUserColor").value = (o.userColor || "#8b92a5").toLowerCase();
+	$("optUBox").checked = o.userBox === true;
+	$("optUBoxColor").value = (o.userBoxColor || "#1a1f2e").toLowerCase();
+	$("optUBoxTrans").value = o.userBoxTransparency != null ? o.userBoxTransparency : "";
+	$("optUBoxRadius").value = o.userBoxRadius != null ? o.userBoxRadius : "";
+	$("optUBoxStroke").value = o.userBoxStroke || "";
 	$("optDistOn").checked = o.showDistance !== false;
 	$("optHp").checked = o.showHealth !== false;
 	$("optBox").checked = o.showBox !== false;
@@ -772,6 +801,7 @@ function editorTag() {
 		bgImage: $("fBgImage").value.trim(),
 		bg: hex6($("fBgHex").value) ? $("fBgHex").value : undefined,
 		bgTransparency: $("fBgTrans").value !== "" ? parseFloat($("fBgTrans").value) : undefined,
+		userBox: $("fUserBox").value,
 		badge: $("fBadge").checked || undefined,
 	};
 }
@@ -783,6 +813,15 @@ function renderEditorPreview() {
 	badge.style.setProperty("--pill", hex6(t.bg) || "#0c0c10");
 	$("edLabel").textContent = t.label;
 	$("edBadgeCheck").style.display = t.badge ? "" : "none";
+	/* @username box on the mini preview: per-rule override or global default */
+	const ubOn = t.userBox === "true" || (t.userBox === undefined && $("optUBox").checked);
+	const ub = $("edUbox");
+	ub.style.display = ubOn ? "" : "none";
+	if (ubOn) {
+		ub.style.background = (hex6(t.userBoxColor) || $("optUBoxColor").value || "#1a1f2e").toLowerCase();
+		ub.style.borderRadius = (parseInt($("optUBoxRadius").value) || 0) + "px";
+		ub.style.border = $("optUBoxStroke").value.trim() ? "1px solid " + $("optUBoxStroke").value.trim() : "none";
+	}
 	/* match in-game: the badge renders as the Roblox verified seal in blue */
 	$("edBadgeCheck").style.color = "#00aaff";
 	const img = $("edImg");
@@ -822,6 +861,7 @@ function openEditor(i) {
 	$("fBg").value = (hex6(t.bg) || "#0c0c10").toLowerCase();
 	$("fBgHex").value = t.bg ? t.bg.toUpperCase() : "";
 	$("fBgTrans").value = t.bgTransparency != null ? t.bgTransparency : "";
+	$("fUserBox").value = t.userBox === true ? "true" : t.userBox === false ? "false" : "";
 	$("fBadge").checked = t.badge === true;
 	$("edDelete").style.display = i < cfg.tags.length ? "" : "none";
 	$("editor").classList.remove("hidden");
@@ -835,7 +875,7 @@ function closeEditor() {
 	renderPreview();
 }
 
-["fMatch", "fLabel", "fColorHex", "fSize", "fImage", "fBgImage", "fBgHex", "fBgTrans"].forEach(id => {
+["fMatch", "fLabel", "fColorHex", "fSize", "fImage", "fBgImage", "fBgHex", "fBgTrans", "fUserBox"].forEach(id => {
 	$(id).addEventListener("input", renderEditorPreview);
 });
 $("fBadge").addEventListener("change", renderEditorPreview);
@@ -858,6 +898,9 @@ $("edSave").onclick = () => {
 	if (t.bg) clean.bg = t.bg; else delete clean.bg;
 	if (t.bgTransparency != null && !isNaN(t.bgTransparency)) clean.bgTransparency = t.bgTransparency; else delete clean.bgTransparency;
 	if (t.badge) clean.badge = true; else delete clean.badge;
+	if (t.userBox === "true") clean.userBox = true;
+	else if (t.userBox === "false") clean.userBox = false;
+	else delete clean.userBox;
 	if (editing >= cfg.tags.length) cfg.tags.push(clean);
 	else cfg.tags[editing] = clean;
 	toast("Rule saved (not published yet)");
@@ -882,7 +925,7 @@ function moveRule(i, dir) {
 
 /* ---------- options wiring ---------- */
 /* merge with existing options so keys the form doesn't own survive a publish */
-["optSize", "optUserSize", "optHeight", "optFont", "optDist", "optImgSize", "optPillColor", "optPillTrans", "optTextColor", "optUserColor", "optDistOn", "optHp", "optBox", "optScriptUsers", "optClickTp", "optWalls"].forEach(id => {
+["optSize", "optUserSize", "optHeight", "optFont", "optDist", "optImgSize", "optPillColor", "optPillTrans", "optTextColor", "optUserColor", "optUBox", "optUBoxColor", "optUBoxTrans", "optUBoxRadius", "optUBoxStroke", "optDistOn", "optHp", "optBox", "optScriptUsers", "optClickTp", "optWalls"].forEach(id => {
 	$(id).addEventListener("input", () => {
 		cfg.options = Object.assign({}, cfg.options, readOptions());
 		changed("options");
@@ -905,6 +948,11 @@ function readOptions() {
 		imageSize: Math.min(64, Math.max(8, parseInt($("optImgSize").value) || 36)),
 		textColor: $("optTextColor").value.toUpperCase(),
 		userColor: $("optUserColor").value.toUpperCase(),
+		userBox: $("optUBox").checked,
+		userBoxColor: $("optUBoxColor").value.toUpperCase(),
+		userBoxTransparency: Math.min(1, Math.max(0, parseFloat($("optUBoxTrans").value) || 0.25)),
+		userBoxRadius: Math.min(24, Math.max(0, parseInt($("optUBoxRadius").value) || 0)),
+		userBoxStroke: $("optUBoxStroke").value.trim().toUpperCase(),
 		clickTeleport: $("optClickTp").checked,
 		seeThroughWalls: $("optWalls").checked,
 	};
