@@ -1,20 +1,22 @@
 {
 	"options": {
-		"size": 24,
+		"size": 14,
 		"maxDistance": 0,
-		"showDistance": false,
-		"showHealth": false,
+		"showDistance": true,
+		"showHealth": true,
 		"showBox": true,
 		"onlyScriptUsers": true,
-		"pillColor": "#0000BD",
+		"pillColor": "#0C0C10",
 		"pillTransparency": 0.12,
 		"imageSize": 20
 	},
 	"tags": [
 		{
-			"match": "stellarpAlladium",
-			"label": "Script Owner",
-			"color": "#DEDEDE"
+			"match": "Vertxxy2",
+			"label": "vertxxy",
+			"color": "#2742F1",
+			"image": "https://i.pinimg.com/originals/e6/8e/10/e68e10d5e0fcaf404947598fd5bfbb7b.gif",
+			"bg": "#828282"
 		}
 	]
 }
