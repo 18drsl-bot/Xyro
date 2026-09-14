@@ -20,7 +20,8 @@
 			"match": "stellarpAlladium",
 			"label": "Script Owner",
 			"color": "#DEDEDE",
-			"badge": true
+			"badge": true,
+			"bg": "#07070E"
 		}
 	]
 }
