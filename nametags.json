@@ -51,6 +51,14 @@
 			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/a546b8a228f066f28bdc1ec72bc9ae9dbdf5e18d.png"
 		},
 		{
+			"match": "larp_139",
+			"label": "Trxsy",
+			"color": "#FFFFFF",
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/fb9466f32effba295ed460cc0738c252def7cdf1.jpg",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/9d8b8846f4bae0e36d0e4981c221c1fa3b95c8a7.gif",
+			"badge": true
+		},
+		{
 			"match": "Afflictiohnz",
 			"label": "SWITCHES THE BIRTHDAY BOY",
 			"color": "#AC0FF5",
@@ -63,14 +71,6 @@
 			"match": "*",
 			"label": "Xyro User",
 			"color": "#6C80FF"
-		},
-		{
-			"match": "larp_139",
-			"label": "Trxsy",
-			"color": "#FFFFFF",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/fb9466f32effba295ed460cc0738c252def7cdf1.jpg",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/9d8b8846f4bae0e36d0e4981c221c1fa3b95c8a7.gif",
-			"badge": true
 		}
 	]
 }
