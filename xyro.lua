@@ -7992,6 +7992,10 @@ local function ntDecodeGIF(data)
 		return out
 	end
 	while pos < #data do
+		-- one yield per frame: ntDecodeGIF only ever runs in spawned threads
+		-- (the media queue), so this spreads a multi-frame decode across
+		-- rendered frames instead of stalling the main thread for seconds
+		task.wait()
 		local b = data:byte(pos)
 		pos += 1
 		if b == 0x21 then
@@ -8201,6 +8205,58 @@ local function ntStartFrames(img, frames)
 	return true
 end
 
+-- MEDIA QUEUE: downloads and pure-Lua decodes run ONE AT A TIME (with a
+-- yield between jobs). On boot, a fetch used to fire every tag's images in
+-- parallel - ~10 simultaneous GIF decodes, each an unyielded multi-second
+-- main-thread chunk, froze the game solid right after execute. Serialized,
+-- the game keeps rendering while media loads one piece per beat.
+local ntMediaQueue = {}
+local ntMediaBusy = false
+local ntMediaPending = {} -- [url] = true while queued/running
+local ntMediaWaiters = {} -- [url] = { img, ... } awaiting the result
+local function ntResolveWaiters(url)
+	ntMediaPending[url] = nil
+	local imgs = ntMediaWaiters[url]
+	ntMediaWaiters[url] = nil
+	if not imgs then
+		return
+	end
+	local res = ntImgCache[url]
+	if res == nil then
+		return
+	end
+	for _, w in ipairs(imgs) do
+		if w.Parent then
+			if type(res) == "string" then
+				w.Image = res
+			elseif type(res) == "table" then
+				pcall(ntStartFrames, w, res)
+			end
+		end
+	end
+end
+local function ntQueueMedia(job)
+	table.insert(ntMediaQueue, job)
+	if ntMediaBusy then
+		return
+	end
+	ntMediaBusy = true
+	task.spawn(function()
+		while true do
+			local j = table.remove(ntMediaQueue, 1)
+			if not j then
+				break
+			end
+			pcall(j.run)
+			if j.done then
+				pcall(j.done)
+			end
+			task.wait() -- a beat between heavy jobs keeps frames rendering
+		end
+		ntMediaBusy = false
+	end)
+end
+
 local function ntApplyData(img, data, key)
 	if type(data) ~= "string" or #data < 24 then
 		return false
@@ -8279,12 +8335,17 @@ local function ntApplyData(img, data, key)
 				-- frames instead of stalling the main thread for the whole job
 				task.wait()
 			end
-			if #frames == 0 then
-				return false
-			end
-			pcall(function()
-				writefile(stem .. ".meta", H.HttpService:JSONEncode({ v = 1, n = #frames, d = delays }))
-			end)
+		if #frames == 0 then
+			return false
+		end
+		-- keep the raw GIF bytes too: the NEXT session loads locally with no
+		-- download at all (frames+meta already skip the decode)
+		pcall(function()
+			writefile(stem .. ".gif", data)
+		end)
+		pcall(function()
+			writefile(stem .. ".meta", H.HttpService:JSONEncode({ v = 1, n = #frames, d = delays }))
+		end)
 		end
 		ntImgCache[key] = frames
 		return ntStartFrames(img, frames)
@@ -8362,29 +8423,78 @@ local function ntApplyImage(img, url)
 	if type(cached) == "table" then
 		return ntStartFrames(img, cached)
 	end
-	if getcustomasset and writefile and ntMember("HttpGet") then
-		local ok, asset = pcall(function()
-			local data = ntHttpGet(url)
-			assert(type(data) == "string" and #data > 0, "empty download")
-			if ntApplyData(img, data, url) then
-				return "__handled__"
+	if not (getcustomasset and writefile and ntMember("HttpGet")) then
+		return false
+	end
+	local stem = "Xyro/ntmedia/" .. tostring((url:gsub("%W", "")):sub(-16))
+	local function queueJob(run)
+		-- one at a time; a URL already queued hands its result to every
+		-- waiter when it finishes (avatar + collapsed icon request the same
+		-- image on every rebuild - used to download/decode it TWICE)
+		if ntMediaPending[url] then
+			local list = ntMediaWaiters[url]
+			if not list then
+				list = {}
+				ntMediaWaiters[url] = list
 			end
-			ntEnsureDir()
-			-- extension matters: getcustomasset only accepts known media types
-			local fname = "Xyro/ntmedia/" .. tostring((url:gsub("%W", "")):sub(-16)) .. ".png"
-			writefile(fname, data)
-			return getcustomasset(fname)
-		end)
-		if ok and asset == "__handled__" then
-			return true
+			list[#list + 1] = img
+			return
 		end
-		if ok and asset then
+		ntMediaPending[url] = true
+		ntQueueMedia({
+			run = run,
+			done = function()
+				ntResolveWaiters(url)
+			end,
+		})
+	end
+	-- DISK-FIRST static: saved by any previous session - serve straight from
+	-- disk, zero download (this fires on EVERY rebuild after a re-exec)
+	ntEnsureDir()
+	for _, ext in ipairs({ ".png", ".jpg" }) do
+		if isfile(stem .. ext) then
+			local okC, asset = pcall(getcustomasset, stem .. ext)
+			if okC and type(asset) == "string" and asset ~= "" then
+				ntImgCache[url] = asset
+				img.Image = asset
+				return true
+			end
+		end
+	end
+	-- GIF saved by a previous session: decode from the LOCAL bytes (still
+	-- queued - the pure-Lua LZW decode is the heavy part)
+	if isfile(stem .. ".gif") then
+		queueJob(function()
+			return ntApplyData(img, readfile(stem .. ".gif"), url) ~= false
+		end)
+		return true
+	end
+	-- fresh: download + decode ONE AT A TIME in the background queue so ten
+	-- simultaneous image jobs can never collide into a game freeze
+	queueJob(function()
+		local data = ntHttpGet(url)
+		assert(type(data) == "string" and #data > 0, "empty download")
+		if ntApplyData(img, data, url) then
+			return true -- GIF: decoded, disk-cached, animating
+		end
+		-- static: save under the right extension, then serve from disk
+		local ext = ".png"
+		if data:byte(1) == 0xFF and data:byte(2) == 0xD8 then
+			ext = ".jpg"
+		end
+		ntEnsureDir()
+		-- extension matters: getcustomasset only accepts known media types
+		local fname = stem .. ext
+		local okW = pcall(writefile, fname, data)
+		local okA, asset = pcall(getcustomasset, fname)
+		if okW and okA and type(asset) == "string" and asset ~= "" then
 			ntImgCache[url] = asset
 			img.Image = asset
 			return true
 		end
-	end
-	return false
+		return false
+	end)
+	return true -- queued: the tag fills in when its turn arrives
 end
 
 local function ntBuild(plr, rule)
