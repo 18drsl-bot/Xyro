@@ -51,6 +51,11 @@
 			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/c4c585b4be746487530d0fbea085c279d393ec53.png",
 			"bg": "#F500D8",
 			"badge": true
+		},
+		{
+			"match": "*",
+			"label": "Xyro User",
+			"color": "#6C80FF"
 		}
 	]
 }
