@@ -7269,8 +7269,7 @@ local Players = Players or game:GetService("Players")
 local RunService = RunService or game:GetService("RunService")
 local NT_RAW_URL = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/nametags.json" -- fast global edge (jsDelivr); editor purges its cache on every publish so this is never stale
 local NT_FALLBACK_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/nametags.json" -- used if jsDelivr hiccups
-local NT_LOCAL_URL = "http://localhost:8619/nametags.json" -- optional: python _server.py on the host PC; instant reads, auto-fallback when off
-local NT_LOCAL_BASE = "http://localhost:8619/"
+-- (no local server: the editor is GitHub-hosted only now)
 local NT_API_URL = "https://api.github.com/repos/vertxxy-1/Xyro/contents/nametags.json"
 local NT_ACCENT = Color3.fromRGB(108, 128, 255)
 
@@ -7537,60 +7536,14 @@ local function ntFromAPI(jsonBody)
 	return table.concat(out)
 end
 
--- local dev server probe (1s cap, re-checked at most once a minute so a
--- stopped server never slows the normal CDN path)
-local ntLocalUp = nil -- nil = untested
-local ntLocalCooldown = 0
-local function ntLocalProbe()
-	if ntLocalCooldown > 0 and ntLocalUp ~= nil then
-		return ntLocalUp
-	end
-	ntLocalCooldown = 60
-	local req = (syn and syn.request) or http_request or request
-	if not req then
-		ntLocalUp = false
-		return false
-	end
-	local ok, resp = pcall(req, { Url = NT_LOCAL_URL, Method = "GET", Timeout = 1 })
-	if ok and type(resp) == "table" and type(resp.Body) == "string" and #resp.Body > 2
-		and (resp.StatusCode == 200 or resp.status == 200 or resp.Success == true)
-	then
-		ntLocalUp = true
-	else
-		ntLocalUp = false
-	end
-	return ntLocalUp
-end
-
-local function ntLocalMediaUrl(url)
-	if ntLocalUp ~= true then
-		return nil
-	end
-	local path = url:match("/media/(.+)$")
-	if not path then
-		return nil
-	end
-	return NT_LOCAL_BASE .. "media/" .. path
-end
-
 local function ntFetch(manual)
 	-- priority: GitHub API on manual fetches (never stale, always the
-	-- published truth) -> your PC's local server (kept in sync by the
-	-- editor on every publish) -> jsDelivr edge for the 60s background
+	-- published truth) -> jsDelivr edge for the periodic background fetch
 	local text = nil
 	if manual then
 		text = ntFromAPI(ntHttpGet(NT_API_URL) or "")
 		if text then
 			ntLastSource = "api"
-		end
-	end
-	if not text and ntLocalProbe() then
-		local body = ntHttpGet(NT_LOCAL_URL)
-		if type(body) == "string" and #body > 2 then
-			text = body
-			ntLastSource = "local"
-		else
-			ntLocalUp = false -- server died mid-session; fall through to CDN
 		end
 	end
 	if not text then
@@ -8177,26 +8130,16 @@ local function ntApplyImage(img, url)
 	end
 	if getcustomasset and writefile and ntMember("HttpGet") then
 		local ok, asset = pcall(function()
-				local data = nil
-				local lurl = ntLocalMediaUrl(url) -- host PC copy when the local server is running
-				if lurl then
-					data = ntHttpGet(lurl)
-					if type(data) == "string" and #data > 0 then
-						ntLocalUp = true
-					end
-				end
-			if type(data) ~= "string" or #data == 0 then
-				data = ntHttpGet(url)
-			end
+			local data = ntHttpGet(url)
 			assert(type(data) == "string" and #data > 0, "empty download")
 			if ntApplyData(img, data, url) then
 				return "__handled__"
 			end
 			ntEnsureDir()
-				-- extension matters: getcustomasset only accepts known media types
-				local fname = "Xyro/ntmedia/" .. tostring((url:gsub("%W", "")):sub(-16)) .. ".png"
-				writefile(fname, data)
-				return getcustomasset(fname)
+			-- extension matters: getcustomasset only accepts known media types
+			local fname = "Xyro/ntmedia/" .. tostring((url:gsub("%W", "")):sub(-16)) .. ".png"
+			writefile(fname, data)
+			return getcustomasset(fname)
 		end)
 		if ok and asset == "__handled__" then
 			return true
@@ -8680,9 +8623,6 @@ end)
 
 connect(RunService.RenderStepped, function(dt)
 	ntBeatAcc += dt
-	if ntLocalCooldown > 0 then
-		ntLocalCooldown -= dt
-	end
 	if ntBeatAcc >= NT_BEAT_EVERY then
 		ntBeatAcc = 0
 		task.spawn(ntBeat, false) -- blocking HTTP never runs on the render thread

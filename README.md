@@ -82,11 +82,5 @@ the script re-checks for published changes, 10–300, default 15)
 Tags render as plain billboard UI, so **any executor works** — no Drawing API needed.
 Icons support PNG/JPG/GIF by URL, asset id, or base64 `data:` URI - **GIFs fully animate** (decoded frame-by-frame in script, since Roblox only shows a GIF's first frame). Rules also take `bgImage` (URL or data URI) to fill the pill background; the editor's **Choose file** buttons upload images to `media/` in this repo (base64-embeds them without a token).
 
-## Run it locally (optional)
-
-Double-click **`start_tags_server.bat`** (or run `python _server.py`) to host the tag
-editor and the tag config off your own PC at **http://localhost:8619/** — the editor
-loads instantly from disk, config reads skip the internet entirely, and publishing
-from the local editor still writes to GitHub (plus it syncs your local copy). Leaving
-it off changes nothing: the game script and everyone else just use the GitHub CDN as
-usual. Add `XYRO_LAN=1` before starting it to also serve other devices on your Wi-Fi.
+The editor is **GitHub-hosted only**: https://vertxxy-1.github.io/Xyro/ — nothing runs on
+your PC; publish straight from that page.
