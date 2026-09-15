@@ -34,14 +34,6 @@
 			"badge": true
 		},
 		{
-			"match": "stellarpAlladium",
-			"label": "Noix",
-			"color": "#5E0EAD",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/a2ea928d678cf63af2faa8c1380cfb3077fedf63.png",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/a546b8a228f066f28bdc1ec72bc9ae9dbdf5e18d.png",
-			"badge": true
-		},
-		{
 			"match": "furyrAin620",
 			"label": "x9k",
 			"color": "#DEDEDE",
@@ -49,7 +41,14 @@
 			"bg": "#07070E",
 			"image": "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/media/49196d2a5dfa173634d096120136283bb1190397.jpg",
 			"bgImage": "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/media/194b42a635c78dc1155e38454f6e4a51e12c7814.gif",
-			"userBox": true
+			"userBox": false
+		},
+		{
+			"match": "stellarpAlladium",
+			"label": "Noix",
+			"color": "#5E0EAD",
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/a2ea928d678cf63af2faa8c1380cfb3077fedf63.png",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/a546b8a228f066f28bdc1ec72bc9ae9dbdf5e18d.png"
 		},
 		{
 			"match": "Afflictiohnz",
