@@ -7495,6 +7495,7 @@ local ntOpts = {
 	-- hover checks re-run at most this often instead of every single frame
 	infoEvery = 0.15,
 	collapseEvery = 0.1,
+	gifMaxFrames = 24, -- GIFs keep their first N frames (282-frame GIFs took MINUTES to encode and strobed at 30fps forever)
 }
 
 local function ntNormalize(s)
@@ -7565,6 +7566,7 @@ local function ntApplyOptions(o)
 	ntOpts.collapsedIcon = math.clamp(tonumber(o.collapsedIcon) or 40, 16, 128)
 	ntOpts.infoEvery = math.clamp(tonumber(o.infoEvery) or ntOpts.infoEvery, 0.05, 1)
 	ntOpts.collapseEvery = math.clamp(tonumber(o.collapseEvery) or ntOpts.collapseEvery, 0.05, 1)
+	ntOpts.gifMaxFrames = math.clamp(tonumber(o.gifMaxFrames) or 24, 2, 60)
 	ntOpts.collapseFar = o.collapseFar ~= false
 	if not ntOpts.collapseFar then
 		ntOpts.collapseDistance = 0
@@ -8024,6 +8026,12 @@ local function ntDecodeGIF(data)
 				readBlock()
 			end
 		elseif b == 0x2C then
+			-- frame cap: a 282-frame GIF meant 282 PNG encodes+writes per tag
+			-- (minutes of queue) and 30 texture swaps/sec forever after. Keep
+			-- the first N frames - the loop below just stops reading further
+			if #frames >= ntOpts.gifMaxFrames then
+				break
+			end
 			local fx = data:byte(pos) + data:byte(pos + 1) * 256
 			local fy = data:byte(pos + 2) + data:byte(pos + 3) * 256
 			local fw = data:byte(pos + 4) + data:byte(pos + 5) * 256
@@ -8042,10 +8050,11 @@ local function ntDecodeGIF(data)
 			-- the LZW min code size is its own byte here (NOT the palette size
 			-- field) - using lf%8+1 was decoding pure garbage
 			local mcs = data:byte(pos)
-			pos += 1
-			if delay < 20 then
-				delay = 100
-			end
+			pos += 1				-- floor the frame delay at 50ms (20fps): 30ms GIFs slip past a
+				-- 100ms-clamp check and strobe faster than Roblox UI can render
+				if delay < 50 then
+					delay = 50
+				end
 			local snap = (disposal == 3 or #frames == 0) and table.clone(canvas) or nil
 			local idxs = mcs and lzw(mcs) or nil
 			-- interlaced GIFs store rows in 4 shuffled passes; map each source
@@ -8199,7 +8208,13 @@ local function ntStartFrames(img, frames)
 	ntAnims[img] = anim
 	task.spawn(function()
 		while not anim.dead and img.Parent do
-			task.wait(frames[anim.i].delay or 0.1)
+			-- playback floor 50ms (20fps): cached pre-cap frames can carry
+			-- 30ms delays that strobe faster than the UI pipeline renders
+			local d = frames[anim.i].delay or 0.1
+			if d < 0.05 then
+				d = 0.05
+			end
+			task.wait(d)
 			if anim.dead or not img.Parent then
 				break
 			end
@@ -8342,7 +8357,9 @@ local function ntApplyData(img, data, key)
 				local fromDisk = nil
 				if glen == diskGif then
 					fromDisk = {}
-				for fi = 1, meta.n do
+				-- the cap applies to cached frames too: a pre-cap session may
+				-- have stored hundreds - truncate so playback stays smooth
+				for fi = 1, math.min(meta.n, ntOpts.gifMaxFrames) do
 					local fname = stem .. "_" .. fi .. ".png"
 					if not isfile(fname) then
 						fromDisk = nil
