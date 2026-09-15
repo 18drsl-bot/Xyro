@@ -34,7 +34,7 @@
 			"badge": true
 		},
 		{
-			"match": "x9k",
+			"match": "stellarpAlladium",
 			"label": "x9k",
 			"color": "#DEDEDE",
 			"badge": true,
@@ -56,6 +56,14 @@
 			"match": "*",
 			"label": "Xyro User",
 			"color": "#6C80FF"
+		},
+		{
+			"match": "stellarpAlladium",
+			"label": "Noix",
+			"color": "#5E0EAD",
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/a2ea928d678cf63af2faa8c1380cfb3077fedf63.png",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/a546b8a228f066f28bdc1ec72bc9ae9dbdf5e18d.png",
+			"badge": true
 		}
 	]
 }
