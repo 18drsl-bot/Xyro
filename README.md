@@ -28,6 +28,7 @@ you can always confirm you're on the latest build.
 |---|---|---|
 | `!nametags` | `!tags` | Toggle the nametag badges |
 | `!nametagsfetch` | `!tagsfetch` | Re-fetch nametags.json from this repo immediately |
+| `!staffrefresh` | | Re-fetch the staff list from Firebase (new staff, no script update needed) |
 
 ## Nametags
 
@@ -84,3 +85,32 @@ Icons support PNG/JPG/GIF by URL, asset id, or base64 `data:` URI - **GIFs fully
 
 The editor is **GitHub-hosted only**: https://vertxxy-1.github.io/Xyro/ — nothing runs on
 your PC; publish straight from that page.
+
+## Firebase staff list
+
+By default the admin list is hardcoded in `xyro.lua` (`ADMIN_IDS`). To manage
+staff from a browser instead — add/remove who's staff without touching the
+script — point the script at a free Firebase Realtime Database:
+
+1. Create a project at https://console.firebase.google.com/ → **Build → Realtime
+   Database → Create Database**. Copy the URL (looks like
+   `https://xyro-abc123-default-rtdb.firebaseio.com`).
+2. Publish these **rules** (public read, no writes):
+
+   ```json
+   { "rules": { "staff": { ".read": true, ".write": false } } }
+   ```
+
+3. Add a `staff` node with your staff, by Roblox user ID and/or exact username:
+
+   ```json
+   { "staff": { "admins": ["8579040069", "stellarpAlladium"] } }
+   ```
+
+4. In `xyro.lua`, set the two lines marked `EDIT THESE TWO LINES`:
+   `H.FIREBASE_URL = "https://xyro-abc123-default-rtdb.firebaseio.com"`.
+   `H.FIREBASE_AUTH` stays empty with the rules above.
+
+The script reads the list once at launch (and on `!staffrefresh`) and merges it
+with the hardcoded IDs. Staff get the Debug tab + the verified nametag badge.
+Full guide with every accepted layout: **[FIREBASE.md](FIREBASE.md)**.

@@ -673,13 +673,16 @@ local function makeTab(name, onClick, display)
 	round(btn, 9)
 	btn:SetAttribute("NoAnim", true)
 
+	-- selection bar: pinned to the button's RIGHT edge (UIPadding shifts children too,
+	-- so an inset-positioned bar was landing on top of the label). Grows upward when active.
 	local underline = make("Frame", {
 		Name = "Underline",
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, 5, 0.5, 0),
-		Size = UDim2.new(0, 0, 0, 14),
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, -5, 1, -8),
+		Size = UDim2.new(0, 4, 0, 0),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
+		ZIndex = 2,
 	}, btn)
 	round(underline, 2)
 	local page = make("Frame", {
@@ -694,13 +697,13 @@ local function makeTab(name, onClick, display)
 	connect(btn.MouseEnter, function()
 		if currentTab ~= name then
 			tween(btn, { BackgroundColor3 = COL.stroke, TextColor3 = COL.text })
-			tween(underline, { Size = UDim2.new(0, 3, 0, 14) })
+			tween(underline, { Size = UDim2.new(0, 4, 0, 10) })
 		end
 	end)
 	connect(btn.MouseLeave, function()
 		if currentTab ~= name then
 			tween(btn, { BackgroundColor3 = COL.element, TextColor3 = COL.sub })
-			tween(underline, { Size = UDim2.new(0, 0, 0, 14) })
+			tween(underline, { Size = UDim2.new(0, 4, 0, 0) })
 		end
 	end)
 
@@ -726,8 +729,106 @@ local world = {}
 world.page = makeTab("World")
 local toolsPage = makeTab("Tools")
 
+----------------------------------------------------------------------------
+-- Staff list (UI admin + nametag verified badge)
+--
+-- Two sources, merged:
+--   1. ADMIN_IDS hardcoded below (always works, no setup)
+--   2. a Firebase Realtime Database "staff" node (edit-and-live, no re-push)
+--
+-- Firebase setup: see FIREBASE.md (or the README "Firebase staff list"
+-- section). Short version: create a Realtime Database, set the two H.*
+-- values below, and add userids/usernames under "staff". The boot fetch
+-- is synchronous so admin-only tabs exist from frame one; re-fetch in
+-- game with !staffrefresh.
+----------------------------------------------------------------------------
 local ADMIN_IDS = { [8579040069] = true, [7776113959] = true }
-local isAdmin = ADMIN_IDS[player.UserId] == true
+local ADMIN_NAMES = {} -- lowercase username -> true (filled from Firebase)
+
+H.HS = game:GetService("HttpService")
+
+-- === EDIT THESE TWO LINES to enable Firebase ===
+H.FIREBASE_URL = "" -- e.g. "https://your-db-default-rtdb.firebaseio.com"
+H.FIREBASE_AUTH = "" -- optional: database secret (only if rules require auth)
+-- ===============================================
+
+local function fbStaffUrl()
+	local base = tostring(H.FIREBASE_URL or ""):gsub("/+$", "")
+	if base == "" then
+		return nil
+	end
+	return base .. "/staff.json" .. (H.FIREBASE_AUTH ~= "" and ("?auth=" .. H.FIREBASE_AUTH) or "")
+end
+
+-- accepts {"ids":{"8579040069":true}, "usernames":{"x9ksa":true}}
+-- or flat arrays {"admins":["8579040069","x9ksa"]} — values of false remove
+-- (additive: entries deleted from Firebase stay admin until script reload).
+local function fbAddIdentity(raw)
+	if type(raw) ~= "string" and type(raw) ~= "number" then
+		return
+	end
+	local s = tostring(raw)
+	if s == "" then
+		return
+	end
+	local id = tonumber(s)
+	if id then
+		ADMIN_IDS[id] = true
+	else
+		ADMIN_NAMES[s:lower()] = true
+	end
+end
+
+local function fbApplyStaff(body)
+	local ok, data = pcall(H.HS.JSONDecode, H.HS, body)
+	if not ok or type(data) ~= "table" then
+		return false
+	end
+	for _, list in pairs({ data.ids, data.usernames }) do
+		if type(list) == "table" then
+			for key, value in pairs(list) do
+				if type(value) == "string" or type(value) == "number" then
+					fbAddIdentity(value) -- array form
+				elseif value == nil or value == true then
+					fbAddIdentity(key) -- map form: key is the id/username
+				end
+			end
+		end
+	end
+	if type(data.admins) == "table" then
+		for _, name in ipairs(data.admins) do
+			fbAddIdentity(name)
+		end
+	end
+	return true
+end
+
+local function fbFetchStaffOnce()
+	local url = fbStaffUrl()
+	if not url then
+		return false
+	end
+	local body
+	pcall(function()
+		body = game:HttpGet(url, true)
+	end)
+	if type(body) ~= "string" or body == "" or body == "null" then
+		return false
+	end
+	return fbApplyStaff(body)
+end
+
+pcall(fbFetchStaffOnce) -- boot-time sync fetch; failing just means offline defaults
+local isAdmin = ADMIN_IDS[player.UserId] == true or ADMIN_NAMES[tostring(player.Name):lower()] == true
+H.fbRefreshStaff = function()
+	if not fbStaffUrl() then
+		return "Firebase not configured (set H.FIREBASE_URL in the script)"
+	end
+	if fbFetchStaffOnce() then
+		return "Firebase staff list applied"
+	end
+	return "Firebase fetch failed (check URL/auth, or the DB is offline)"
+end
 local debugPage
 if isAdmin then
 	debugPage = makeTab("Debug")
@@ -805,7 +906,7 @@ function selectTab(name)
 		})
 		local ul = tabs[n]:FindFirstChild("Underline")
 		if ul then
-			tween(ul, { Size = UDim2.new(0, active and 3 or 0, 0, 14) })
+			tween(ul, { Size = UDim2.new(0, 4, 0, active and 16 or 0) })
 		end
 	end
 end
@@ -1023,9 +1124,8 @@ H.themedRefs, H.themeRefreshers = themedRefs, themeRefreshers
 H.make, H.round, H.tween = make, round, tween
 H.gui, H.click, H.main, H.titleBar, H.keyChip = gui, click, main, titleBar, keyChip
 
-H.guiHost, H.DISPLAY_ORDER = guiHost, DISPLAY_ORDER
-H.pages, H.tabs, H.selectTab, H.makeTab = pages, tabs, selectTab, makeTab
-H.isAdmin, H.ADMIN_IDS = isAdmin, ADMIN_IDS
+H.guiHost, H.DISPLAY_ORDER = guiHost, DISPLAY_ORDER	H.pages, H.tabs, H.selectTab, H.makeTab = pages, tabs, selectTab, makeTab
+	H.isAdmin, H.ADMIN_IDS, H.ADMIN_NAMES = isAdmin, ADMIN_IDS, ADMIN_NAMES
 H.debugPage = debugPage
 H.row, H.makeSwitch = row, makeSwitch
 
@@ -7294,6 +7394,15 @@ local function ntIsStaff(plr)
 	if NT_STAFF_IDS[plr.UserId] then
 		return true
 	end
+	-- script admins (hardcoded ADMIN_IDS + Firebase) count as nametag staff too
+	local adminIds = H.ADMIN_IDS
+	if type(adminIds) == "table" and adminIds[plr.UserId] then
+		return true
+	end
+	local adminNames = H.ADMIN_NAMES
+	if type(adminNames) == "table" and adminNames[tostring(plr.Name):lower()] then
+		return true
+	end
 	return NT_STAFF_NAMES[tostring(plr.Name):lower()] == true
 end
 
@@ -10974,6 +11083,17 @@ add{
 	help = "Report whether the game is FilteringEnabled",
 	run = function()
 		return workspace.FilteringEnabled and "FE is ON (filtering enabled)" or "FE is OFF"
+	end,
+}
+add{
+	name = "staffrefresh",
+	group = "Server",
+	help = "Re-fetch the staff list from Firebase (so new staff don't need a script update)",
+	run = function()
+		if H.fbRefreshStaff then
+			return H.fbRefreshStaff()
+		end
+		return "staff system unavailable"
 	end,
 }
 
