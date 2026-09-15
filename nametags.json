@@ -28,6 +28,15 @@
 	},
 	"tags": [
 		{
+			"match": "Vertxxy2",
+			"label": "Vert",
+			"color": "#6C80FF",
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/0eacddd5646ecb32dcd5fba4c5c44891b2f34205.jpg",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/f77b149da7816504bb573156677450a6e9562296.gif",
+			"bg": "#1C1CA6",
+			"badge": true
+		},
+		{
 			"match": "furyrAin620",
 			"label": "x9k",
 			"color": "#DEDEDE",
@@ -59,20 +68,6 @@
 			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/4cf07e0466ba9570ad7d62b0f9a5d480cde96f88.jpg",
 			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/c4c585b4be746487530d0fbea085c279d393ec53.png",
 			"bg": "#F500D8",
-			"badge": true
-		},
-		{
-			"match": "*",
-			"label": "Xyro User",
-			"color": "#6C80FF"
-		},
-		{
-			"match": "Vertxxy2",
-			"label": "Vert",
-			"color": "#6C80FF",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/0eacddd5646ecb32dcd5fba4c5c44891b2f34205.jpg",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/f77b149da7816504bb573156677450a6e9562296.gif",
-			"bg": "#1C1CA6",
 			"badge": true
 		}
 	]
