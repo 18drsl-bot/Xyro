@@ -7491,6 +7491,10 @@ local ntOpts = {
 	userBoxStroke = "",
 	collapseDistance = 40, -- closer than this the full pill shows; 0 = never collapse
 	collapsedIcon = 40, -- avatar-only size while collapsed (still click-teleports)
+	-- FPS governors (seconds): the per-tag @info strings and the collapse/
+	-- hover checks re-run at most this often instead of every single frame
+	infoEvery = 0.15,
+	collapseEvery = 0.1,
 }
 
 local function ntNormalize(s)
@@ -7559,6 +7563,8 @@ local function ntApplyOptions(o)
 	ntOpts.userBoxStroke = tostring(o.userBoxStroke or "")
 	ntOpts.collapseDistance = math.max(tonumber(o.collapseDistance) or 40, 0)
 	ntOpts.collapsedIcon = math.clamp(tonumber(o.collapsedIcon) or 40, 16, 128)
+	ntOpts.infoEvery = math.clamp(tonumber(o.infoEvery) or ntOpts.infoEvery, 0.05, 1)
+	ntOpts.collapseEvery = math.clamp(tonumber(o.collapseEvery) or ntOpts.collapseEvery, 0.05, 1)
 	ntOpts.collapseFar = o.collapseFar ~= false
 	if not ntOpts.collapseFar then
 		ntOpts.collapseDistance = 0
@@ -8872,8 +8878,8 @@ end
 -- flip a tag between full pill and icon-only collapsed mode. Cheap: only
 -- writes when the state actually changes (runs every frame otherwise).
 local function ntSetCollapsed(o, on)
-	if o.collapsedState == on then
-		return
+	if o.collapsedState == on and o.collapsed and o.collapsed.Visible == on then
+		return -- nothing drifted: zero work on the hot path
 	end
 	o.collapsedState = on
 	local bb = o.gui
@@ -8995,6 +9001,16 @@ task.spawn(function()
 	end
 end)
 
+-- shared per-frame state for the render loop below (allocated ONCE, not
+-- per frame - per-frame table/Vector3 churn showed up as real frame loss)
+local ntCamPos = Vector3.new()
+local ntPlayersTick = 0
+local ntPlayers = {}
+local ntCamTick = 0
+local ntInfoTick = 0
+local ntHoverTick = 0
+local ntPlayers = {}
+
 connect(RunService.RenderStepped, function(dt)
 	ntBeatAcc += dt
 	if ntBeatAcc >= NT_BEAT_EVERY then
@@ -9016,11 +9032,22 @@ connect(RunService.RenderStepped, function(dt)
 		ntHideAll()
 		return
 	end
+	ntCamPos = cam.CFrame.Position -- read once per frame, not once per player
 	-- ONE tag rebuild per frame: a fetch that changes every rule used to
 	-- rebuild all tags inside a single frame, colliding several pure-Lua
 	-- GIF decodes into one game-killing freeze
 	local ntBuildLeft = 1
-	for _, plr in ipairs(Players:GetPlayers()) do
+	-- player list cached (refreshed at most every 2s) instead of allocating
+	-- a fresh GetPlayers() array every single frame
+	local nowC = os.clock()
+	if nowC - ntPlayersTick >= 2 then
+		ntPlayersTick = nowC
+		table.clear(ntPlayers)
+		for _, p in ipairs(Players:GetPlayers()) do
+			ntPlayers[#ntPlayers + 1] = p
+		end
+	end
+	for _, plr in ipairs(ntPlayers) do
 		do -- includes self: your own pill renders above your head too
 			local ch = plr.Character
 			local head = ntAttachPart(ch)
@@ -9046,44 +9073,76 @@ connect(RunService.RenderStepped, function(dt)
 
 			if o and o.gui then
 				if want and head then
-					local dist = (cam.CFrame.Position - head.Position).Magnitude
-					local tooFar = ntOpts.maxDistance > 0 and dist > ntOpts.maxDistance					-- distance collapse (other players only): far away the pill
-					-- shrinks to just the avatar icon - still click-teleports.
-					-- Hover the mouse near the icon and the full pill expands
-					-- again until the mouse moves off it (screen-space check:
-					-- a raycast would false-positive on empty sky).
-					local wantCollapsed = ntOpts.collapseDistance > 0 and o.collapsed ~= nil and dist > ntOpts.collapseDistance -- includes self: zoom out and your pill collapses to the icon too
+					-- per-tag info + collapse math runs on a tick (defaults 10x/s
+					-- and 15x/s) instead of every frame - the single biggest
+					-- per-frame CPU saver here
+					local doInfo = nowC - (o.infoT or 0) >= ntOpts.infoEvery
+					local doCol = nowC - (o.colT or 0) >= ntOpts.collapseEvery
+					if doCol then
+						o.colT = nowC
+					end
+					local dist = o.lastDist
+					if doInfo then
+						o.infoT = nowC
+						dist = (ntCamPos - head.Position).Magnitude
+						o.lastDist = dist
+					end
+					dist = dist or (ntCamPos - head.Position).Magnitude
+					local tooFar = ntOpts.maxDistance > 0 and dist > ntOpts.maxDistance
+					-- distance collapse: far away the pill shrinks to just the avatar
+					-- icon - still click-teleports. Hover the mouse near the icon and
+					-- the full pill expands again until the mouse moves off it
+					-- (screen-space check: a raycast would false-positive on sky).
+					-- Includes self: zoom out and your pill collapses to the icon too
+					local wantCollapsed = doCol and ntOpts.collapseDistance > 0 and o.collapsed ~= nil and dist > ntOpts.collapseDistance
 					local hoverOpen = false
+					-- hover projection runs ONLY on collapse ticks (10x/s), never
+					-- every frame, and calls the API directly instead of through
+					-- a per-call closure + pcall allocation
 					if wantCollapsed and o.collapsedState and ntMouse then
-						local okPt, sp = pcall(function()
-							return cam:WorldToViewportPoint(head.Position)
-						end)
-						if okPt and type(sp) == "table" and sp.Z > 0 then
+						local okPt, sp = pcall(cam.WorldToViewportPoint, cam, head.Position)
+						if okPt and typeof(sp) == "Vector3" and sp.Z > 0 then -- was type(sp)=="table": never true for a Vector3, hover-expand never fired
 						local dx, dy = ntMouse.X - sp.X, ntMouse.Y - sp.Y
 						hoverOpen = dx * dx + dy * dy <= 2304 -- 48px radius squared
 						end
 					end
-					if o.collapsed then
+					if doCol and o.collapsed then
 						ntSetCollapsed(o, wantCollapsed and not hoverOpen)
 					end
 					if not tooFar then
-						-- live info rides on the @username line (name row is fixed-width)
-						local suffix = {}
-						if ntOpts.showHealth then
-							local hum = ch:FindFirstChildOfClass("Humanoid")
-							if hum then
-								suffix[#suffix + 1] = math.floor(hum.Health + 0.5) .. "hp"
+						-- live info rides on the @username line (name row is fixed-width).
+						-- Built WITHOUT per-frame tables: string concats only, and only
+						-- on info ticks (was: 2 allocations + 3 concats per player per frame)
+						local info = ""
+						if doInfo then
+							if ntOpts.showHealth then
+								local hum = ch:FindFirstChildOfClass("Humanoid")
+								if hum then
+									info = math.floor(hum.Health + 0.5) .. "hp"
+								end
 							end
+							if ntOpts.showDistance then
+								dist = dist or (ntCamPos - head.Position).Magnitude
+								local d = math.floor(dist + 0.5) .. "m"
+								info = info == "" and d or (info .. " | " .. d)
+							end
+							o.lastInfo = info
 						end
-						if ntOpts.showDistance then
-							suffix[#suffix + 1] = math.floor(dist + 0.5) .. "m"
+						info = o.lastInfo or ""
+						if info ~= "" then
+							info = "   " .. info
 						end
-						local info = table.concat(suffix, " | ")
-						local userBase = "@" .. plr.Name
-						if type(rule.userText) == "string" and rule.userText ~= "" then
-							userBase = rule.userText:sub(1, 1) == "@" and rule.userText or ("@" .. rule.userText)
+						local userBase = o.userBase
+						if doInfo then
+							if type(rule.userText) == "string" and rule.userText ~= "" then
+								userBase = rule.userText:sub(1, 1) == "@" and rule.userText or ("@" .. rule.userText)
+							else
+								userBase = "@" .. plr.Name
+							end
+							o.userBase = userBase
 						end
-						local newText = userBase .. (#info > 0 and ("   " .. info) or "")
+						userBase = userBase or ("@" .. plr.Name)
+						local newText = userBase .. info
 						if o.user.Text ~= newText then
 							o.user.Text = newText
 						end
