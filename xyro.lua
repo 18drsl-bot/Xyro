@@ -8491,7 +8491,10 @@ local function ntBuild(plr, rule)
 		collapsed.AnchorPoint = Vector2.new(0.5, 0.5)
 		collapsed.Position = UDim2.fromScale(0.5, 0.5)
 		collapsed.Size = UDim2.fromOffset(ntOpts.collapsedIcon, ntOpts.collapsedIcon)
-		collapsed.BackgroundTransparency = 1
+		-- box style: solid tag-colored tile behind the icon so it pops at
+		-- distance instead of floating headshot-in-a-circle
+		collapsed.BackgroundColor3 = ntColor(rule.bg, ntColor(ntOpts.pillColor, Color3.fromRGB(12, 12, 16)))
+		collapsed.BackgroundTransparency = 0.15
 		-- show the TAG's icon (custom image/GIF when the rule has one),
 		-- falling back to the player headshot
 		collapsed.Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(plr.UserId) .. "&w=420&h=420"
@@ -8500,8 +8503,13 @@ local function ntBuild(plr, rule)
 		collapsed.ZIndex = 10
 		collapsed.Parent = bb
 		local cCorner = Instance.new("UICorner")
-		cCorner.CornerRadius = UDim.new(0.5, 0)
+		cCorner.CornerRadius = UDim.new(0, 6) -- rounded-corner box, not a circle
 		cCorner.Parent = collapsed
+		local cStroke = Instance.new("UIStroke")
+		cStroke.Color = ntColor(rule.color, NT_ACCENT)
+		cStroke.Thickness = 2
+		cStroke.Transparency = 0.25
+		cStroke.Parent = collapsed
 		collapsed.ImageTransparency = 1
 		if type(rule.image) == "string" and rule.image ~= "" then
 			task.spawn(function()
