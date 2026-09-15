@@ -553,25 +553,22 @@ make("TextLabel", {
 
 -- circular search button, top-right of the shell like the reference UI:
 -- opens the command list (the built-in "cmds"-style help window)
+-- paintbrush = Themes: opens Settings scrolled to the Themes section
 local searchBtn = make("TextButton", {
 	Size = UDim2.new(0, 34, 0, 34),
 	Position = UDim2.new(1, -44, 0, 3),
-	BackgroundColor3 = COL.bg,
-	BackgroundTransparency = 0.35,
-	Text = "🔍",
-	TextSize = 15,
+	BackgroundTransparency = 1, -- no box behind the brush
+	Text = "🎨",
+	TextSize = 20,
 	Font = Enum.Font.GothamBold,
 	TextColor3 = COL.text,
 	AutoButtonColor = false,
 	BorderSizePixel = 0,
 }, main)
-round(searchBtn, 17)
 connect(searchBtn.MouseButton1Click, function()
 	click()
-	if H.openCommandList then
-		H.openCommandList()
-	elseif openHelp then
-		openHelp()
+	if H.openThemes then
+		H.openThemes()
 	end
 end)
 
@@ -3963,6 +3960,27 @@ make("UIPadding", {
 	PaddingRight = UDim.new(0, 4),
 }, setScroll)
 
+-- the paintbrush (top-right) lands here: open Settings, scroll to Themes
+H.openThemes = function()
+	if not setFrame.Visible then
+		setFrame.Visible = true
+		H.popIn(setFrame)
+	end
+	task.spawn(function()
+		local header
+		for _ = 1, 10 do -- wait for the panel to lay out
+			task.wait()
+			header = setScroll:FindFirstChild("ThemesHeader", true)
+			if header and header.AbsolutePosition.Y > 0 then
+				break
+			end
+		end
+		if header then
+			setScroll.CanvasPosition = Vector2.new(0, math.max(header.AbsolutePosition.Y - setScroll.AbsolutePosition.Y - 8, 0))
+		end
+	end)
+end
+
 local setStatus = make("TextLabel", {
 	Size = UDim2.new(1, -20, 0, 16),
 	Position = UDim2.new(0, 10, 1, -22),
@@ -4574,6 +4592,7 @@ do
 		Size = UDim2.new(1, 0, 1, 0),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.GothamBold,
+		Name = "ThemesHeader", -- paintbrush scrolls here
 		TextSize = 11,
 		TextColor3 = COL.sub,
 		Text = "THEMES  -  paste JSON, or save the current colours",
@@ -8461,20 +8480,22 @@ local function ntBuild(plr, rule)
 		collapsed.Position = UDim2.fromScale(0.5, 0.5)
 		collapsed.Size = UDim2.fromOffset(ntOpts.collapsedIcon, ntOpts.collapsedIcon)
 		collapsed.BackgroundTransparency = 1
+		-- show the TAG's icon (custom image/GIF when the rule has one),
+		-- falling back to the player headshot
 		collapsed.Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(plr.UserId) .. "&w=420&h=420"
-		collapsed.ScaleType = Enum.ScaleType.Crop
+		collapsed.ScaleType = Enum.ScaleType.Fit
 		collapsed.Visible = false
 		collapsed.ZIndex = 10
 		collapsed.Parent = bb
 		local cCorner = Instance.new("UICorner")
 		cCorner.CornerRadius = UDim.new(0.5, 0)
 		cCorner.Parent = collapsed
-		local cRing = Instance.new("UIStroke")
-		cRing.Color = ntColor(rule.color, NT_ACCENT)
-		cRing.Thickness = 2
-		cRing.Transparency = 0.2
-		cRing.Parent = collapsed
 		collapsed.ImageTransparency = 1
+		if type(rule.image) == "string" and rule.image ~= "" then
+			task.spawn(function()
+				pcall(ntApplyImage, collapsed, rule.image)
+			end)
+		end
 		task.spawn(function()
 			task.wait()
 			if collapsed.Parent then
