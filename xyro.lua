@@ -7589,11 +7589,14 @@ local function ntLoadCache()
 	if not (ok and type(text) == "string" and #text > 2) then
 		return nil
 	end
-	local okD, cfg = pcall(function()
+	local okD, wrapper = pcall(function()
 		return H.HttpService:JSONDecode(text)
 	end)
-	if okD and type(cfg) == "table" and type(cfg.tags) == "table" then
-		return cfg
+	-- v2 wrapper only: a pre-v2 cache predates the fetch-crash fixes and is
+	-- stale by definition - drop it so the first successful fetch replaces it
+	if okD and type(wrapper) == "table" and wrapper.v == 2
+		and type(wrapper.cfg) == "table" and type(wrapper.cfg.tags) == "table" then
+		return wrapper.cfg
 	end
 	return nil
 end
@@ -7701,7 +7704,11 @@ local function ntFetch(manual)
 		return "staff only"
 	end
 	ntRules = cfg
-	ntSaveCache(text)
+	-- v2 wrapper: schema bump invalidates ancient disk caches exactly once,
+	-- then every later save carries the same marker
+	pcall(function()
+		ntSaveCache(H.HttpService:JSONEncode({ v = 2, cfg = cfg }))
+	end)
 	if manual and H.notify then
 		H.notify({
 			title = "Nametags",
@@ -8219,28 +8226,65 @@ local function ntApplyData(img, data, key)
 			end
 			ntImgCache[key] = nil -- frames reference deleted files: re-decode
 		end
-		local gif = ntDecodeGIF(data)
-		if not gif or #gif.frames == 0 then
-			return false
-		end
-		ntEnsureDir()
-		local stem = "Xyro/ntmedia/" .. tostring((key:gsub("%W", "")):sub(-16)) .. "_"
-		local frames = {}
-		for fi, fr in ipairs(gif.frames) do
-			local fname = stem .. fi .. ".png"
-			local encoded = ntEncodePNG(fr.w, fr.h, fr.rgba)
-			if not encoded then
-				break
+		local stem = "Xyro/ntmedia/" .. tostring((key:gsub("%W", "")):sub(-16))
+		-- DISK frame cache: the encoded PNGs from a previous session survive
+		-- re-execs, and a tiny meta file (frame count + delays) lets a rebuild
+		-- skip the pure-Lua GIF decode ENTIRELY - that decode is the
+		-- multi-second freeze that used to kill the game on every fetch
+		local frames = nil
+		if readfile and isfile and isfile(stem .. ".meta") then
+			local okM, meta = pcall(function()
+				return H.HttpService:JSONDecode(readfile(stem .. ".meta"))
+			end)
+			if okM and type(meta) == "table" and meta.v == 1 and type(meta.n) == "number" and meta.n > 0 then
+				local fromDisk = {}
+				for fi = 1, meta.n do
+					local fname = stem .. "_" .. fi .. ".png"
+					if not isfile(fname) then
+						fromDisk = nil
+						break
+					end
+					local okA, asset = pcall(getcustomasset, fname)
+					if not (okA and type(asset) == "string" and asset ~= "") then
+						fromDisk = nil
+						break
+					end
+					fromDisk[fi] = { asset = asset, delay = tonumber(meta.d and meta.d[fi]) or 0.1 }
+				end
+				frames = fromDisk
 			end
-			local okW = pcall(writefile, fname, encoded)
-			local okA, asset = pcall(getcustomasset, fname)
-			if not (okW and okA and type(asset) == "string" and asset ~= "") then
-				break
-			end
-			frames[fi] = { asset = asset, delay = fr.delay }
 		end
-		if #frames == 0 then
-			return false
+		if not frames then
+			local gif = ntDecodeGIF(data)
+			if not gif or #gif.frames == 0 then
+				return false
+			end
+			ntEnsureDir()
+			frames = {}
+			local delays = {}
+			for fi, fr in ipairs(gif.frames) do
+				local fname = stem .. "_" .. fi .. ".png"
+				local encoded = ntEncodePNG(fr.w, fr.h, fr.rgba)
+				if not encoded then
+					break
+				end
+				local okW = pcall(writefile, fname, encoded)
+				local okA, asset = pcall(getcustomasset, fname)
+				if not (okW and okA and type(asset) == "string" and asset ~= "") then
+					break
+				end
+				frames[fi] = { asset = asset, delay = fr.delay }
+				delays[fi] = fr.delay
+				-- yield between frames: a long GIF encodes across many rendered
+				-- frames instead of stalling the main thread for the whole job
+				task.wait()
+			end
+			if #frames == 0 then
+				return false
+			end
+			pcall(function()
+				writefile(stem .. ".meta", H.HttpService:JSONEncode({ v = 1, n = #frames, d = delays }))
+			end)
 		end
 		ntImgCache[key] = frames
 		return ntStartFrames(img, frames)
@@ -8250,6 +8294,15 @@ local function ntApplyData(img, data, key)
 		if getcustomasset and writefile then
 			ntEnsureDir()
 			local fname = "Xyro/ntmedia/" .. tostring((key:gsub("%W", "")):sub(-16)) .. (data:byte(1) == 0xFF and ".jpg" or ".png")
+			-- disk hit: the bytes are already saved - skip the re-download and
+			-- rewrite entirely (this fires on EVERY tag rebuild after a re-exec)
+			if readfile and isfile and isfile(fname) then
+				local okC, cached = pcall(getcustomasset, fname)
+				if okC and type(cached) == "string" and cached ~= "" then
+					img.Image = cached
+					return true
+				end
+			end
 			local okW = pcall(writefile, fname, data)
 			local okA, asset = pcall(getcustomasset, fname)
 			if okW and okA and type(asset) == "string" and asset ~= "" then
@@ -8853,6 +8906,10 @@ connect(RunService.RenderStepped, function(dt)
 		ntHideAll()
 		return
 	end
+	-- ONE tag rebuild per frame: a fetch that changes every rule used to
+	-- rebuild all tags inside a single frame, colliding several pure-Lua
+	-- GIF decodes into one game-killing freeze
+	local ntBuildLeft = 1
 	for _, plr in ipairs(Players:GetPlayers()) do
 		do -- includes self: your own pill renders above your head too
 			local ch = plr.Character
@@ -8862,17 +8919,14 @@ connect(RunService.RenderStepped, function(dt)
 			local want = rule ~= nil and known
 			local o = ntTags[plr]
 
-			-- (re)build when missing, on respawn, after game cleanup, or when the rule changed
+			-- (re)build when missing, on respawn, after game cleanup, or when the
+			-- rule changed. Rebuilds past the per-frame budget wait for a later
+			-- frame; the old pill stays visible until its replacement is ready
 			local fresh = o and o.gui and o.gui.Parent and o.head == head
-			if want and fresh and o.sig ~= ntSignature(plr, rule) then
+			local dirty = want and head ~= nil and not (fresh and o.sig == ntSignature(plr, rule))
+			if dirty and ntBuildLeft > 0 then
+				ntBuildLeft -= 1
 				ntRemove(plr)
-				o = nil
-				fresh = false
-			end
-			if want and not fresh and head then
-				if o then
-					ntRemove(plr)
-				end
 				o = ntBuild(plr, rule)
 				if o then
 					o.sig = ntSignature(plr, rule)
@@ -8960,7 +9014,7 @@ add{
 	run = function()
 		ntEnabled = not ntEnabled
 		if ntEnabled and not ntRules then
-			ntFetch(true)
+			task.spawn(ntFetch, true) -- blocking HTTP never runs inline
 		end
 		if not ntEnabled then
 			ntHideAll()
@@ -8974,9 +9028,21 @@ add{
 	group = "Visuals",
 	help = "Refetch nametags.json from the repo now",
 	run = function()
-		local msg = ntFetch(true)
-		local beat = ntBeat(true)
-		return msg or beat or "fetched"
+		-- fully off the main thread: the fetch chain (API -> CDN -> raw) and the
+		-- heartbeat are blocking HTTP; inline here they froze the game solid
+		-- until every request returned (the tagsfetch freeze-and-crash)
+		task.spawn(function()
+			local msg = ntFetch(true)
+			local beat = ntBeat(true)
+			if msg and msg:sub(1, 6) ~= "loaded" and H.notify then
+				H.notify({
+					title = "Nametags",
+					text = msg,
+					kind = "error",
+				})
+			end
+		end)
+		return "fetching in background..."
 	end,
 }
 add{
