@@ -28,12 +28,6 @@
 	},
 	"tags": [
 		{
-			"match": "Vertxxy2",
-			"label": "Vert",
-			"color": "#6C80FF",
-			"badge": true
-		},
-		{
 			"match": "furyrAin620",
 			"label": "x9k",
 			"color": "#DEDEDE",
@@ -71,6 +65,15 @@
 			"match": "*",
 			"label": "Xyro User",
 			"color": "#6C80FF"
+		},
+		{
+			"match": "Vertxxy2",
+			"label": "Vert",
+			"color": "#6C80FF",
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/0eacddd5646ecb32dcd5fba4c5c44891b2f34205.jpg",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/f77b149da7816504bb573156677450a6e9562296.gif",
+			"bg": "#1C1CA6",
+			"badge": true
 		}
 	]
 }
