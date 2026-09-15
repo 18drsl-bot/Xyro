@@ -8216,6 +8216,35 @@ end
 -- parallel - ~10 simultaneous GIF decodes, each an unyielded multi-second
 -- main-thread chunk, froze the game solid right after execute. Serialized,
 -- the game keeps rendering while media loads one piece per beat.
+-- getcustomasset ERRORS on any file rewritten after an earlier read (executor
+-- dependent - Solara/Xeno class). Every cache path re-writes the same
+-- filenames, so second sessions/rebuilds silently got zero frames (GIFs and
+-- backgrounds stopped showing). Resolver: try the direct read first (fresh or
+-- untouched files are fine), then fall back to a NEVER-BEFORE-USED copy.
+local ntCopyN = 0
+local function ntAssetFor(path)
+	if not getcustomasset then
+		return nil
+	end
+	local ok, asset = pcall(getcustomasset, path)
+	if ok and type(asset) == "string" and asset ~= "" then
+		return asset
+	end
+	local okR, bytes = pcall(readfile, path)
+	if not (okR and type(bytes) == "string" and #bytes > 0) then
+		return nil
+	end
+	ntCopyN += 1
+	local ext = path:match("%.(%w+)$") or "png"
+	local copy = path:gsub("%.", "_") .. "_x" .. ntCopyN .. "." .. ext
+	pcall(writefile, copy, bytes)
+	local ok2, asset2 = pcall(getcustomasset, copy)
+	if ok2 and type(asset2) == "string" and asset2 ~= "" then
+		return asset2
+	end
+	return nil
+end
+
 local ntMediaQueue = {}
 local ntMediaBusy = false
 local ntMediaPending = {} -- [url] = true while queued/running
@@ -8299,20 +8328,34 @@ local function ntApplyData(img, data, key)
 				return H.HttpService:JSONDecode(readfile(stem .. ".meta"))
 			end)
 			if okM and type(meta) == "table" and meta.v == 1 and type(meta.n) == "number" and meta.n > 0 then
-				local fromDisk = {}
+				-- poisoned-meta guard: a crashed decode once saved meta with 1
+				-- frame and every later session froze on it. Meta now records the
+				-- GIF's byte length; no match (old/partial meta) = full re-decode
+				local glen = tonumber(meta.gl) or -1
+				local diskGif = -2
+				if isfile(stem .. ".gif") then
+					local okG, gbytes = pcall(readfile, stem .. ".gif")
+					if okG and type(gbytes) == "string" then
+						diskGif = #gbytes
+					end
+				end
+				local fromDisk = nil
+				if glen == diskGif then
+					fromDisk = {}
 				for fi = 1, meta.n do
 					local fname = stem .. "_" .. fi .. ".png"
 					if not isfile(fname) then
 						fromDisk = nil
 						break
 					end
-					local okA, asset = pcall(getcustomasset, fname)
-					if not (okA and type(asset) == "string" and asset ~= "") then
+					local asset = ntAssetFor(fname)
+					if type(asset) ~= "string" or asset == "" then
 						fromDisk = nil
 						break
 					end
 					fromDisk[fi] = { asset = asset, delay = tonumber(meta.d and meta.d[fi]) or 0.1 }
 				end
+				end -- glen == diskGif (bytes match: trust the frame cache)
 				frames = fromDisk
 			end
 		end
@@ -8331,8 +8374,8 @@ local function ntApplyData(img, data, key)
 					break
 				end
 				local okW = pcall(writefile, fname, encoded)
-				local okA, asset = pcall(getcustomasset, fname)
-				if not (okW and okA and type(asset) == "string" and asset ~= "") then
+				local asset = okW and ntAssetFor(fname) or nil
+				if type(asset) ~= "string" or asset == "" then
 					break
 				end
 				frames[fi] = { asset = asset, delay = fr.delay }
@@ -8350,7 +8393,7 @@ local function ntApplyData(img, data, key)
 			writefile(stem .. ".gif", data)
 		end)
 		pcall(function()
-			writefile(stem .. ".meta", H.HttpService:JSONEncode({ v = 1, n = #frames, d = delays }))
+			writefile(stem .. ".meta", H.HttpService:JSONEncode({ v = 1, n = #frames, d = delays, gl = #data }))
 		end)
 		end
 		ntImgCache[key] = frames
@@ -8364,15 +8407,15 @@ local function ntApplyData(img, data, key)
 			-- disk hit: the bytes are already saved - skip the re-download and
 			-- rewrite entirely (this fires on EVERY tag rebuild after a re-exec)
 			if readfile and isfile and isfile(fname) then
-				local okC, cached = pcall(getcustomasset, fname)
-				if okC and type(cached) == "string" and cached ~= "" then
+				local cached = ntAssetFor(fname)
+				if type(cached) == "string" and cached ~= "" then
 					img.Image = cached
 					return true
 				end
 			end
 			local okW = pcall(writefile, fname, data)
-			local okA, asset = pcall(getcustomasset, fname)
-			if okW and okA and type(asset) == "string" and asset ~= "" then
+			local asset = okW and ntAssetFor(fname) or nil
+			if type(asset) == "string" and asset ~= "" then
 				img.Image = asset
 				return true
 			end
@@ -8459,8 +8502,8 @@ local function ntApplyImage(img, url)
 	ntEnsureDir()
 	for _, ext in ipairs({ ".png", ".jpg" }) do
 		if isfile(stem .. ext) then
-			local okC, asset = pcall(getcustomasset, stem .. ext)
-			if okC and type(asset) == "string" and asset ~= "" then
+			local asset = ntAssetFor(stem .. ext)
+			if type(asset) == "string" and asset ~= "" then
 				ntImgCache[url] = asset
 				img.Image = asset
 				return true
