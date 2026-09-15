@@ -530,8 +530,18 @@
 						<label>Custom @line (blank = real @username)</label>
 						<input id="fUserText" placeholder="@anything-you-want">
 					</div>
+					<div>
+						<label>Tag shape</label>
+						<select id="fShape">
+							<option value="">Pill (default)</option>
+							<option value="Rounded">Rounded</option>
+							<option value="Square">Square</option>
+							<option value="Circle">Circle</option>
+						</select>
+					</div>
 					<div class="checks" style="grid-column:1/-1">
 						<label><input id="fBadge" type="checkbox"> show check badge next to name</label>
+						<label><input id="fType" type="checkbox"> typewriter name reveal</label>
 					</div>
 				</div>
 				<div class="mini-stage"><span class="badge mini" id="edBadge"><img id="edImg" alt="" class="hidden"><span id="edLabel">?</span><span id="edBadgeCheck" style="display:none">&#10003;</span><span class="ubox plain" id="edUbox"><span id="edUser">@user</span></span></span></div>
@@ -901,6 +911,8 @@ function editorTag() {
 		userBox: $("fUserBox").value,
 		userText: $("fUserText").value.trim(),
 		badge: $("fBadge").checked || undefined,
+		shape: $("fShape").value || undefined,
+		typewriter: $("fType").checked || undefined,
 	};
 }
 
@@ -912,6 +924,8 @@ function renderEditorPreview() {
 	$("edLabel").textContent = t.label;
 	$("edUser").textContent = t.userText ? (t.userText.indexOf("@") === 0 ? t.userText : "@" + t.userText) : "@" + myName;
 	$("edBadgeCheck").style.display = t.badge ? "" : "none";
+	const radius = t.shape === "Square" ? "4px" : t.shape === "Rounded" ? "14px" : t.shape === "Circle" ? "999px" : "18px";
+	badge.style.borderRadius = radius;
 	/* @username box on the mini preview: per-rule override or global default */
 	const ubOn = t.userBox === "true" || (t.userBox === undefined && $("optUBox").checked);
 	const ub = $("edUbox");
@@ -964,6 +978,8 @@ function openEditor(i) {
 	$("fUserBox").value = t.userBox === true ? "true" : t.userBox === false ? "false" : "";
 	$("fUserText").value = t.userText || "";
 	$("fBadge").checked = t.badge === true;
+	$("fShape").value = t.shape || "";
+	$("fType").checked = t.typewriter === true;
 	$("edDelete").style.display = i < cfg.tags.length ? "" : "none";
 	$("editor").classList.remove("hidden");
 	renderEditorPreview();
@@ -976,7 +992,7 @@ function closeEditor() {
 	renderPreview();
 }
 
-["fMatch", "fLabel", "fColorHex", "fSize", "fImage", "fBgImage", "fBgHex", "fBgTrans", "fUserBox", "fUserText"].forEach(id => {
+["fMatch", "fLabel", "fColorHex", "fSize", "fImage", "fBgImage", "fBgHex", "fBgTrans", "fUserBox", "fUserText", "fShape", "fType"].forEach(id => {
 	$(id).addEventListener("input", renderEditorPreview);
 });
 $("fBadge").addEventListener("change", renderEditorPreview);

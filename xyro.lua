@@ -7644,6 +7644,77 @@ local ICON_LEFT, TEXT_GAP, PAD_RIGHT = 8, 10, 12
 local NAME_H, USER_H = 17, 12
 
 -- signature of everything that forces a rebuild when it changes
+-- shared attach-part priority (Head preferred, then torso variants), with
+-- an any-BasePart fallback for weird rigs (ported from the v2 client)
+local NT_ATTACH_PRIORITY = { "Head", "UpperTorso", "Torso", "LowerTorso", "HumanoidRootPart" }
+local function ntAttachPart(character)
+	if not character then
+		return nil
+	end
+	for _, name in ipairs(NT_ATTACH_PRIORITY) do
+		local part = character:FindFirstChild(name)
+		if part and part:IsA("BasePart") then
+			return part
+		end
+	end
+	for _, child in ipairs(character:GetChildren()) do
+		if child:IsA("BasePart") then
+			return child
+		end
+	end
+	return nil
+end
+
+-- head mounts higher than torso parts so the tag never clips the body
+local function ntStudsOffsetForPart(part)
+	if not part then
+		return Vector3.new(0, 2.4, 0)
+	end
+	if part.Name == "Head" then
+		return Vector3.new(0, 2.4, 0)
+	elseif part.Name == "HumanoidRootPart" or part.Name == "Torso" or part.Name == "UpperTorso" then
+		return Vector3.new(0, 2.9, 0)
+	end
+	return Vector3.new(0, 2.2, 0)
+end
+
+-- distance-scaled billboard: between the limits the tag grows/shrinks with
+-- zoom instead of holding a constant pixel size (pcall: older executors may
+-- not know these properties)
+local function ntApplyDistanceScale(bb)
+	pcall(function()
+		bb.DistanceLowerLimit = 10
+		bb.DistanceUpperLimit = 60
+	end)
+end
+
+-- click-teleport: land IN FRONT of the target (their facing direction) so
+-- you don't spawn inside them, and only when they're far enough to be worth it
+local function ntTeleportTo(plr)
+	local ch = plr and plr.Character
+	local me = player.Character
+	local target = ch and (ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChild("Torso"))
+	local hrp = me and (me:FindFirstChild("HumanoidRootPart") or me:FindFirstChild("Torso"))
+	if not (target and hrp) then
+		return
+	end
+	if (target.Position - hrp.Position).Magnitude < 12 then
+		return
+	end
+	hrp.CFrame = target.CFrame * CFrame.new(0, 0, 4)
+end
+
+local function ntShapeRadius(shape)
+	if shape == "Square" then
+		return UDim.new(0, 0)
+	elseif shape == "Rounded" then
+		return UDim.new(0, 10)
+	elseif shape == "Circle" then
+		return UDim.new(0.5, 0)
+	end
+	return UDim.new(0.5, 0) -- Pill (default)
+end
+
 local function ntSignature(plr, rule)
 	rule = rule or {}
 	return table.concat({
@@ -7661,6 +7732,7 @@ local function ntSignature(plr, rule)
 		tostring(rule.userBoxRadius or ntOpts.userBoxRadius),
 		tostring(rule.userBoxStroke or ntOpts.userBoxStroke),
 		tostring(rule.font or ntOpts.font),
+		tostring(rule.shape or ""),
 		tostring(rule.size or ntOpts.size),
 		tostring(rule.userSize or ntOpts.userSize),
 		tostring(rule.imageSize or ntOpts.imageSize),
@@ -8155,7 +8227,7 @@ end
 
 local function ntBuild(plr, rule)
 	local ch = plr.Character
-	local head = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso") or ch:FindFirstChild("HumanoidRootPart"))
+	local head = ntAttachPart(ch)
 	if not (head and head:IsA("BasePart")) then
 		return nil
 	end
@@ -8191,10 +8263,10 @@ local function ntBuild(plr, rule)
 	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 260)
 
 	local bb = Instance.new("BillboardGui")
-	bb.Name = "XyroTag"
+	bb.Name = "XyroTag_" .. tostring(plr.UserId)
 	bb.Adornee = head
 	bb.Size = UDim2.fromOffset(width, height)
-	bb.StudsOffset = Vector3.new(0, 2.4, 0)
+	bb.StudsOffset = ntStudsOffsetForPart(head)
 	-- AlwaysOnTop = visible through walls; Active = REQUIRED for the pill
 	-- to receive clicks (without it TP-on-click silently does nothing)
 	bb.AlwaysOnTop = ntOpts.seeThroughWalls
@@ -8202,6 +8274,7 @@ local function ntBuild(plr, rule)
 	bb.LightInfluence = 0
 	bb.MaxDistance = ntOpts.maxDistance > 0 and ntOpts.maxDistance or 10000
 	bb.Enabled = false
+	ntApplyDistanceScale(bb)
 
 	-- soft drop shadow so the pill lifts off the world
 	local shadow = Instance.new("Frame")
@@ -8230,7 +8303,7 @@ local function ntBuild(plr, rule)
 	shCorner.Parent = shadow
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0.5, 0)
+	corner.CornerRadius = ntShapeRadius(rule.shape)
 	corner.Parent = pill
 
 	-- faint top-lit gradient so flat pill colors get a little depth
@@ -8259,7 +8332,7 @@ local function ntBuild(plr, rule)
 		bgImg.ZIndex = 0
 		bgImg.Parent = pill
 		local bgCorner = Instance.new("UICorner")
-		bgCorner.CornerRadius = UDim.new(0.5, 0)
+		bgCorner.CornerRadius = ntShapeRadius(rule.shape)
 		bgCorner.Parent = bgImg
 		task.spawn(function()
 			pcall(ntApplyImage, bgImg, bgUrl)
@@ -8279,7 +8352,7 @@ local function ntBuild(plr, rule)
 	avatar.ResampleMode = Enum.ResamplerMode.Default
 	avatar.Parent = pill
 	local avCorner = Instance.new("UICorner")
-	avCorner.CornerRadius = UDim.new(0.36, 0)
+	avCorner.CornerRadius = rule.shape == "Square" and UDim.new(0, 0) or UDim.new(0.36, 0)
 	avCorner.Parent = avatar
 	-- ring around the pfp in the rule's accent color
 	local avRing = Instance.new("UIStroke")
@@ -8398,15 +8471,11 @@ local function ntBuild(plr, rule)
 		click.ZIndex = 10
 		click.Parent = pill
 		click.MouseButton1Click:Connect(function()
-			local target = plr.Character and (plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Torso"))
-			local me = player.Character and (player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChild("Torso"))
-			if target and me then
-				me.CFrame = target.CFrame + Vector3.new(0, 2.5, 0)
-			end
+			ntTeleportTo(plr)
 		end)
 	end
 
-	local o = { gui = bb, head = head, pill = pill, stroke = stroke, shadow = shadow, name = name, user = user, avatar = avatar, bgImg = bgImg }
+	local o = { gui = bb, head = head, pill = pill, stroke = stroke, shadow = shadow, name = name, user = user, avatar = avatar, bgImg = bgImg, fullName = shownName }
 
 	-- distance collapse: beyond collapseDistance the pill shrinks to the
 	-- avatar alone (name/user rows hidden) - zooming out triggers it too,
@@ -8450,11 +8519,7 @@ local function ntBuild(plr, rule)
 		o.collapsedIconSize = ntOpts.collapsedIcon
 		if plr ~= player then -- no teleporting to yourself
 			collapsed.MouseButton1Click:Connect(function()
-				local target = plr.Character and (plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Torso"))
-				local me = player.Character and (player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChild("Torso"))
-				if target and me then
-					me.CFrame = target.CFrame + Vector3.new(0, 2.5, 0)
-				end
+				ntTeleportTo(plr)
 			end)
 		end
 	end
@@ -8479,7 +8544,28 @@ local function ntBuild(plr, rule)
 		end)
 	end
 
-	bb.Parent = head
+	-- mount out of the character: hidden UI (gethui) first, then PlayerGui,
+	-- and only parent to the part itself as a last resort. Adornee keeps the
+	-- tag following the head either way; keeping the Gui out of the character
+	-- means anti-cheats/game scripts that scan characters never see it
+	local mounted = false
+	if type(gethui) == "function" then
+		local okH, hui = pcall(gethui)
+		if okH and typeof(hui) == "Instance" then
+			bb.Parent = hui
+			mounted = bb.Parent == hui
+		end
+	end
+	if not mounted then
+		local pg = player:FindFirstChild("PlayerGui")
+		if pg then
+			bb.Parent = pg
+			mounted = bb.Parent == pg
+		end
+	end
+	if not mounted then
+		bb.Parent = head
+	end
 	return o
 end
 
@@ -8493,6 +8579,14 @@ local function ntRemove(plr)
 		end
 		ntTags[plr] = nil
 	end
+	-- bring back the game's overhead name once our tag is gone
+	pcall(function()
+		local ch = plr.Character
+		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+		if hum then
+			hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Viewer
+		end
+	end)
 end
 
 -- flip a tag between full pill and icon-only collapsed mode. Cheap: only
@@ -8645,7 +8739,7 @@ connect(RunService.RenderStepped, function(dt)
 	for _, plr in ipairs(Players:GetPlayers()) do
 		do -- includes self: your own pill renders above your head too
 			local ch = plr.Character
-			local head = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso") or ch:FindFirstChild("HumanoidRootPart"))
+			local head = ntAttachPart(ch)
 			local rule = ntRuleForPlayer(plr)
 			local known = (not ntOpts.onlyScriptUsers) or ntOnline[ntNormalize(plr.Name)] ~= nil
 			local want = rule ~= nil and known
@@ -8711,6 +8805,22 @@ connect(RunService.RenderStepped, function(dt)
 						local newText = userBase .. (#info > 0 and ("   " .. info) or "")
 						if o.user.Text ~= newText then
 							o.user.Text = newText
+						end
+						-- typewriter reveal: name fills in character by character,
+						-- holds, then restarts (per-rule opt-in)
+						if rule.typewriter then
+							o.twT = (o.twT or 0) + dt
+							local per = 0.07
+							local total = #o.fullName * per + 1.4
+							if o.twT > total then
+								o.twT = 0
+							end
+							local shown = string.sub(o.fullName, 1, math.min(#o.fullName, math.floor(o.twT / per)))
+							if o.name.Text ~= shown then
+								o.name.Text = shown
+							end
+						elseif o.name.Text ~= o.fullName then
+							o.name.Text = o.fullName
 						end
 						o.gui.Enabled = true
 					else
@@ -9819,6 +9929,77 @@ add{
         end
         return "antivc loaded"
     end,
+}add{
+	name = "tptool",
+	alias = { "tp tool" },
+	group = "Tools",
+	help = "Get a clickable TP Tool (teleports where you point)",
+	run = function()
+		local backpack = player:FindFirstChildOfClass("Backpack")
+		if not backpack then
+			return "no backpack"
+		end
+		local function makeTool()
+			local tool = Instance.new("Tool")
+			tool.Name = "TP Tool"
+			tool.RequiresHandle = false
+			tool.ToolTip = "Click to teleport to the aimed position"
+			tool.Activated:Connect(function()
+				pcall(function()
+					local hit = player:GetMouse().Hit
+					if hit then
+						local pos = hit + Vector3.new(0, 2.5, 0)
+						local ch = player.Character
+						local hrp = ch and (ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChild("Torso"))
+						if hrp then
+							hrp.CFrame = CFrame.new(pos.X, pos.Y, pos.Z)
+						end
+					end
+				end)
+			end)
+			return tool
+		end
+		-- fresh tool now, and re-give after every respawn
+		local function give()
+			local bp = player:FindFirstChildOfClass("Backpack")
+			if bp and not bp:FindFirstChild("TP Tool") then
+				makeTool().Parent = bp
+			end
+		end
+		for _, t in ipairs(backpack:GetChildren()) do
+			if t:IsA("Tool") and t.Name == "TP Tool" then
+				t:Destroy()
+			end
+		end
+		give()
+		if not ntTpToolConn then
+			ntTpToolConn = player.CharacterAdded:Connect(function()
+				task.wait(0.5)
+				give()
+			end)
+			local unload = _G.ScriptHubCleanup
+			_G.ScriptHubCleanup = function()
+				if ntTpToolConn then
+					ntTpToolConn:Disconnect()
+					ntTpToolConn = nil
+				end
+				local bp = player:FindFirstChildOfClass("Backpack")
+				local t = bp and bp:FindFirstChild("TP Tool")
+				if t then
+					t:Destroy()
+				end
+				local ch = player.Character
+				local t2 = ch and ch:FindFirstChild("TP Tool")
+				if t2 then
+					t2:Destroy()
+				end
+				if unload then
+					pcall(unload)
+				end
+			end
+		end
+		return "TP Tool given - click to teleport to your cursor"
+	end,
 }
 add{
 	name = "rejoin",
