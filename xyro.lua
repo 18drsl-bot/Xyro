@@ -7381,7 +7381,7 @@ local ntOpts = {
 	userBoxRadius = 8,
 	userBoxStroke = "",
 	collapseDistance = 40, -- closer than this the full pill shows; 0 = never collapse
-	collapsedIcon = 28, -- avatar-only size while collapsed (still click-teleports)
+	collapsedIcon = 40, -- avatar-only size while collapsed (still click-teleports)
 }
 
 local function ntNormalize(s)
@@ -7449,7 +7449,7 @@ local function ntApplyOptions(o)
 	ntOpts.userBoxRadius = math.clamp(tonumber(o.userBoxRadius) or 8, 0, 24)
 	ntOpts.userBoxStroke = tostring(o.userBoxStroke or "")
 	ntOpts.collapseDistance = math.max(tonumber(o.collapseDistance) or 40, 0)
-	ntOpts.collapsedIcon = math.clamp(tonumber(o.collapsedIcon) or 28, 16, 128)
+	ntOpts.collapsedIcon = math.clamp(tonumber(o.collapsedIcon) or 40, 16, 128)
 	ntOpts.collapseFar = o.collapseFar ~= false
 	if not ntOpts.collapseFar then
 		ntOpts.collapseDistance = 0

@@ -790,7 +790,7 @@ function renderOptions() {
 	$("optWalls").checked = o.seeThroughWalls !== false;
 	$("optCollapse").checked = (o.collapseDistance != null ? o.collapseDistance : 40) > 0;
 	$("optCollapseDist").value = o.collapseDistance != null ? o.collapseDistance : 40;
-	$("optCollapseIcon").value = o.collapsedIcon != null ? o.collapsedIcon : 28;
+	$("optCollapseIcon").value = o.collapsedIcon != null ? o.collapsedIcon : 40;
 	$("optRefresh").value = o.refreshSeconds != null ? o.refreshSeconds : 15;
 }
 
@@ -1074,7 +1074,7 @@ function readOptions() {
 		clickTeleport: $("optClickTp").checked,
 		seeThroughWalls: $("optWalls").checked,
 		collapseDistance: Math.max(0, parseInt($("optCollapseDist").value) || 0),
-		collapsedIcon: Math.min(128, Math.max(16, parseInt($("optCollapseIcon").value) || 28)),
+		collapsedIcon: Math.min(128, Math.max(16, parseInt($("optCollapseIcon").value) || 40)),
 		collapseFar: $("optCollapse").checked,
 		refreshSeconds: Math.min(300, Math.max(10, parseInt($("optRefresh").value) || 15)),
 	};
