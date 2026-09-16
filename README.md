@@ -69,8 +69,10 @@ run `!nametagsfetch` for instant reload.
 `label` (text above the head) · `color` (border color) · `image` (icon: https URL,
 asset id, or rbxassetid) · `bg` / `bgTransparency` (pill background) · `size` (name
 size) · `userSize` · `font` (GothamBlack, Bangers, Arcade, ...) · `textColor` ·
-`userColor` · `badge` (mark after the name — Xyro staff get the Roblox verified glyph,
-everyone else a plain check) · `height` · `imageSize`. First matching rule wins —
+`userColor` · `badge` (mark after the name — staff get the verified seal tinted by
+rank: founder silver, HR white, support green, trial teal; everyone else a plain
+check) · `rank` (force a badge color on this rule: `founder` / `hr` / `support` /
+`trial`) · `height` · `imageSize`. First matching rule wins —
 put exact names above the `*` catch-all.
 
 **Options:** `size` · `userSize` · `height` · `imageSize` · `maxDistance` (studs, 0 =

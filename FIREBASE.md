@@ -72,6 +72,30 @@ Rules of thumb:
 - A numeric key/value is always treated as a user ID; anything else is a username.
 - To remove staff: delete their entry in the console. (`false` also works as a value.)
 
+## 3b. Rank tiers (badge colors)
+
+Add a `ranks` node next to `admins` to give staff **colored verified seals**:
+
+```json
+{
+  "staff": {
+    "admins": ["8579040069", "stellarpAlladium"],
+    "ranks": {
+      "founder": ["8579040069", "stellarpAlladium"],
+      "hr":      ["7776113959"],
+      "support": ["someSupportUser"],
+      "trial":   ["someTrialUser"]
+    }
+  }
+}
+```
+
+Colors: **founder** = silver · **hr** = white · **support** = green · **trial** = teal.
+Tier names also accept aliases (`owner`/`dev` → founder, `admin`/`mod`/`staff` → hr,
+`helper` → support, `trialstaff`/`trialsupport` → trial). Everyone in `ranks` gets
+the seal even if they're not in the staff list; staff **without** a rank show white.
+Rank changes land on the next launch or with **`!staffrefresh`**.
+
 ## 4. Point the script at it
 
 Open `xyro.lua`, find the two lines near the top (search for `EDIT THESE TWO LINES`):

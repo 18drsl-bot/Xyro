@@ -750,6 +750,7 @@ H.HS = game:GetService("HttpService")
 -- === EDIT THESE TWO LINES to enable Firebase ===
 H.FIREBASE_URL = "" -- e.g. "https://your-db-default-rtdb.firebaseio.com"
 H.FIREBASE_AUTH = "" -- optional: database secret (only if rules require auth)
+H.NT_RANKS = H.NT_RANKS or {} -- nametag rank tiers (filled from staff.json "ranks")
 -- ===============================================
 
 local function fbStaffUrl()
@@ -798,6 +799,23 @@ local function fbApplyStaff(body)
 	if type(data.admins) == "table" then
 		for _, name in ipairs(data.admins) do
 			fbAddIdentity(name)
+		end
+	end
+	-- rank tiers: {"ranks":{"founder":["x9ksa","8579040069"],"hr":[...],
+	-- "support":[...],"trial":[...]}} - sets each person's badge color
+	-- (tier names are normalized later, in the nametag rank resolver)
+	if type(data.ranks) == "table" then
+		for tier, list in pairs(data.ranks) do
+			if type(list) == "table" then
+				for _, who in pairs(list) do
+					if type(who) == "string" or type(who) == "number" then
+						local s = tostring(who)
+						if s ~= "" then
+							H.NT_RANKS[s] = tier
+						end
+					end
+				end
+			end
 		end
 	end
 	return true
@@ -7406,6 +7424,70 @@ local function ntIsStaff(plr)
 	return NT_STAFF_NAMES[tostring(plr.Name):lower()] == true
 end
 
+----------------------------------------------------------------------------
+-- Staff RANKS - they set the verified badge color on nametags:
+--   founder -> silver | hr -> white | support -> green | trial -> teal
+-- Precedence: rule.rank (nametags.json / tag editor) beats the Firebase
+-- "ranks" node (staff.json), which beats NT_STAFF_RANKS here; staff without
+-- any explicit rank default to hr (white). Non-staff players with an
+-- explicit rule.rank get the seal too (e.g. a green support tag).
+----------------------------------------------------------------------------
+H.NT_RANKS = H.NT_RANKS or {} -- filled from Firebase staff.json (see fbApplyStaff)
+local NT_RANK_COLORS = {
+	founder = Color3.fromRGB(210, 214, 222), -- silver
+	hr = Color3.fromRGB(255, 255, 255),
+	support = Color3.fromRGB(66, 216, 120), -- green
+	trial = Color3.fromRGB(70, 205, 200), -- teal
+}
+local NT_RANK_ALIASES = {
+	founder = { founder = true, owner = true, dev = true, developer = true },
+	hr = { hr = true, staff = true, admin = true, admins = true, mod = true, moderator = true, management = true },
+	support = { support = true, helper = true, supports = true },
+	trial = { trial = true, trials = true, trialstaff = true, trialsupport = true, trialmod = true, trialhelper = true, trialadmin = true },
+}
+local NT_STAFF_RANKS = {
+	-- [123456789] = "founder", -- by userid...
+	-- x9ksa = "founder", -- ...or by exact username
+}
+
+local function ntNormalizeRank(v)
+	if type(v) ~= "string" then
+		return nil
+	end
+	local k = v:lower():gsub("[^%w]", "")
+	if k == "" then
+		return nil
+	end
+	for rank, names in pairs(NT_RANK_ALIASES) do
+		if names[k] then
+			return rank
+		end
+	end
+	return nil
+end
+
+-- returns rank (string) + tint (Color3) for a player's badge, or nil, nil
+-- when the plain check / fallback glyph behavior applies
+local function ntBadgeRankColor(plr, rule)
+	local rank = ntNormalizeRank(type(rule) == "table" and rule.rank or nil)
+	if not rank then
+		local ranks = H.NT_RANKS
+		if type(ranks) == "table" then
+			rank = ntNormalizeRank(ranks[tostring(plr.UserId)] or ranks[tostring(plr.Name):lower()])
+		end
+	end
+	if not rank then
+		rank = ntNormalizeRank(NT_STAFF_RANKS[plr.UserId] or NT_STAFF_RANKS[tostring(plr.Name):lower()])
+	end
+	if not rank and ntIsStaff(plr) then
+		rank = "hr" -- every staff member without an explicit rank shows white
+	end
+	if not rank then
+		return nil, nil
+	end
+	return rank, NT_RANK_COLORS[rank]
+end
+
 -- safe HTTP helpers. IMPORTANT: declared before anything that uses them,
 -- and safe member reads because indexing a Roblox member the executor
 -- didn't add THROWS ("HttpPost is not a valid member of DataModel")
@@ -7862,8 +7944,10 @@ local function ntSignature(plr, rule)
 		tostring(rule.imageSize or ntOpts.imageSize),
 		tostring(rule.height or ntOpts.height),
 		tostring(rule.badge and 1 or 0),
+		tostring(rule.rank or ""),
 		tostring(ntOpts.showBox and 1 or 0),
 		tostring(ntIsStaff(plr) and 1 or 0),
+		tostring(ntBadgeRankColor(plr, rule)),
 		tostring(ntOpts.seeThroughWalls and 1 or 0),
 		tostring(plr.UserId),
 		tostring(plr.DisplayName),
@@ -8260,6 +8344,94 @@ local function ntAssetFor(path)
 	return nil
 end
 
+----------------------------------------------------------------------------
+-- Rank seal artwork: a white verified plate with a punched-out check,
+-- embedded as a 16-level alpha mask (4px per char) and rasterized once per
+-- rank through ntEncodePNG, tinted to the rank color. Same silhouette as
+-- media/verified_seal.png (the full-res source committed to the repo).
+----------------------------------------------------------------------------
+local NT_SEAL_MASK = {
+	"0123456789ABCDEF",
+	"0000000000000000000000000000",
+	"0000000000111111110000000000",
+	"000000049CEEEEEEEEC940000000",
+	"000002BFFFFFFFFFFFFFFB200000",
+	"00004EFFFFFFFFFFFFFFFFE40000",
+	"0002EFFFFFFFFFFFFFFFFFFE2000",
+	"000BFFFFFFFFFFFFFFFEDFFFB000",
+	"004FFFFFFFFFFFFFFFB205FFF400",
+	"00AFFFFFFFFFFFFFFD10009FFA00",
+	"00DFFFFFFFFFFFFFF300007FFD00",
+	"01EFFFFFFFFFFFFF700001DFFE10",
+	"01EFFFFFFFFFFFFA00000BFFFE10",
+	"01EFFFD77DFFFFD100008FFFFE10",
+	"01EFFE2002DFFF300005FFFFFE10",
+	"01EFFB00002EF600002EFFFFFE10",
+	"01EFFD100004900000CFFFFFFE10",
+	"01EFFFB10000000009FFFFFFFE10",
+	"01EFFFFB000000005FFFFFFFFE10",
+	"00DFFFFFA0000002EFFFFFFFFD00",
+	"00AFFFFFF800000CFFFFFFFFFA00",
+	"004FFFFFFF70009FFFFFFFFFF400",
+	"000BFFFFFFFB8CFFFFFFFFFFB000",
+	"0002EFFFFFFFFFFFFFFFFFFE2000",
+	"00004EFFFFFFFFFFFFFFFFE40000",
+	"000002BFFFFFFFFFFFFFFB200000",
+	"000000049CEEEEEEEEC940000000",
+	"0000000000111111110000000000",
+	"0000000000000000000000000000",
+}
+local NT_SEAL_TINTS = {} -- [rank] = asset uri (false = build failed)
+local function ntSealAsset(rank)
+	if NT_SEAL_TINTS[rank] ~= nil then
+		return NT_SEAL_TINTS[rank] or nil
+	end
+	local tint = NT_RANK_COLORS[rank]
+	local function build()
+		if not tint or not ntEncodePNG or not writefile or not getcustomasset then
+			return nil
+		end
+		if isfolder and not isfolder("Xyro") and makefolder then
+			pcall(makefolder, "Xyro")
+		end
+		local pal = NT_SEAL_MASK[1]
+		local w = #NT_SEAL_MASK[2]
+		local h = #NT_SEAL_MASK - 1
+		local r = math.floor(tint.R * 255 + 0.5)
+		local g = math.floor(tint.G * 255 + 0.5)
+		local b = math.floor(tint.B * 255 + 0.5)
+		local px = table.create(w * h, "\0\0\0\0")
+		local i = 0
+		for y = 2, #NT_SEAL_MASK do
+			local row = NT_SEAL_MASK[y]
+			for x = 1, #row do
+				i += 1
+				local idx = pal:find(row:sub(x, x), 1, true) or 1
+				local a = (idx - 1) * 17
+				if a > 0 then
+					px[i] = string.char(r, g, b, a)
+				end
+			end
+		end
+		local png = ntEncodePNG(w, h, table.concat(px))
+		if type(png) ~= "string" or #png < 24 then
+			return nil
+		end
+		local path = "Xyro/seal_" .. rank .. ".png"
+		pcall(writefile, path, png)
+		return ntAssetFor(path)
+	end
+	local ok, asset = pcall(build)
+	asset = (ok and type(asset) == "string" and asset ~= "") and asset or nil
+	NT_SEAL_TINTS[rank] = asset or false
+	return asset
+end
+task.spawn(function() -- prewarm every tint off the boot path
+	for rank in pairs(NT_RANK_COLORS) do
+		pcall(ntSealAsset, rank)
+	end
+end)
+
 local ntMediaQueue = {}
 local ntMediaBusy = false
 local ntMediaPending = {} -- [url] = true while queued/running
@@ -8597,7 +8769,8 @@ local function ntBuild(plr, rule)
 	end
 	local nameW = math.min(ntTextWidth(shownName, nameSize, font), 150) -- cap so long labels never stretch the pill
 	local userW = math.min(ntTextWidth(userText0, userSize, Enum.Font.Gotham), 150)
-	local badgeW = rule.badge and (ntIsStaff(plr) and (nameSize + 6) or 16) or 0
+	local badgeRank, badgeTint = ntBadgeRankColor(plr, rule)
+	local badgeW = rule.badge and ((badgeRank or ntIsStaff(plr)) and (nameSize + 6) or 16) or 0
 	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 260)
 
 	local bb = Instance.new("BillboardGui")
@@ -8730,21 +8903,42 @@ local function ntBuild(plr, rule)
 		b.Size = UDim2.fromOffset(badgeW, NAME_H)
 		b.Font = Enum.Font.GothamBold
 		b.TextSize = 12
-		if ntIsStaff(plr) then
-			-- the EXACT Roblox verified seal: 0xE000 is the official artwork,
-			-- rendered with its own blue baked in (in-game TextColor3 is ignored
-			-- for it - that's why UIStroke excludes verified). We still set the
-			-- official blue so engines that do recolor it match. Rendered at
-			-- natural size, centered with the ~1px drop that fixes Roblox's
-			-- known off-center rendering of the private-use glyphs.
-			b.Text = NT_BADGE_GLYPH ~= "" and NT_BADGE_GLYPH or "\xE2\x9C\x93"
-			b.TextSize = math.max(nameSize + 5, 15)
-			b.TextColor3 = Color3.fromRGB(0, 170, 255)
-			b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 1)
-		else
-			b.Text = "\xE2\x9C\x93"
-			b.TextColor3 = ntColor(rule.color, NT_ACCENT)
-			b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
+		local sealed = false
+		if badgeRank and badgeTint then
+			-- RANK SEAL: the verified badge artwork recolored per staff tier
+			-- (founder silver / hr white / support green / trial teal).
+			local seal = ntSealAsset(badgeRank)
+			if seal then
+				sealed = true
+				b.Text = ""
+				b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
+				local img = Instance.new("ImageLabel")
+				img.Name = "Seal"
+				img.BackgroundTransparency = 1
+				img.AnchorPoint = Vector2.new(0.5, 0.5)
+				img.Position = UDim2.fromScale(0.5, 0.5)
+				img.Size = UDim2.fromOffset(math.max(nameSize + 5, 15), math.max(nameSize + 5, 15))
+				img.ScaleType = Enum.ScaleType.Fit
+				img.Image = seal
+				img.Parent = b
+			end
+		end
+		if not sealed then
+			-- fallback glyph path (seal unavailable): the official Roblox
+			-- verified glyph for staff - tinted in their rank color when they
+			-- have one, official blue otherwise - and a plain check for everyone
+			-- else. Rendered with the ~1px drop that fixes Roblox's known
+			-- off-center rendering of the private-use glyphs.
+			if ntIsStaff(plr) then
+				b.Text = NT_BADGE_GLYPH ~= "" and NT_BADGE_GLYPH or "\xE2\x9C\x93"
+				b.TextSize = math.max(nameSize + 5, 15)
+				b.TextColor3 = badgeTint or Color3.fromRGB(0, 170, 255)
+				b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 1)
+			else
+				b.Text = "\xE2\x9C\x93"
+				b.TextColor3 = ntColor(rule.color, NT_ACCENT)
+				b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
+			end
 		end
 		b.Parent = nameRow
 	end
@@ -11386,7 +11580,10 @@ add{
 	help = "Re-fetch the staff list from Firebase (so new staff don't need a script update)",
 	run = function()
 		if H.fbRefreshStaff then
-			return H.fbRefreshStaff()
+			local msg = H.fbRefreshStaff()
+			-- rank colors may have changed -> refresh live tags too
+			pcall(ntFetch, true)
+			return msg
 		end
 		return "staff system unavailable"
 	end,

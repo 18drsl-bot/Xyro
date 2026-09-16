@@ -540,7 +540,14 @@
 						</select>
 					</div>
 					<div class="checks" style="grid-column:1/-1">
-						<label><input id="fBadge" type="checkbox"> show check badge next to name</label>
+						<label><input id="fBadge" type="checkbox"> show badge next to name</label>
+						<select id="fRank" title="badge color - applies when this rule's badge is on">
+							<option value="">auto (staff = white)</option>
+							<option value="founder">founder (silver)</option>
+							<option value="hr">HR / staff (white)</option>
+							<option value="support">support (green)</option>
+							<option value="trial">trial (teal)</option>
+						</select>
 						<label><input id="fType" type="checkbox"> typewriter name reveal</label>
 					</div>
 				</div>
@@ -911,6 +918,7 @@ function editorTag() {
 		userBox: $("fUserBox").value,
 		userText: $("fUserText").value.trim(),
 		badge: $("fBadge").checked || undefined,
+		rank: $("fRank").value || undefined,
 		shape: $("fShape").value || undefined,
 		typewriter: $("fType").checked || undefined,
 	};
@@ -936,8 +944,10 @@ function renderEditorPreview() {
 		ub.style.borderRadius = (parseInt($("optUBoxRadius").value) || 0) + "px";
 		ub.style.border = $("optUBoxStroke").value.trim() ? "1px solid " + $("optUBoxStroke").value.trim() : "none";
 	}
-	/* match in-game: the badge renders as the Roblox verified seal in blue */
-	$("edBadgeCheck").style.color = "#00aaff";
+	/* match in-game: rank seal colors (founder silver / hr white / support
+	   green / trial teal); plain staff without a rank show white */
+	const RANK_COLORS = { founder: "#d2d6de", hr: "#ffffff", support: "#42d878", trial: "#46cdc8" };
+	$("edBadgeCheck").style.color = RANK_COLORS[t.rank] || "#ffffff";
 	const img = $("edImg");
 	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
 		img.src = t.image; img.classList.remove("hidden");
@@ -978,6 +988,7 @@ function openEditor(i) {
 	$("fUserBox").value = t.userBox === true ? "true" : t.userBox === false ? "false" : "";
 	$("fUserText").value = t.userText || "";
 	$("fBadge").checked = t.badge === true;
+	$("fRank").value = typeof t.rank === "string" && t.rank ? t.rank : "";
 	$("fShape").value = t.shape || "";
 	$("fType").checked = t.typewriter === true;
 	$("edDelete").style.display = i < cfg.tags.length ? "" : "none";
@@ -996,6 +1007,7 @@ function closeEditor() {
 	$(id).addEventListener("input", renderEditorPreview);
 });
 $("fBadge").addEventListener("change", renderEditorPreview);
+$("fRank").addEventListener("change", renderEditorPreview);
 $("fColor").addEventListener("input", () => { $("fColorHex").value = $("fColor").value.toUpperCase(); renderEditorPreview(); });
 $("fColorHex").addEventListener("input", () => { if (hex6($("fColorHex").value)) $("fColor").value = $("fColorHex").value; });
 $("fBg").addEventListener("input", () => { $("fBgHex").value = $("fBg").value.toUpperCase(); renderEditorPreview(); });
@@ -1015,6 +1027,7 @@ $("edSave").onclick = () => {
 	if (t.bg) clean.bg = t.bg; else delete clean.bg;
 	if (t.bgTransparency != null && !isNaN(t.bgTransparency)) clean.bgTransparency = t.bgTransparency; else delete clean.bgTransparency;
 	if (t.badge) clean.badge = true; else delete clean.badge;
+	if (t.rank) clean.rank = t.rank; else delete clean.rank;
 	if (t.userBox === "true") clean.userBox = true;
 	else if (t.userBox === "false") clean.userBox = false;
 	else delete clean.userBox;
