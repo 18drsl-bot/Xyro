@@ -547,6 +547,7 @@
 							<option value="hr">HR / staff (white)</option>
 							<option value="support">support (green)</option>
 							<option value="trial">trial (teal)</option>
+							<option value="purple">purple (custom)</option>
 						</select>
 						<label><input id="fType" type="checkbox"> typewriter name reveal</label>
 					</div>
@@ -946,7 +947,7 @@ function renderEditorPreview() {
 	}
 	/* match in-game: rank seal colors (founder silver / hr white / support
 	   green / trial teal); plain staff without a rank show white */
-	const RANK_COLORS = { founder: "#d2d6de", hr: "#ffffff", support: "#42d878", trial: "#46cdc8" };
+	const RANK_COLORS = { founder: "#d2d6de", hr: "#ffffff", support: "#42d878", trial: "#46cdc8", purple: "#b066ff" };
 	$("edBadgeCheck").style.color = RANK_COLORS[t.rank] || "#ffffff";
 	const img = $("edImg");
 	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {

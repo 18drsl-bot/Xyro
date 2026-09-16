@@ -72,7 +72,7 @@ size) · `userSize` · `font` (GothamBlack, Bangers, Arcade, ...) · `textColor`
 `userColor` · `badge` (mark after the name — staff get the verified seal tinted by
 rank: founder silver, HR white, support green, trial teal; everyone else a plain
 check) · `rank` (force a badge color on this rule: `founder` / `hr` / `support` /
-`trial`) · `height` · `imageSize`. First matching rule wins —
+`trial` / `purple`) · `height` · `imageSize`. First matching rule wins —
 put exact names above the `*` catch-all.
 
 **Options:** `size` · `userSize` · `height` · `imageSize` · `maxDistance` (studs, 0 =

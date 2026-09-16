@@ -7438,12 +7438,14 @@ local NT_RANK_COLORS = {
 	hr = Color3.fromRGB(255, 255, 255),
 	support = Color3.fromRGB(66, 216, 120), -- green
 	trial = Color3.fromRGB(70, 205, 200), -- teal
+	purple = Color3.fromRGB(176, 102, 255), -- custom purple
 }
 local NT_RANK_ALIASES = {
 	founder = { founder = true, owner = true, dev = true, developer = true },
 	hr = { hr = true, staff = true, admin = true, admins = true, mod = true, moderator = true, management = true },
 	support = { support = true, helper = true, supports = true },
 	trial = { trial = true, trials = true, trialstaff = true, trialsupport = true, trialmod = true, trialhelper = true, trialadmin = true },
+	purple = { purple = true, custom = true, violet = true },
 }
 local NT_STAFF_RANKS = {
 	-- [123456789] = "founder", -- by userid...
