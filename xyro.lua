@@ -8384,6 +8384,10 @@ local NT_SEAL_MASK = {
 	"0000000000000000000000000000",
 }
 local NT_SEAL_TINTS = {} -- [rank] = asset uri (false = build failed)
+-- pre-tinted seals served from the repo (jsDelivr edge). The in-engine tint
+-- stays as backup; on executors where getcustomasset refuses rewritten files
+-- the fallback keeps the real verified-seal artwork instead of a plain check.
+local NT_SEAL_URL_BASE = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/seal_"
 local function ntSealAsset(rank)
 	if NT_SEAL_TINTS[rank] ~= nil then
 		return NT_SEAL_TINTS[rank] or nil
@@ -8769,11 +8773,13 @@ local function ntBuild(plr, rule)
 	if type(rule.userText) == "string" and rule.userText ~= "" then
 		userText0 = rule.userText:sub(1, 1) == "@" and rule.userText or ("@" .. rule.userText)
 	end
-	local nameW = math.min(ntTextWidth(shownName, nameSize, font), 150) -- cap so long labels never stretch the pill
-	local userW = math.min(ntTextWidth(userText0, userSize, Enum.Font.Gotham), 150)
+	-- tags GROW with their text: no artificial width caps. Truncation only
+	-- kicks in past the hard 400px billboard ceiling (very long labels)
+	local nameW = ntTextWidth(shownName, nameSize, font)
+	local userW = ntTextWidth(userText0, userSize, Enum.Font.Gotham)
 	local badgeRank, badgeTint = ntBadgeRankColor(plr, rule)
 	local badgeW = rule.badge and ((badgeRank or ntIsStaff(plr)) and (nameSize + 6) or 16) or 0
-	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 260)
+	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 400)
 
 	local bb = Instance.new("BillboardGui")
 	bb.Name = "XyroTag_" .. tostring(plr.UserId)
@@ -8887,13 +8893,14 @@ local function ntBuild(plr, rule)
 	local name = Instance.new("TextLabel")
 	name.Name = "Name"
 	name.BackgroundTransparency = 1
+	name.AutomaticSize = Enum.AutomaticSize.X
 	name.Size = UDim2.fromOffset(math.ceil(nameW + 4), NAME_H)
 	name.Font = font
 	name.TextSize = nameSize
 	name.TextXAlignment = Enum.TextXAlignment.Left
 	name.TextYAlignment = Enum.TextYAlignment.Center
 	name.TextColor3 = ntColor(rule.textColor, ntColor(ntOpts.textColor, Color3.new(1, 1, 1)))
-	name.TextTruncate = Enum.TextTruncate.AtEnd
+	name.TextTruncate = Enum.TextTruncate.AtEnd -- only ever bites past 400px
 	name.Text = shownName
 	name.Parent = nameRow
 
@@ -8908,21 +8915,36 @@ local function ntBuild(plr, rule)
 		local sealed = false
 		if badgeRank and badgeTint then
 			-- RANK SEAL: the verified badge artwork recolored per staff tier
-			-- (founder silver / hr white / support green / trial teal).
+			-- (founder silver / hr white / support green / trial teal / purple).
+			-- Primary: the pre-tinted PNGs hosted in the repo, loaded through the
+			-- same media pipeline as every other tag image (works wherever GIF
+			-- backgrounds work). Backup: an in-engine tint of the embedded mask.
 			local seal = ntSealAsset(badgeRank)
+			local sealUrl = nil
 			if seal then
 				sealed = true
 				b.Text = ""
-				b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
-				local img = Instance.new("ImageLabel")
-				img.Name = "Seal"
-				img.BackgroundTransparency = 1
-				img.AnchorPoint = Vector2.new(0.5, 0.5)
-				img.Position = UDim2.fromScale(0.5, 0.5)
-				img.Size = UDim2.fromOffset(math.max(nameSize + 5, 15), math.max(nameSize + 5, 15))
-				img.ScaleType = Enum.ScaleType.Fit
+			else
+				-- no in-engine asset: load the repo-hosted tinted seal through
+				-- the async media pipeline (same one that serves GIF bg's)
+				sealUrl = NT_SEAL_URL_BASE .. badgeRank .. ".png"
+			end
+			b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
+			local img = Instance.new("ImageLabel")
+			img.Name = "Seal"
+			img.BackgroundTransparency = 1
+			img.AnchorPoint = Vector2.new(0.5, 0.5)
+			img.Position = UDim2.fromScale(0.5, 0.5)
+			img.Size = UDim2.fromOffset(math.max(nameSize + 5, 15), math.max(nameSize + 5, 15))
+			img.ScaleType = Enum.ScaleType.Fit
+			img.Parent = b
+			if sealed then
 				img.Image = seal
-				img.Parent = b
+			elseif sealUrl then
+				b.Text = ""
+				task.spawn(function()
+					pcall(ntApplyImage, img, sealUrl)
+				end)
 			end
 		end
 		if not sealed then
