@@ -65,12 +65,13 @@
 		},
 		{
 			"match": "Afflictiohnz",
-			"label": "SWITCHES THE BIRTHDAY BOY",
+			"label": "BIRTHDAY BOY",
 			"color": "#AC0FF5",
 			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/4cf07e0466ba9570ad7d62b0f9a5d480cde96f88.jpg",
 			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/c4c585b4be746487530d0fbea085c279d393ec53.png",
 			"bg": "#F500D8",
-			"badge": true
+			"badge": true,
+			"rank": "support"
 		}
 	]
 }
