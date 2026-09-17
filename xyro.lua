@@ -748,12 +748,13 @@ local toolsPage = makeTab("Tools")
 --   2. a Firebase Realtime Database "staff" node (edit-and-live, no re-push)
 --
 -- Firebase setup: see FIREBASE.md (or the README "Firebase staff list"
--- section). Short version: create a Realtime Database, set the two H.*
--- values below, and add userids/usernames under "staff". The boot fetch
+-- section). Staff comes ONLY from the Firebase database (repo firebase.json
+-- points at it) - there is no hardcoded admin list anymore. The boot fetch
 -- is synchronous so admin-only tabs exist from frame one; re-fetch in
--- game with !staffrefresh.
+-- game with !staffrefresh. If Firebase is unreachable everyone is a
+-- regular member until it comes back (!staffrefresh retries).
 ----------------------------------------------------------------------------
-local ADMIN_IDS = { [8579040069] = true, [7776113959] = true }
+local ADMIN_IDS = {} -- filled ONLY from Firebase (fbAddIdentity)
 local ADMIN_NAMES = {} -- lowercase username -> true (filled from Firebase)
 
 H.HS = game:GetService("HttpService")
@@ -7535,7 +7536,7 @@ local function ntIsStaff(plr)
 	if NT_STAFF_IDS[plr.UserId] then
 		return true
 	end
-	-- script admins (hardcoded ADMIN_IDS + Firebase) count as nametag staff too
+	-- script admins (Firebase-loaded; no hardcoded list anymore) count as nametag staff too
 	local adminIds = H.ADMIN_IDS
 	if type(adminIds) == "table" and adminIds[plr.UserId] then
 		return true
