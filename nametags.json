@@ -38,25 +38,6 @@
 			"badge": true
 		},
 		{
-			"match": "furyrAin620",
-			"label": "x9k",
-			"color": "#DEDEDE",
-			"badge": true,
-			"rank": "founder",
-			"bg": "#07070E",
-			"image": "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/media/49196d2a5dfa173634d096120136283bb1190397.jpg",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/225cd37da6d4753d5d06c642fc9239b92048b2fc.gif",
-			"userBox": false
-		},
-		{
-			"match": "krillclic",
-			"label": "ONLINE PREDATOR ALERT",
-			"color": "#FF0000",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/5e774072c731d1f9356b0b941ea5179f92c2305d.jpg",
-			"bg": "#FF0000",
-			"rank": "partner"
-		},
-		{
 			"match": "*",
 			"label": "xyro user",
 			"color": "#FFFFFF",
