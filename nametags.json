@@ -49,31 +49,6 @@
 			"userBox": false
 		},
 		{
-			"match": "larp_139",
-			"label": "Trxsy",
-			"color": "#FFFFFF",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/fb9466f32effba295ed460cc0738c252def7cdf1.jpg",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/9d8b8846f4bae0e36d0e4981c221c1fa3b95c8a7.gif",
-			"rank": "trial"
-		},
-		{
-			"match": "NoixCtl",
-			"label": "Noix",
-			"color": "#5E0EAD",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/a2ea928d678cf63af2faa8c1380cfb3077fedf63.png",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/a546b8a228f066f28bdc1ec72bc9ae9dbdf5e18d.png"
-		},
-		{
-			"match": "Afflictiohnz",
-			"label": "BIRTHDAY BOY",
-			"color": "#AC0FF5",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/4cf07e0466ba9570ad7d62b0f9a5d480cde96f88.jpg",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/c4c585b4be746487530d0fbea085c279d393ec53.png",
-			"bg": "#F500D8",
-			"badge": true,
-			"rank": "support"
-		},
-		{
 			"match": "*",
 			"label": "xyro user",
 			"color": "#FFFFFF",
