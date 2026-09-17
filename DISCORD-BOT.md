@@ -88,6 +88,21 @@ commands.
    URI — the game embeds it with zero repo changes (bigger `nametags.json`).
 3. GIFs animate in-game either way.
 
+## Staff list via Firebase (optional)
+
+The script also merges staff from a Firebase Realtime Database so you can add
+/remove staff from the Firebase console with zero repo commits. Setup is two
+repo files: `staff` data in Firebase (public read, no writes — see
+FIREBASE.md) plus a `firebase.json` in the repo root:
+
+```json
+{ "firebase": { "url": "https://your-db-default-rtdb.firebaseio.com" } }
+```
+
+Your bot can write that file with the same `readConfig`/`writeConfig` helpers
+above (pointed at `firebase.json` instead of `nametags.json`) — a `PUT` to
+`/contents/firebase.json`.
+
 ## Verified badge
 
 Just set `"badge": true` on a rule — players get the **real Roblox verified

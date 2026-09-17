@@ -747,11 +747,109 @@ local ADMIN_NAMES = {} -- lowercase username -> true (filled from Firebase)
 
 H.HS = game:GetService("HttpService")
 
--- === EDIT THESE TWO LINES to enable Firebase ===
+-- === EDIT THESE TWO LINES to enable Firebase (OPTIONAL) ===
+-- You normally DON'T edit these: the script reads firebase.json in the repo
+-- root instead (see fbLoadRepoConfig below). Only set them here to override
+-- the repo config, e.g. for a private test database.
 H.FIREBASE_URL = "" -- e.g. "https://your-db-default-rtdb.firebaseio.com"
 H.FIREBASE_AUTH = "" -- optional: database secret (only if rules require auth)
 H.NT_RANKS = H.NT_RANKS or {} -- nametag rank tiers (filled from staff.json "ranks")
--- ===============================================
+-- ===========================================================
+
+-- Repo-hosted Firebase config: firebase.json in the repo root turns the
+-- staff list over to Firebase with ZERO script edits:
+--   { "firebase": { "url": "https://your-db-default-rtdb.firebaseio.com" } }
+-- (optional "auth": "<database secret>" when reads are locked; a bare
+-- "https://..." body also works). Fetched once at boot, fresh sources first
+-- (GitHub API is never CDN-cached; raw gets a cache-buster). A URL set right
+-- here in the script still wins over the repo file.
+
+-- fetch helpers for the repo config (kept separate from the script's own
+-- ntHttpGet, which is declared much later in the nametag section)
+local function fbHttpGet(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url, true)
+	end)
+	if ok and type(body) == "string" and body ~= "" then
+		return body
+	end
+	local req = (syn and syn.request) or http_request or request
+	if req then
+		local ok2, resp = pcall(req, { Url = url, Method = "GET" })
+		if ok2 and resp and type(resp.Body) == "string" and resp.Body ~= "" then
+			return resp.Body
+		end
+	end
+	return nil
+end
+
+-- read firebase.json from the repo (GitHub API first - never cached - then
+-- raw with a cache-buster, then jsDelivr edge). Returns url + optional auth.
+local function fbLoadRepoConfig()
+	if H.FIREBASE_URL ~= "" then
+		return -- an explicit script-level URL always wins
+	end
+	local busters = "?t=" .. tostring(os.time())
+	local sources = {
+		"https://api.github.com/repos/vertxxy-1/Xyro/contents/firebase.json",
+		"https://raw.githubusercontent.com/vertxxy-1/Xyro/main/firebase.json" .. busters,
+		"https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/firebase.json",
+	}
+	for _, url in ipairs(sources) do
+		local body = fbHttpGet(url)
+		if type(body) == "string" and body ~= "" then
+			-- GitHub API wraps the file in JSON: pull out the base64 content.
+			-- JSON-DECODE the wrapper FIRST (never regex the raw payload): the
+			-- API's newlines inside the content string are escaped as literal
+			-- backslash-n runs, and 'n' is a legal base64 char - strip-then-decode
+			-- silently corrupts the data. Decoding turns those into real newlines
+			-- that the base64 cleaners then handle. Same lesson loadstring.lua
+			-- already learned.
+			local apiMeta = nil
+			if body:find('"content"', 1, true) then
+				local okA, parsed = pcall(H.HS.JSONDecode, H.HS, body)
+				if okA and type(parsed) == "table" and type(parsed.content) == "string" and #parsed.content > 8 then
+					apiMeta = parsed
+				end
+			end
+			if apiMeta then
+				local b64 = apiMeta.content:gsub("%s", "")
+				local decoded = nil
+				pcall(function()
+					if syn and syn.crypt and syn.crypt.base64decode then
+						decoded = syn.crypt.base64decode(b64)
+					elseif type(crypt) == "table" and crypt.base64decode then
+						decoded = crypt.base64decode(b64)
+					else
+						decoded = H.HS:Base64Decode(b64)
+					end
+				end)
+				if type(decoded) == "string" and decoded ~= "" then
+					body = decoded
+				end
+			end
+			local okJ, data = pcall(H.HS.JSONDecode, H.HS, body)
+			if okJ and type(data) == "table" then
+				local fb = data.firebase or data -- accept both {"firebase":{...}} and flat
+				if type(fb) == "table" and type(fb.url) == "string" and fb.url ~= "" then
+					H.FIREBASE_URL = fb.url
+					if type(fb.auth) == "string" then
+						H.FIREBASE_AUTH = fb.auth
+					end
+					return
+				end
+			elseif okJ == false and body:sub(1, 8) == "https://" then
+				-- bare URL body: the whole file is just the database URL
+				H.FIREBASE_URL = (body:gsub("%s+", ""))
+				return
+			end
+			-- a real firebase.json exists (we fetched a 200): stop after the
+			-- first source that answers, even if its JSON was unusable, so a
+			-- stale mirror can't be second-guessed by a fresher one
+			return
+		end
+	end
+end
 
 local function fbStaffUrl()
 	local base = tostring(H.FIREBASE_URL or ""):gsub("/+$", "")
@@ -836,11 +934,12 @@ local function fbFetchStaffOnce()
 	return fbApplyStaff(body)
 end
 
+pcall(fbLoadRepoConfig) -- repo firebase.json -> FIREBASE_URL (no script edits needed)
 pcall(fbFetchStaffOnce) -- boot-time sync fetch; failing just means offline defaults
 local isAdmin = ADMIN_IDS[player.UserId] == true or ADMIN_NAMES[tostring(player.Name):lower()] == true
 H.fbRefreshStaff = function()
 	if not fbStaffUrl() then
-		return "Firebase not configured (set H.FIREBASE_URL in the script)"
+		return "Firebase not configured (add firebase.json to the repo, or set H.FIREBASE_URL in the script)"
 	end
 	if fbFetchStaffOnce() then
 		return "Firebase staff list applied"

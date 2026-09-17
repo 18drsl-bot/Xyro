@@ -97,31 +97,45 @@ Colors: **founder** = silver · **hr** = white · **support** = green · **trial
 the seal even if they're not in the staff list; staff **without** a rank show white.
 Rank changes land on the next launch or with **`!staffrefresh`**.
 
-## 4. Point the script at it
+## 4. Point the script at it (no script edits!)
 
-Open `xyro.lua`, find the two lines near the top (search for `EDIT THESE TWO LINES`):
+Add a **`firebase.json`** file to the **repo root** with your database URL:
 
-```lua
-H.FIREBASE_URL = "" -- e.g. "https://your-db-default-rtdb.firebaseio.com"
-H.FIREBASE_AUTH = "" -- optional: database secret (only if rules require auth)
+```json
+{
+	"firebase": {
+		"url": "https://xyro-abc123-default-rtdb.firebaseio.com"
+	}
+}
 ```
 
-Paste your database URL from step 1 and push the update. That's it — the script
-reads `https://<your-db>/staff.json` once at launch (synchronously, so the
-admin-only Debug tab exists from the first frame) and merges everyone into the
-staff list.
+Push it (or use the tag editor's token flow / the GitHub web UI — any repo
+commit works). At launch the script reads this file — GitHub API first (never
+CDN-cached), then raw with a cache-buster, then the jsDelivr edge — and points
+itself at your database. It then reads `https://<your-db>/staff.json`
+(synchronously, so the admin-only Debug tab exists from the first frame) and
+merges everyone into the staff list. Change the URL any time by editing this
+one file — no `xyro.lua` edits, ever.
 
-Don't want Firebase? Leave `H.FIREBASE_URL` empty — the hardcoded `ADMIN_IDS`
-table right above keeps working exactly as before, and Firebase just adds on
-top of it.
+Prefer editing the script? The two `EDIT THESE TWO LINES` lines in `xyro.lua`
+(`H.FIREBASE_URL` / `H.FIREBASE_AUTH`) still work and **override** the repo
+file — handy for private test databases.
+
+Don't want Firebase? Leave `firebase.json`'s `url` empty (or the file absent)
+and `H.FIREBASE_URL` empty — the hardcoded `ADMIN_IDS` table keeps working
+exactly as before.
+
+The file also accepts a bare URL as its whole body, or a flat
+`{ "url": "...", "auth": "..." }` — but the nested `firebase` form above is
+the canonical one.
 
 ### Auth secret (usually not needed)
 
 With the rules from step 2 you don't need any secret. If you ever lock reads
-behind auth, paste a **database secret** into `H.FIREBASE_AUTH` (Firebase
-console → Project settings → Service accounts → Database secrets). It travels
-with every copy of the script, so treat it like a password — the open-read
-rules avoid the issue entirely.
+behind auth, add `"auth": "<database secret>"` next to the `url` in
+`firebase.json` (Firebase console → Project settings → Service accounts →
+Database secrets). It travels with every copy of the script, so treat it like
+a password — the open-read rules avoid the issue entirely.
 
 ## 5. In game
 

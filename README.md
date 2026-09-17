@@ -109,9 +109,15 @@ script — point the script at a free Firebase Realtime Database:
    { "staff": { "admins": ["8579040069", "stellarpAlladium"] } }
    ```
 
-4. In `xyro.lua`, set the two lines marked `EDIT THESE TWO LINES`:
-   `H.FIREBASE_URL = "https://xyro-abc123-default-rtdb.firebaseio.com"`.
-   `H.FIREBASE_AUTH` stays empty with the rules above.
+4. Add **`firebase.json`** to the repo root (no script edits needed):
+
+   ```json
+   { "firebase": { "url": "https://xyro-abc123-default-rtdb.firebaseio.com" } }
+   ```
+
+   `H.FIREBASE_AUTH` stays empty with the rules above. (Editing the two
+   `EDIT THESE TWO LINES` lines in `xyro.lua` still works — the repo file
+   is just the no-repush way to do it.)
 
 The script reads the list once at launch (and on `!staffrefresh`) and merges it
 with the hardcoded IDs. Staff get the Debug tab + the verified nametag badge.
