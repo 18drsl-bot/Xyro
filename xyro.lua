@@ -3624,6 +3624,54 @@ local toolDefs = {
 	},
 }
 
+-- Anti-VC pinned to the top of Tools (same loader as the !antivc command)
+do
+	local antiVcUrl = "https://shield.xao.wtf/api/loader/550af30c-aaa3-4338-acab-f44010a5ef09"
+	local antiVcBtn = make("TextButton", {
+		Size = UDim2.new(1, -6, 0, 30),
+		BackgroundColor3 = COL.accent,
+		Font = Enum.Font.GothamBold,
+		TextSize = 13,
+		TextColor3 = Color3.fromRGB(255, 255, 255),
+		Text = "Anti-VC",
+		AutoButtonColor = true,
+		BorderSizePixel = 0,
+		LayoutOrder = 0,
+	}, toolsScroll)
+	round(antiVcBtn, 6)
+	connect(antiVcBtn.MouseButton1Click, function()
+		click()
+		if not loadstring then
+			notify({ title = "Anti-VC", text = "loadstring is not available on this executor", kind = "error" })
+			return
+		end
+		notify({ title = "Anti-VC", text = "loading...", kind = "info" })
+		task.spawn(function()
+			local okSrc, source = pcall(function()
+				return game:HttpGet(antiVcUrl, true)
+			end)
+			if not okSrc or type(source) ~= "string" or source == "" then
+				warn("[antivc] " .. tostring(source))
+				notify({ title = "Anti-VC", text = "download failed - see console", kind = "error" })
+				return
+			end
+			local fn, compileErr = loadstring(source)
+			if not fn then
+				warn("[antivc] " .. tostring(compileErr))
+				notify({ title = "Anti-VC", text = "compile failed - see console", kind = "error" })
+				return
+			end
+			local okRun, runErr = pcall(fn)
+			if not okRun then
+				warn("[antivc] " .. tostring(runErr))
+				notify({ title = "Anti-VC", text = "runtime failed - see console", kind = "error" })
+				return
+			end
+			notify({ title = "Anti-VC", text = "loaded", kind = "success" })
+		end)
+	end)
+end
+
 local spawnedFabs = {}
 
 local function runTool(def)
