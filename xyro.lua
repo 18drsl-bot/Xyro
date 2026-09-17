@@ -9038,11 +9038,10 @@ local function ntBuild(plr, rule)
 		b.Size = UDim2.fromOffset(badgeW, NAME_H)
 		b.Font = Enum.Font.GothamBold
 		b.TextSize = 12
-		local sealed = false
 		-- EVERYONE with badge:true gets the REAL Roblox verified seal artwork
 		-- (blue scalloped disc + white check) from the repo. Staff with a rank
 		-- get it recolored to their tier (founder silver / hr white / support
-		-- green / trial teal / purple / partner dark blue) via the tinted builds.
+		-- green / trial teal / purple / partner dark blue).
 		b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
 		local img = Instance.new("ImageLabel")
 		img.Name = "Seal"
@@ -9052,43 +9051,72 @@ local function ntBuild(plr, rule)
 		img.Size = UDim2.fromOffset(math.max(nameSize + 5, 15), math.max(nameSize + 5, 15))
 		img.ScaleType = Enum.ScaleType.Fit
 		img.Parent = b
+
+		-- last-resort text glyph, tinted to the rank so even the fallback
+		-- matches what the tag editor previews
+		local function badgeGlyphFallback()
+			if img.Parent then
+				img:Destroy()
+			end
+			b.Text = (badgeRank or ntIsStaff(plr)) and (NT_BADGE_GLYPH ~= "" and NT_BADGE_GLYPH or "\xE2\x9C\x93") or "\xE2\x9C\x93"
+			b.TextSize = math.max(nameSize + 5, 15)
+			b.TextColor3 = badgeTint or ntColor(rule.color, Color3.fromRGB(0, 170, 255))
+			b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 1)
+		end
+
+		-- cache-buster: a bumped version gives every seal URL a fresh
+		-- ntmedia disk stem, so a poisoned/broken cache file from an older
+		-- build can never blank the badge again
+		local sealBuster = "?v=14"
 		local sealUrl = nil
 		if badgeRank and badgeTint then
-			-- RANK TINT: prefer the in-engine tinted build, else the repo's
-			-- pre-tinted PNG (same pipeline as GIF backgrounds).
-			local seal = ntSealAsset(badgeRank)
-			if seal then
-				sealed = true
-				img.Image = seal
-			else
-				sealUrl = NT_SEAL_URL_BASE .. badgeRank .. ".png"
+			-- RANK TINT: the repo's pre-tinted PNG first - the same network
+			-- pipeline that renders the blue seal everywhere - so in-game
+			-- colors always match the tag editor preview. (The in-engine
+			-- tinted build stays as the stage-2 backup below.)
+			sealUrl = NT_SEAL_URL_BASE .. badgeRank .. ".png" .. sealBuster
+		else
+			sealUrl = NT_BADGE_URL .. sealBuster
+		end
+		b.Text = ""
+		task.spawn(function()
+			pcall(ntApplyImage, img, sealUrl)
+			-- NOTE: a fresh URL returns true immediately (queued) and fills
+			-- the Seal ImageLabel in later; an outright refusal (no
+			-- getcustomasset / no http) lands here synchronously and the
+			-- verifier below catches it - either way the badge never vanishes.
+		end)
+
+		-- LOAD VERIFIER: the async pipeline can fail invisibly (queued 404,
+		-- poisoned old disk cache, getcustomasset refusing a rewritten file)
+		-- and leave an ImageLabel that renders nothing. Check shortly after
+		-- mount: not loaded = try the in-engine tinted build once (ranked
+		-- badges only), then give up to the glyph. Runs on the tag's own
+		-- closure; every step re-checks parenting so re-ghosted tags are safe.
+		task.delay(6, function()
+			if not (img.Parent and b.Parent) then
+				return
 			end
-		end
-		if not sealed then
-			-- official blue verified seal through the async media pipeline;
-			-- last-ditch fallback: the verified glyph / plain check
-			sealUrl = NT_BADGE_URL
-		end
-		if sealUrl then
-			b.Text = ""
-			task.spawn(function()
-				local okS = pcall(ntApplyImage, img, sealUrl)
-				-- NOTE: a fresh URL returns true immediately (queued) and fills
-				-- the Seal ImageLabel in later; only an outright refusal (no
-				-- getcustomasset / no http / bad data URI) lands here - fall
-				-- back to a text glyph so the badge never vanishes. Runs
-				-- synchronously in that case, i.e. before b is parented.
-				if not okS then
-					if img.Parent then
-						img:Destroy()
-					end
-					b.Text = (badgeRank or ntIsStaff(plr)) and (NT_BADGE_GLYPH ~= "" and NT_BADGE_GLYPH or "\xE2\x9C\x93") or "\xE2\x9C\x93"
-					b.TextSize = math.max(nameSize + 5, 15)
-					b.TextColor3 = badgeTint or ntColor(rule.color, Color3.fromRGB(0, 170, 255))
-					b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 1)
+			local loaded = img.Image ~= "" and img.IsLoaded
+			if loaded then
+				return
+			end
+			local triedEngine = img:GetAttribute("EngineSeal") == true
+			if badgeRank and badgeTint and not triedEngine then
+				local seal = ntSealAsset(badgeRank)
+				if seal then
+					img:SetAttribute("EngineSeal", true)
+					img.Image = seal
+					task.delay(4, function()
+						if img.Parent and b.Parent and not (img.Image ~= "" and img.IsLoaded) then
+							badgeGlyphFallback()
+						end
+					end)
+					return
 				end
-			end)
-		end
+			end
+			badgeGlyphFallback()
+		end)
 		b.Parent = nameRow
 	end
 
