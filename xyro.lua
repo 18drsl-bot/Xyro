@@ -7743,8 +7743,12 @@ local function ntFont(name)
 end
 
 local function ntTextWidth(text, size, font)
+	-- measure in an effectively infinite frame: GetTextSize WRAPS text at
+	-- the given frame width, so a small frame made long labels measure as
+	-- multi-line blobs (under-measured -> pill too small -> text truncated
+	-- with "..." even when it easily fit)
 	local ok, bounds = pcall(function()
-		return H.TextService:GetTextSize(text, size, font, Vector2.new(400, 40))
+		return H.TextService:GetTextSize(text, size, font, Vector2.new(10000, 10000))
 	end)
 	if ok and typeof(bounds) == "Vector2" then
 		return bounds.X
@@ -7986,6 +7990,7 @@ local function ntHideAll()
 end
 
 local ICON_LEFT, TEXT_GAP, PAD_RIGHT = 8, 10, 12
+local NT_MAX_PILL_W = 4000 -- pure safety valve for absurd labels; pills grow to fit any realistic text
 local NAME_H, USER_H = 17, 12
 
 -- signature of everything that forces a rebuild when it changes
@@ -8910,17 +8915,17 @@ local function ntBuild(plr, rule)
 	if type(rule.userText) == "string" and rule.userText ~= "" then
 		userText0 = rule.userText:sub(1, 1) == "@" and rule.userText or ("@" .. rule.userText)
 	end
-	-- tags GROW with their text: no artificial width caps. Truncation only
-	-- kicks in past the 560px billboard ceiling (very long labels) - and at
-	-- the ceiling the name truncates AT the pill edge, so text can never
-	-- spill past the pill / its bgImage
+	-- tags GROW with their text: the pill always stretches to fit the
+	-- longest line (name or @username), so long labels/usernames never
+	-- truncate and never spill past the pill / its bgImage. Truncation is
+	-- only a far safety valve past 4000px (absurd labels).
 	local nameW = ntTextWidth(shownName, nameSize, font)
 	local userW = ntTextWidth(userText0, userSize, Enum.Font.Gotham)
 	local badgeRank, badgeTint = ntBadgeRankColor(plr, rule)
 	local badgeW = rule.badge and (nameSize + 6) or 0
 	local contentW = math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT)
-	local over = contentW > 560
-	local width = math.clamp(contentW, 120, 560)
+	local over = contentW > NT_MAX_PILL_W
+	local width = math.clamp(contentW, 120, NT_MAX_PILL_W)
 
 	local bb = Instance.new("BillboardGui")
 	bb.Name = "XyroTag_" .. tostring(plr.UserId)
@@ -9035,8 +9040,9 @@ local function ntBuild(plr, rule)
 	name.Name = "Name"
 	name.BackgroundTransparency = 1
 	if over then
-		-- ceiling reached: fill the row (minus badge) and truncate at the
-		-- pill edge - the background always spans exactly what the text shows
+		-- safety valve reached (absurdly long label): fill the row (minus
+		-- badge) and truncate at the pill edge - the background always spans
+		-- exactly what the text shows
 		name.AutomaticSize = Enum.AutomaticSize.None
 		name.Size = UDim2.new(1, badgeW > 0 and -(badgeW + 8) or 0, 0, NAME_H)
 	else
@@ -9048,7 +9054,7 @@ local function ntBuild(plr, rule)
 	name.TextXAlignment = Enum.TextXAlignment.Left
 	name.TextYAlignment = Enum.TextYAlignment.Center
 	name.TextColor3 = ntColor(rule.textColor, ntColor(ntOpts.textColor, Color3.new(1, 1, 1)))
-	name.TextTruncate = Enum.TextTruncate.AtEnd -- bites only at the 560px ceiling
+	name.TextTruncate = Enum.TextTruncate.AtEnd -- bites only past the 4000px safety valve
 	name.Text = shownName
 	name.Parent = nameRow
 
