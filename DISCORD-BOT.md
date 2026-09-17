@@ -2,7 +2,8 @@
 
 Your Discord bot can edit `nametags.json` in this repo **exactly like the web
 editor does** — the editor is just a browser calling the GitHub Contents API.
-Same endpoints, same token permissions, same instant CDN purge.
+Same endpoints, same token permissions. The game reads the file from raw GitHub
+(fresh within seconds), so no CDN purge is required for updates to land.
 
 ## Setup (once)
 

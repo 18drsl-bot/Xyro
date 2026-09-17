@@ -1236,6 +1236,7 @@ $("saveToken").onclick = async () => {
 		const fine = v.indexOf("github_pat_") === 0;
 		status(fine ? "token saved - make sure Contents: Read and write was set, publish verifies it" : "token saved and verified", fine ? "info" : "ok");
 		toast(fine ? "Connected - publish will verify write access" : "Connected to " + REPO, "ok");
+		refreshLive(true); // a stale tab heals the moment a token is connected
 	} catch (e) {
 		status("network error while testing token", "err");
 	}
@@ -1251,23 +1252,23 @@ $("tokenChip").onclick = () => $("tokenCard").scrollIntoView({ behavior: "smooth
 /* the contents API returns an envelope {sha, content:"<base64>"} - decode
    it to the real nametags.json. Falls back to raw.githubusercontent (plain
    text, no sha) when the API is rate-limited or unreachable. */
+/* raw FIRST (fresh within seconds of a push), contents API second (never
+   cached anywhere; also the only source that gives the sha a safe
+   merge-on-publish needs). The old order (API -> raw) starved the editor
+   whenever the unauthenticated API was rate-limited. */
 async function fetchConfig() {
 	try {
-		const res = await fetch(API + "?t=" + Date.now());
-		if (res.ok) {
-			const env = await res.json();
-			if (typeof env.content === "string") {
-				const bin = atob(env.content.replace(/\s/g, ""));
-				const bytes = new Uint8Array(bin.length);
-				for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-				const text = JSON.parse(new TextDecoder("utf-8").decode(bytes));
-				return { config: text, sha: env.sha };
-			}
-		}
-	} catch (_) { /* fall through to raw */ }
-	const res = await fetch("https://raw.githubusercontent.com/" + REPO + "/main/" + PATH + "?t=" + Date.now());
+		const res = await fetch("https://raw.githubusercontent.com/" + REPO + "/main/" + PATH + "?t=" + Date.now());
+		if (res.ok) return { config: await res.json(), sha: null };
+	} catch (_) { /* fall through to API */ }
+	const res = await fetch(API + "?t=" + Date.now());
 	if (!res.ok) throw new Error("github " + res.status);
-	return { config: await res.json(), sha: null };
+	const env = await res.json();
+	if (typeof env.content !== "string") throw new Error("unexpected API response");
+	const bin = atob(env.content.replace(/\s/g, ""));
+	const bytes = new Uint8Array(bin.length);
+	for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+	return { config: JSON.parse(new TextDecoder("utf-8").decode(bytes)), sha: env.sha };
 }
 
 async function load() {
@@ -1327,7 +1328,7 @@ async function refreshLive(sayIt) {
 			renderAll();
 			if (sayIt) { status("rules refreshed from GitHub", "ok"); toast("Updated to the latest published rules", "ok"); }
 		} else if (sayIt) {
-			toast("Newer rules exist on GitHub - publish or revert to see them", "info", 8);
+			toast("Newer rules exist on GitHub - publishing will merge them in automatically", "info", 8);
 		}
 		return true;
 	} catch (_) {
@@ -1349,6 +1350,28 @@ function publishSummary() {
 	return a.length + " -> " + b.length + " rules (" + added + " new, " + removed + " removed)" + (optChanged ? ", options changed" : "");
 }
 
+/* merge this tab's rules with what is live on GitHub, keyed by rule
+   identity (match). A stale tab can add and update its own rules but can
+   never delete rules it never saw - the lost-update bug that kept eating
+   rules whenever this tab had been opened before they existed. New rules
+   land before the "*" catch-all so they can actually match. */
+function mergeRemote(base, mine, theirs) {
+	const find = (arr, m) => arr.find(t => t.match === m) || null;
+	const out = [];
+	for (const t of base.tags) {
+		const m = find(mine.tags, t.match), th = find(theirs.tags, t.match);
+		if (!th) { if (m && !sameJSON(m, t)) out.push(deepCopy(m)); continue; } // deleted on GitHub: resurrect only if this tab edited it
+		if (!m) continue; // deleted here, still on GitHub: the deletion wins
+		out.push(!sameJSON(m, t) ? deepCopy(m) : deepCopy(th)); // local edit wins; otherwise take GitHub's latest
+	}
+	const seen = new Set(out.map(t => t.match)), fresh = [];
+	for (const t of theirs.tags) if (!seen.has(t.match) && !find(mine.tags, t.match)) { fresh.push(deepCopy(t)); seen.add(t.match); }
+	for (const t of mine.tags) if (!seen.has(t.match)) { fresh.push(deepCopy(t)); seen.add(t.match); }
+	const star = out.findIndex(t => t.match === "*");
+	if (star < 0) out.push(...fresh); else out.splice(star, 0, ...fresh);
+	return { options: mine.options || theirs.options, tags: out };
+}
+
 $("publishBtn").onclick = async () => {
 	const token = getToken();
 	if (!token) {
@@ -1357,13 +1380,38 @@ $("publishBtn").onclick = async () => {
 		return;
 	}
 	if (live && sameJSON(cfg, live)) { toast("Nothing to publish - no changes"); return; }
-	const summary = live ? publishSummary() : cfg.tags.length + " rules";
-	if (!confirm("Publish to " + REPO + "?\n\n" + summary + "\n\nEvery player running Xyro gets this within seconds (CDN purged instantly).")) return;
 	status("publishing...", "info");
 	try {
-		const cur = await fetch(API + "?t=" + Date.now(), { headers: { Authorization: "Bearer " + token } });
-		if (!cur.ok) { status("cannot read current file (" + cur.status + ")", "err"); return; }
-		const meta = await cur.json();
+		/* re-read the live file at publish time and MERGE (see mergeRemote).
+		   Needs the API (raw gives no sha) - if it is rate-limited we stop
+		   instead of publishing blind, because publishing blind is exactly
+		   how rules got eaten. */
+		let meta = null;
+		if (live) {
+			const remote = await fetchConfig();
+			if (!remote.sha) { status("GitHub API rate-limited - cannot merge safely. Wait ~1 min, then Publish again.", "err"); return; }
+			if (!sameJSON(remote.config, live)) {
+				cfg = mergeRemote(live, cfg, remote.config);
+				renderOptions();
+				renderAll();
+				toast("GitHub changed while you were editing - your publish was merged with the latest rules", "info", 9);
+			}
+			if (sameJSON(cfg, remote.config)) {
+				live = deepCopy(cfg);
+				localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+				$("draftBtn").classList.add("hidden");
+				status("nothing to publish - GitHub already has everything", "ok");
+				toast("Nothing to publish - GitHub already has everything", "ok");
+				return;
+			}
+			meta = { sha: remote.sha };
+		} else {
+			const cur = await fetch(API + "?t=" + Date.now(), { headers: { Authorization: "Bearer " + token } });
+			if (!cur.ok) { status("cannot read current file (" + cur.status + ")", "err"); return; }
+			meta = await cur.json();
+		}
+		const summary = live ? publishSummary() : cfg.tags.length + " rules";
+		if (!confirm("Publish to " + REPO + "?\n\n" + summary + "\n\nEvery player running Xyro gets this within seconds (the game reads raw GitHub live, with an API double-check every ~60s).")) { status("publish cancelled", "info"); return; }
 		/* one canonical body string for GitHub, the local server sync, and
 		   the draft (previously the sync silently referenced a shadowed
 		   outer body -> local copy never actually updated) */
@@ -1374,7 +1422,7 @@ $("publishBtn").onclick = async () => {
 			body: JSON.stringify({
 				message: "Update nametags via tag editor",
 				content: btoa(unescape(encodeURIComponent(body))),
-				sha: meta.sha,
+				sha: meta.sha, // re-read AFTER merging, so we never clobber a concurrent publish (GitHub 409s if stale)
 			}),
 		});
 		if (!res.ok) {
@@ -1390,6 +1438,7 @@ $("publishBtn").onclick = async () => {
 		const done = await res.json();
 		liveSha = done.content && done.content.sha;
 		live = deepCopy(cfg);
+		refreshLive(true); // pick up any publish that raced ours
 		localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
 		$("draftBtn").classList.add("hidden");
 		renderAll();			/* kick the game's CDN so the update lands in seconds, not minutes.

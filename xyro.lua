@@ -7505,8 +7505,8 @@ end
 -- colors, backgrounds and badge. Only drawn over confirmed script users.
 local Players = Players or game:GetService("Players")
 local RunService = RunService or game:GetService("RunService")
-local NT_RAW_URL = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/nametags.json" -- fast global edge (jsDelivr); editor purges its cache on every publish so this is never stale
-local NT_FALLBACK_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/nametags.json" -- used if jsDelivr hiccups
+local NT_FALLBACK_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/nametags.json" -- PRIMARY periodic source: raw GitHub is fresh within seconds of a push
+local NT_RAW_URL = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/nametags.json" -- LAST RESORT only: jsDelivr's edge can serve a stale copy for days - its purge API reports success without fully clearing the Cloudflare layer in front of it (verified live)
 -- (no local server: the editor is GitHub-hosted only now)
 local NT_API_URL = "https://api.github.com/repos/vertxxy-1/Xyro/contents/nametags.json"
 local NT_ACCENT = Color3.fromRGB(108, 128, 255)
@@ -7671,7 +7671,7 @@ local ntEnabled = false
 	local ntMouse = player and player.GetMouse and player:GetMouse() or nil -- hover-expand reads this in the render loop
 local ntFetchAcc = 0
 local NT_FETCH_EVERY = 15 -- tag rules re-check; editor-tunable via options.refreshSeconds (10-300)
-local NT_API_EVERY_N = 6 -- every Nth periodic fetch tries the GitHub API first (never CDN-cached); 6 x 15s = 90s ceiling on purge-throttled staleness while staying well under the 60 req/hr unauthenticated API budget
+local NT_API_EVERY_N = 4 -- every Nth periodic fetch double-checks via the GitHub API (never cached anywhere); 4 x 15s = 60s staleness ceiling, ~15 req/hr per client - well under the 60 req/hr unauthenticated budget
 local ntFetchN = 0
 local NT_TOPIC = "xyro-presence-k2m9x7q" -- anonymous presence DB: every script user heartbeats here
 local NT_BEAT_EVERY = 25 -- presence heartbeat; used to be 45s, which made newly-joined players wait up to ~75s for their tag
@@ -7871,11 +7871,11 @@ end
 
 local function ntFetch(manual)
 	-- priority: GitHub API on manual fetches (never stale, always the
-	-- published truth) -> jsDelivr edge for the periodic background fetch.
-	-- Periodic fetches also try the API every NT_API_EVERY_Nth round: the
-	-- ?t= buster does NOT bust jsDelivr's edge (only the editor's purge
-	-- does, and purges get rate-throttled), so without this a throttled
-	-- purge meant stale rules until the CDN's own expiry.
+	-- published truth). Periodic fetches go raw.githubusercontent FIRST
+	-- (fresh within seconds of a push) and double-check via the API every
+	-- NT_API_EVERY_Nth round. jsDelivr is LAST RESORT only: its edge has
+	-- served a days-stale copy even after a "successful" purge, so the
+	-- CDN must never be trusted as the primary source again.
 	local text = nil
 	if manual then
 		text = ntFromAPI(ntHttpGet(NT_API_URL) or "")
@@ -7894,15 +7894,15 @@ local function ntFetch(manual)
 		end
 	end
 	if not text then
-		text = ntHttpGet(NT_RAW_URL .. "?t=" .. tostring(os.time()))
-		if text then
-			ntLastSource = "cdn"
-		end
-	end
-	if not text then
 		text = ntHttpGet(NT_FALLBACK_URL .. "?t=" .. tostring(os.time()))
 		if text then
 			ntLastSource = "raw"
+		end
+	end
+	if not text then
+		text = ntHttpGet(NT_RAW_URL .. "?t=" .. tostring(os.time()))
+		if text then
+			ntLastSource = "cdn"
 		end
 	end
 	if not text or #text == 0 then
@@ -9748,7 +9748,7 @@ H.Nametags = {
 		return ntOnline
 	end,
 	cleanup = ntCleanup,
-	url = NT_RAW_URL,
+	url = NT_FALLBACK_URL,
 }
 
 local function listWindow(name, title, rows)

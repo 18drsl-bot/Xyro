@@ -111,7 +111,7 @@ Add a **`firebase.json`** file to the **repo root** with your database URL:
 
 Push it (or use the tag editor's token flow / the GitHub web UI — any repo
 commit works). At launch the script reads this file — GitHub API first (never
-CDN-cached), then raw with a cache-buster, then the jsDelivr edge — and points
+CDN-cached), then raw GitHub with a cache-buster, then the jsDelivr edge — and points
 itself at your database. It then reads `https://<your-db>/staff.json`
 (synchronously, so the admin-only Debug tab exists from the first frame) and
 merges everyone into the staff list. Change the URL any time by editing this

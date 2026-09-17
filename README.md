@@ -9,8 +9,8 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/refs/h
 ```
 
 Executes the **latest commit every time** — no reinstalling after updates. Config and
-media load through the jsDelivr CDN (purged instantly on every editor publish), with
-the GitHub API and raw GitHub as fallbacks, so published changes land in seconds.
+media load through the jsDelivr CDN, with the GitHub API and raw GitHub as fallbacks,
+so published changes land in seconds.
 
 **Fallback loader** (3x retry + always-fresh GitHub API source + truncation checks,
 for flaky executors):
@@ -37,8 +37,10 @@ running the script never get tagged). The current design: avatar icon + display 
 row + `@username` row on a dark rounded pill, visible through walls, with live health
 and distance, click-to-teleport, and the game's default overhead name hidden.
 
-`nametags.json` controls everything. It re-fetches automatically every 60 seconds, or
-run `!nametagsfetch` for instant reload.
+`nametags.json` controls everything. The game reads it straight from raw GitHub (fresh
+within seconds of a publish) and double-checks via the GitHub API every ~60s, so a stale
+CDN can never delay your updates. It re-fetches automatically every 15 seconds, or run
+`!nametagsfetch` for instant reload.
 
 ```json
 {
