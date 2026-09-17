@@ -311,12 +311,13 @@ local main = make("Frame", {
 	Active = true,
 }, gui)
 round(main, 14)
-make("UIStroke", { Color = COL.stroke, Thickness = 1 }, main)
+-- Rayfield-depth window outline: tinted hairline instead of pure stroke-gray
+make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.15 }, main)
 
 -- faint brand glow down the shell (barely-there vertical depth; the dark
 -- theme already carries contrast, this just stops it feeling flat)
 make("UIGradient", {
-	Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(206, 210, 228)),
+	Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(219, 222, 236)),
 	Rotation = 90,
 }, main)
 
@@ -333,7 +334,7 @@ round(contentCard, 10)
 contentCard.ZIndex = 0
 -- its color tracks the shell via the theme system, with a hairline outline
 -- so the card reads as a raised surface against the shell
-local contentStroke = make("UIStroke", { Color = COL.stroke, Thickness = 1 }, contentCard)
+local contentStroke = make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.3 }, contentCard)
 themeRefreshers[#themeRefreshers + 1] = function()
 	if contentCard then
 		contentCard.BackgroundColor3 = COL.contentBg
@@ -684,13 +685,14 @@ local function makeTab(name, onClick, display)
 	-- rows instead of floating bubbles (active tab keeps its accent fill)
 	make("UIStroke", { Color = COL.off, Thickness = 1, Transparency = 0.35 }, btn)
 
-	-- selection bar: pinned to the button's RIGHT edge (UIPadding shifts children too,
-	-- so an inset-positioned bar was landing on top of the label). Grows upward when active.
+	-- Fluent-style selection notch on the pill's LEFT edge; grows when active.
+	-- x = -6 lands just inside the pill's visual edge (UIPadding shifts children,
+	-- which is why an inset bar previously collided with the label)
 	local underline = make("Frame", {
 		Name = "Underline",
-		AnchorPoint = Vector2.new(1, 1),
-		Position = UDim2.new(1, -5, 1, -8),
-		Size = UDim2.new(0, 4, 0, 0),
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, -6, 0.5, 0),
+		Size = UDim2.new(0, 3, 0, 0),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
 		ZIndex = 2,
@@ -708,13 +710,13 @@ local function makeTab(name, onClick, display)
 	connect(btn.MouseEnter, function()
 		if currentTab ~= name then
 			tween(btn, { BackgroundColor3 = COL.off, TextColor3 = COL.text })
-			tween(underline, { Size = UDim2.new(0, 4, 0, 10) })
+			tween(underline, { Size = UDim2.new(0, 3, 0, 10) })
 		end
 	end)
 	connect(btn.MouseLeave, function()
 		if currentTab ~= name then
 			tween(btn, { BackgroundColor3 = COL.element, TextColor3 = COL.sub })
-			tween(underline, { Size = UDim2.new(0, 4, 0, 0) })
+			tween(underline, { Size = UDim2.new(0, 3, 0, 0) })
 		end
 	end)
 
@@ -1035,7 +1037,7 @@ function selectTab(name)
 		})
 		local ul = tabs[n]:FindFirstChild("Underline")
 		if ul then
-			tween(ul, { Size = UDim2.new(0, 4, 0, active and 16 or 0) })
+			tween(ul, { Size = UDim2.new(0, 3, 0, active and 16 or 0) })
 		end
 	end
 end
@@ -1055,8 +1057,8 @@ end
 
 local function makeSwitch(parent, y, initial, onChanged)
 	local btn = make("TextButton", {
-		Size = UDim2.new(0, 40, 0, 22),
-		Position = UDim2.new(1, -40, 0, y),
+		Size = UDim2.new(0, 44, 0, 22),
+		Position = UDim2.new(1, -44, 0, y),
 		BackgroundColor3 = initial and COL.accent or COL.contentBg,
 		Text = "",
 		AutoButtonColor = false,
@@ -1064,6 +1066,19 @@ local function makeSwitch(parent, y, initial, onChanged)
 	}, parent)
 	round(btn, 11)
 	H.animate(btn)
+	-- Fluent-style two-tone track: faint vertical sheen so the switch reads
+	-- as a physical control instead of a flat pill
+	make("UIGradient", {
+		Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(226, 229, 243)),
+		Rotation = 90,
+	}, btn)
+	-- accent glow ring that appears while the switch is live
+	local glow = make("UIStroke", {
+		Color = COL.accent,
+		Thickness = initial and 1.5 or 0,
+		Transparency = 0.35,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, btn)
 	local knob = make("Frame", {
 		Size = UDim2.new(0, 16, 0, 16),
 		Position = initial and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
@@ -1071,10 +1086,12 @@ local function makeSwitch(parent, y, initial, onChanged)
 		BorderSizePixel = 0,
 	}, btn)
 	round(knob, 8)
+	make("UIStroke", { Color = Color3.fromRGB(186, 191, 212), Thickness = 1, Transparency = 0.55 }, knob)
 	local state = initial
 	local function render()
 		tween(btn, { BackgroundColor3 = state and COL.accent or COL.contentBg })
 		tween(knob, { Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8) })
+		tween(glow, { Thickness = state and 1.5 or 0 })
 	end
 	themeRefreshers[#themeRefreshers + 1] = render
 	local function toggle()
@@ -1091,6 +1108,24 @@ local function makeSwitch(parent, y, initial, onChanged)
 			render()
 		end
 	end, toggle
+end
+
+-- Linoria-style focus glow for text fields: an accent ring while editing.
+-- Apply to any TextBox; fully themed (ring recolors with the palette).
+H.bindFocusGlow = function(box)
+	local ring = make("UIStroke", {
+		Color = COL.accent,
+		Thickness = 0,
+		Transparency = 0.25,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, box)
+	connect(box.Focused, function()
+		tween(ring, { Thickness = 1.5 })
+	end)
+	connect(box.FocusLost, function()
+		tween(ring, { Thickness = 0 })
+	end)
+	return box
 end
 
 do
@@ -1352,10 +1387,10 @@ local function notify(a, b, c)
 		ZIndex = 50,
 	}, slot)
 	round(card, 8)
-	make("UIStroke", { Color = COL.stroke, Thickness = 1 }, card)
+	make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.2 }, card)
 
 	make("Frame", {
-		Size = UDim2.new(0, 3, 1, -12),
+		Size = UDim2.new(0, 4, 1, -12),
 		Position = UDim2.new(0, 5, 0, 6),
 		BackgroundColor3 = accent,
 		BorderSizePixel = 0,
@@ -1601,6 +1636,7 @@ local speedBox = make("TextBox", {
 	BorderSizePixel = 0,
 }, speedPage)
 round(speedBox, 6)
+H.bindFocusGlow(speedBox)
 local currentLbl = make("TextLabel", {
 	Size = UDim2.new(1, 0, 0, 18),
 	Position = UDim2.new(0, 0, 0, 72),
@@ -1684,6 +1720,7 @@ local gravBox = make("TextBox", {
 	BorderSizePixel = 0,
 }, gravPage)
 round(gravBox, 6)
+H.bindFocusGlow(gravBox)
 
 local gravLbl = make("TextLabel", {
 	Size = UDim2.new(1, 0, 0, 18),
@@ -6927,6 +6964,7 @@ Extra.openPlayerInfo = function(query)
 		BorderSizePixel = 0,
 	}, body)
 	round(searchBox, 6)
+	H.bindFocusGlow(searchBox)
 
 	local findBtn = make("TextButton", {
 		Size = UDim2.new(0, 66, 0, 26),
@@ -7405,6 +7443,7 @@ local cmdBox = make("TextBox", {
 	BorderSizePixel = 0,
 }, main)
 round(cmdBox, 6)
+H.bindFocusGlow(cmdBox)
 
 local IDLE = "command...  (type help)"
 
