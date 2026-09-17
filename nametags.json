@@ -28,14 +28,6 @@
 	},
 	"tags": [
 		{
-			"match": "T4ieDc",
-			"label": "Taie★ㅤㅤㅤㅤ",
-			"color": "#4C20FE",
-			"size": 16,
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/bf803839255bb23b233f36598b3a2421e981162d.jpeg",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/4fa713fe2cc4967ce73f9b0e5b6b6dc84f3d0b6c.gif"
-		},
-		{
 			"match": "Vertxxy2",
 			"label": "Vert",
 			"color": "#6C80FF",
@@ -44,6 +36,14 @@
 			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/f77b149da7816504bb573156677450a6e9562296.gif",
 			"bg": "#1C1CA6",
 			"badge": true
+		},
+		{
+			"match": "T4ieDc",
+			"label": "Taie★ㅤㅤㅤㅤ",
+			"color": "#4C20FE",
+			"size": 16,
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/bf803839255bb23b233f36598b3a2421e981162d.jpeg",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/4fa713fe2cc4967ce73f9b0e5b6b6dc84f3d0b6c.gif"
 		},
 		{
 			"match": "*",
