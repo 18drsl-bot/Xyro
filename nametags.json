@@ -38,13 +38,6 @@
 			"badge": true
 		},
 		{
-			"match": "t4iedc",
-			"label": "Gay nigger faggot",
-			"color": "#6C80FF",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/158d56dbbeb17cd9f757b3d813971d8685329905.png",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/1eab4311e5a4b5b1277e94bf9ed072b4f241896d.png"
-		},
-		{
 			"match": "*",
 			"label": "xyro user",
 			"color": "#FFFFFF",
