@@ -1,6 +1,6 @@
 {
 	"firebase": {
 		"_comment": "Put your Firebase Realtime Database URL here to move the staff/admin list out of the script. See FIREBASE.md. Empty url = Firebase disabled (hardcoded ADMIN_IDS only).",
-		"url": ""
+		"url": "https://xyro-fcaf8-default-rtdb.firebaseio.com"
 	}
 }
