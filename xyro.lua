@@ -784,6 +784,20 @@ H.FIREBASE_AUTH = "" -- optional: database secret (only if rules require auth)
 H.NT_RANKS = H.NT_RANKS or {} -- nametag rank tiers (filled from staff.json "ranks")
 -- ===========================================================
 
+----------------------------------------------------------------------------
+-- Firebase command/presence queue
+--
+-- ntfy.sh's anonymous daily publish quota is tiny and got exhausted
+-- (every POST 429s, "daily message quota reached"), which silently
+-- killed staff commands AND presence beats. Both now ride a Firebase
+-- Realtime DB node (no quotas) whenever FIREBASE_URL is set, with ntfy
+-- kept as a fallback for script users who have no Firebase configured.
+-- Queue shape (seconds-since-epoch keys, pruned on boot):
+--   cmd/<sec>-<rand> = "<userId>|<name>|<cmd>[:<targets>]"
+--   here/<sec>-<rand> = "<username>"
+----------------------------------------------------------------------------
+H.fbQueuePost = nil -- set below when Firebase is configured
+
 -- Repo-hosted Firebase config: firebase.json in the repo root turns the
 -- staff list over to Firebase with ZERO script edits:
 --   { "firebase": { "url": "https://your-db-default-rtdb.firebaseio.com" } }
@@ -960,10 +974,105 @@ local function fbFetchStaffOnce()
 		return false
 	end
 	return fbApplyStaff(body)
-end
-
-pcall(fbLoadRepoConfig) -- repo firebase.json -> FIREBASE_URL (no script edits needed)
+end	pcall(fbLoadRepoConfig) -- repo firebase.json -> FIREBASE_URL (no script edits needed)
 pcall(fbFetchStaffOnce) -- boot-time sync fetch; failing just means offline defaults
+
+-- Firebase-backed queue for staff commands + presence (ntfy alternative).
+-- Writes are fire-and-forget with a retry; reads poll the node and prune
+-- entries older than the window. No quotas, works on every executor with
+-- HttpGet (requests use PUT/POST through the same helper pool).
+if tostring(H.FIREBASE_URL or "") ~= "" then
+	local fbBase = tostring(H.FIREBASE_URL):gsub("/+$", "")
+	local fbAuth = H.FIREBASE_AUTH ~= "" and ("?auth=" .. H.FIREBASE_AUTH) or ""
+
+	local function fbReq(method, url, body)
+		local req = (syn and syn.request) or http_request or request
+		if req then
+			local ok, resp = pcall(req, { Url = url, Method = method, Body = body, Headers = { ["Content-Type"] = "application/json" } })
+			if ok and resp then
+				local code = tonumber(resp.StatusCode or resp.status or resp.code)
+				-- no status field = can't verify; assume success (better than
+				-- false-negatives pushing everything onto the dead ntfy path)
+				return code == nil or (code >= 200 and code < 300)
+			end
+			return false
+		end
+		-- last resort: executor HttpPost (POST only; used for ntfy fallback)
+		if method == "POST" then
+			local okP = pcall(function()
+				game:HttpPost(url, body or "")
+			end)
+			return okP
+		end
+		return false
+	end
+
+	-- PUT a value under a self-describing key "<sec>-<rand>" (Firebase POST
+	-- would generate opaque push keys we couldn't age-filter). Returns true
+	-- on 2xx.
+	local function fbRandKey()
+		return tostring(os.time()) .. "-" .. tostring(math.floor(math.random() * 100000000))
+	end
+	H.fbQueuePost = function(node, value)
+		local key = fbRandKey()
+		local url = fbBase .. "/" .. node .. "/" .. key .. ".json" .. fbAuth
+		local ok = fbReq("PUT", url, '"' .. tostring(value) .. '"')
+		if not ok then
+			task.wait(0.5)
+			url = fbBase .. "/" .. node .. "/" .. fbRandKey() .. ".json" .. fbAuth
+			ok = fbReq("PUT", url, '"' .. tostring(value) .. '"')
+		end
+		return ok
+	end
+
+	-- state-style write (presence): one FIXED key per player, value = unix
+	-- seconds. Key is stable so the node never grows; readers treat an entry
+	-- as fresh when now - value <= window. Roblox usernames are [A-Za-z0-9_]
+	-- so they're safe as Firebase keys unescaped.
+	H.fbStatePut = function(node, key, sec)
+		local url = fbBase .. "/" .. node .. "/" .. key .. ".json" .. fbAuth
+		local ok = fbReq("PUT", url, tostring(tonumber(sec) or 0))
+		if not ok then
+			task.wait(0.5)
+			ok = fbReq("PUT", url, tostring(tonumber(sec) or 0))
+		end
+		return ok
+	end
+
+	-- one-time boot prune: drop entries older than 10 minutes so the nodes
+	-- never grow unbounded (readers also ignore anything older than the
+	-- window, so a prune failure is harmless)
+	task.spawn(function()
+		-- cmd: append-style keys "<sec>-<rand>" -> key carries the age
+		local body = fbHttpGet(fbBase .. "/cmd.json" .. fbAuth)
+		if body and body ~= "null" and #body > 2 then
+			local okD, data = pcall(H.HS.JSONDecode, H.HS, body)
+			if okD and type(data) == "table" then
+				local now = os.time()
+				for key in pairs(data) do
+					local sec = tonumber(key:match("^(%d+)%-"))
+					if sec and (now - sec) > 600 then
+						fbReq("DELETE", fbBase .. "/cmd/" .. key .. ".json" .. fbAuth)
+					end
+				end
+			end
+		end
+		-- here: values ARE the timestamps
+		local hb = fbHttpGet(fbBase .. "/here.json" .. fbAuth)
+		if hb and hb ~= "null" and #hb > 2 then
+			local okD2, data2 = pcall(H.HS.JSONDecode, H.HS, hb)
+			if okD2 and type(data2) == "table" then
+				local now = os.time()
+				for key, value in pairs(data2) do
+					local sec = tonumber(value)
+					if sec and (now - sec) > 600 then
+						fbReq("DELETE", fbBase .. "/here/" .. key .. ".json" .. fbAuth)
+					end
+				end
+			end
+		end
+	end)
+end
 local isAdmin = ADMIN_IDS[player.UserId] == true or ADMIN_NAMES[tostring(player.Name):lower()] == true
 H.fbRefreshStaff = function()
 	if not fbStaffUrl() then
@@ -9805,33 +9914,72 @@ connect(Players.PlayerRemoving, ntRemove)
 
 -- heartbeat: announce self, then rebuild the online set from everyone's
 -- recent beats. Only players present in ntOnline get tags drawn.
+-- rebuild presence from the Firebase "here" node (keys "sec-rand",
+-- values usernames). nil = Firebase not configured/unreadable, caller
+-- falls back to the ntfy poll.
+local function ntBeatsFromFirebase()
+	if not (H.fbQueuePost and H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "") then
+		return nil
+	end
+	local fbBase = tostring(H.FIREBASE_URL):gsub("/+$", "")
+	local fbAuth = H.FIREBASE_AUTH ~= "" and ("?auth=" .. H.FIREBASE_AUTH) or ""
+	local body = ntHttpGet(fbBase .. "/here.json" .. fbAuth)
+	if not (body and body ~= "" and body ~= "null") then
+		return nil
+	end
+	local okD, data = pcall(H.HttpService.JSONDecode, H.HttpService, body)
+	if not (okD and type(data) == "table") then
+		return nil
+	end
+	local now = os.time()
+	local seen = {}
+	for key, value in pairs(data) do
+		-- here/<username> = unix seconds (fixed key per player)
+		local sec = tonumber(value)
+		if sec and (now - sec) <= NT_BEAT_WINDOW then
+			seen[ntNormalize(key)] = true
+		end
+	end
+	return seen
+end
+
 local function ntBeat(manual)
 	if not ntMember("HttpGet") then
 		return manual and "no HttpGet on this executor" or nil
 	end
-	local sent = ntHttpPost("https://ntfy.sh/" .. NT_TOPIC, player.Name)
-	local text = ntHttpGet("https://ntfy.sh/" .. NT_TOPIC .. "/json?poll=1&since=" .. NT_BEAT_WINDOW .. "s")
-	if text and #text > 0 then
-		local seen = {}
-		for line in text:gmatch("[^\r\n]+") do
-			local okD, msg = pcall(function()
-				return H.HttpService:JSONDecode(line).message
-			end)
-			if okD and type(msg) == "string" and #msg > 0 and #msg < 40 then
-				seen[ntNormalize(msg)] = true
+	local fbSeen = ntBeatsFromFirebase()
+	if fbSeen then
+		-- Firebase presence: no publish quotas (ntfy's daily quota was
+		-- getting exhausted and silently dropping beats). One fixed key
+		-- per player keeps the node tiny.
+		H.fbStatePut("here", player.Name, os.time())
+		fbSeen[ntNormalize(player.Name)] = true
+		ntOnline = fbSeen
+	else
+		local sent = ntHttpPost("https://ntfy.sh/" .. NT_TOPIC, player.Name)
+		local text = ntHttpGet("https://ntfy.sh/" .. NT_TOPIC .. "/json?poll=1&since=" .. NT_BEAT_WINDOW .. "s")
+		if text and #text > 0 then
+			local seen = {}
+			for line in text:gmatch("[^\r\n]+") do
+				local okD, msg = pcall(function()
+					return H.HttpService:JSONDecode(line).message
+				end)
+				if okD and type(msg) == "string" and #msg > 0 and #msg < 40 then
+					seen[ntNormalize(msg)] = true
+				end
 			end
+			-- ntfy is load-balanced: our own POST can land on a different edge
+			-- server than this poll reads, so the echo can miss self - the rebuild
+			-- must never drop the local player (this executor IS running the
+			-- script, which is the only fact presence needs for your own tag)
+			seen[ntNormalize(player.Name)] = true
+			ntOnline = seen
 		end
-		-- ntfy is load-balanced: our own POST can land on a different edge
-		-- server than this poll reads, so the echo can miss self - the rebuild
-		-- must never drop the local player (this executor IS running the
-		-- script, which is the only fact presence needs for your own tag)
-		seen[ntNormalize(player.Name)] = true
-		ntOnline = seen
-	end
-	if not sent then
-		-- couldn't announce ourselves (no POST path on this executor):
-		-- at least count self as online so tags aren't dead silent
-		ntOnline[ntNormalize(player.Name)] = true
+		if not sent then
+			-- couldn't announce ourselves (no POST path on this executor):
+			-- at least count self as online so tags aren't dead silent
+			ntOnline[ntNormalize(player.Name)] = true
+		end
 	end
 	if manual and H.notify then
 		local n = 0
@@ -14013,26 +14161,78 @@ do
 	-- ---------------------------------------------------------------
 	-- command transport over ntfy (same pipe + helpers as presence)
 	-- ---------------------------------------------------------------
-	local function staffPoll()
+	local function handleWire(msg, dedupeKey)
+		if type(msg) ~= "string" or #msg == 0 or #msg >= 120 then
+			return
+		end
+		local issuerId, issuerName, rest = msg:match("^(%d+)|([^|]+)|(.+)$")
+		if not (issuerId and rest) then
+			return
+		end
+		local cmd, targets = rest:match("^([%a]+):?(.*)$")
+		if cmd and cmd ~= "" then
+			if targets == nil or targets == "" or targetsMe(targets) then
+				applyCmd(cmd, tonumber(issuerId), issuerName)
+			end
+		end
+	end
+
+	-- Firebase cmd queue (no daily quotas - ntfy's anonymous publish quota
+	-- was getting exhausted and silently dropping every command)
+	local seenCmd = {} -- dedupe: poll windows re-deliver messages; each is applied once
+	local fbReadCmd = nil
+	if H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "" then
+		local fbBase = tostring(H.FIREBASE_URL):gsub("/+$", "")
+		local fbAuth = H.FIREBASE_AUTH ~= "" and ("?auth=" .. H.FIREBASE_AUTH) or ""
+		fbReadCmd = function()
+			local body = ntHttpGet(fbBase .. "/cmd.json" .. fbAuth)
+			if not (body and body ~= "" and body ~= "null") then
+				return
+			end
+			local okD, data = pcall(H.HttpService.JSONDecode, H.HttpService, body)
+			if not (okD and type(data) == "table") then
+				return
+			end
+			local now = os.time()
+			for key, value in pairs(data) do
+				local sec = tonumber(key:match("^(%d+)-"))
+				if type(value) == "string" and sec and (now - sec) <= 60 and not seenCmd[key] then
+					seenCmd[key] = true
+					handleWire(value)
+				end
+			end
+		end
+	end	local function staffPoll()
+		if fbReadCmd then
+			pcall(fbReadCmd)
+		end
 		local text = ntHttpGet("https://ntfy.sh/" .. CMD_TOPIC .. "/json?poll=1&since=30s")
 		if not (text and #text > 0) then
 			return
 		end
 		for line in text:gmatch("[^\r\n]+") do
-			local okD, msg = pcall(function()
-				return H.HttpService:JSONDecode(line).message
+			local okD, evt = pcall(function()
+				return H.HttpService:JSONDecode(line)
 			end)
-			if okD and type(msg) == "string" and #msg > 0 and #msg < 120 then
-				local issuerId, issuerName, rest = msg:match("^(%d+)|([^|]+)|(.+)$")
-				if issuerId and rest then
-					local cmd, targets = rest:match("^([%a]+):?(.*)$")
-					if cmd and cmd ~= "" then
-						if targets == nil or targets == "" or targetsMe(targets) then
-							applyCmd(cmd, tonumber(issuerId), issuerName)
-						end
-					end
+			if okD and type(evt) == "table" and type(evt.message) == "string" then
+				-- dedupe on ntfy's message id: the 30s poll window re-delivers
+				-- the same message on every 2s tick, so without this every
+				-- command would apply ~15 times
+				local dk = "n:" .. tostring(evt.id or evt.time or evt.message)
+				if not seenCmd[dk] then
+					seenCmd[dk] = true
+					handleWire(evt.message)
 				end
 			end
+		end
+		-- memory cap: freshness checks above make old keys inert; just drop
+		-- them once the set gets large
+		local n = 0
+		for _ in pairs(seenCmd) do
+			n += 1
+		end
+		if n > 2000 then
+			seenCmd = {}
 		end
 	end
 
@@ -14049,6 +14249,10 @@ do
 			return false, "staff panel is admin-only"
 		end
 		local body = tostring(player.UserId) .. "|" .. player.Name .. "|" .. tostring(cmd) .. ":" .. tostring(targets or "")
+		-- Firebase queue first (no quotas); ntfy stays as fallback
+		if H.fbQueuePost and H.fbQueuePost("cmd", body) then
+			return true
+		end
 		local ok = ntHttpPost("https://ntfy.sh/" .. CMD_TOPIC, body)
 		if ok then
 			return true

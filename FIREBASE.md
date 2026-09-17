@@ -26,6 +26,14 @@ with this, and click **Publish**:
     "staff": {
       ".read": true,
       ".write": false
+    },
+    "cmd": {
+      ".read": true,
+      ".write": true
+    },
+    "here": {
+      ".read": true,
+      ".write": true
     }
   }
 }
@@ -34,6 +42,12 @@ with this, and click **Publish**:
 That means: anyone may **read** the staff list (the script needs this), but
 nobody can write it over the internet. Only you can change it, signed in to the
 Firebase console.
+
+The `cmd` and `here` nodes are the **staff-command queue and presence feed**
+(the script writes commands and heartbeats here instead of ntfy, whose free
+tier daily quota was getting exhausted and silently dropping staff commands).
+They hold no personal data: `cmd` holds short-lived command strings (auto-pruned
+after 10 minutes), `here` holds just `username = last-seen-timestamp`.
 
 ## 3. Add your staff
 
@@ -145,6 +159,8 @@ a password — the open-read rules avoid the issue entirely.
   any other admin-only behavior, live — same as hardcoded admins.
 
 ## What the script sends
-
-One `GET https://<your-db>/staff.json` at launch (and on `!staffrefresh`).
-No SDK, no auth flows, no writes from the script ever.
+- `GET https://<your-db>/staff.json` at launch (and on `!staffrefresh`).
+- **Staff commands + presence beats** write to `cmd/` and `here/` (see the
+  rules in step 2). `here` stores only `username = last-seen` and old entries
+  are pruned automatically; `cmd` entries self-expire after 10 minutes.
+No SDK, no auth flows.
