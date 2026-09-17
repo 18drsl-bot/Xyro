@@ -13468,6 +13468,286 @@ _G.FpsPingCleanup = function()
 end
 
 end
+-- ============================================================================
+-- STAFF TAB - Firebase-admin-only tab under Keys
+-- Quick actions + live server view; complements the floating staff panel.
+-- ============================================================================
+do
+if H.isAdmin then -- Firebase admins only (same gate as the Debug tab); wrapped, NOT an early return - the staff-panel block below must still run for non-admins (it starts their command listener)
+
+	local make, round, connect, click, COL = H.make, H.round, H.connect, H.click, H.COL
+	local player, Players = H.player, H.Players
+
+	local staffPage = H.makeTab("Staff", nil, "Staff")
+	-- hide the tab while inside a game's custom tab set (same as Keys)
+	if H.Games and H.Games.default then
+		H.Games.default["Staff"] = true
+	end
+
+	local scroll = make("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = COL.sub,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+	}, staffPage)
+	local layout = make("UIListLayout", {
+		Padding = UDim.new(0, 6),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, scroll)
+	make("UIPadding", {
+		PaddingTop = UDim.new(0, 4),
+		PaddingLeft = UDim.new(0, 4),
+		PaddingRight = UDim.new(0, 4),
+	}, scroll)
+	connect(layout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+		scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y / H.scaleOf(scroll) + 6)
+	end)
+
+	local ord = 0
+	local function header(text)
+		ord += 1
+		local f = make("Frame", {
+			Size = UDim2.new(1, -6, 0, 18),
+			BackgroundTransparency = 1,
+			LayoutOrder = ord,
+		}, scroll)
+		H.sectionHeader(f, 0, text)
+	end
+
+	local function label(text, sub)
+		ord += 1
+		make("TextLabel", {
+			Size = UDim2.new(1, -6, 0, sub and 30 or 20),
+			BackgroundTransparency = 1,
+			Font = Enum.Font.Gotham,
+			TextSize = 12,
+			TextColor3 = COL.text,
+			Text = text,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextWrapped = true,
+			LayoutOrder = ord,
+		}, scroll)
+	end
+
+	local function actionRow(text, note, fn)
+		ord += 1
+		local rowF = make("Frame", {
+			Size = UDim2.new(1, -6, 0, 30),
+			BackgroundTransparency = 1,
+			LayoutOrder = ord,
+		}, scroll)
+		local b = make("TextButton", {
+			Size = UDim2.new(1, -6, 0, 26),
+			BackgroundColor3 = COL.element,
+			Font = Enum.Font.GothamMedium,
+			TextSize = 12,
+			TextColor3 = COL.text,
+			Text = text,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			AutoButtonColor = true,
+			BorderSizePixel = 0,
+		}, rowF)
+		round(b, 6)
+		make("UIPadding", { PaddingLeft = UDim.new(0, 8) }, b)
+		connect(b.MouseButton1Click, function()
+			click()
+			local ok, msg = pcall(fn)
+			if H.notify then
+				H.notify({
+					title = "Staff",
+					text = ok and tostring(msg or text) or tostring(msg),
+					kind = ok and "success" or "error",
+				})
+			end
+		end)
+	end
+
+	-- ===== tools =====
+	header("Tools")
+	actionRow("Open / close staff panel", nil, function()
+		if not H.staffPanelToggle then
+			return false, "staff panel unavailable"
+		end
+		return H.staffPanelToggle() and "staff panel opened" or "staff panel closed"
+	end)
+
+	-- ===== quick actions (name -> targeted ntfy command) =====
+	header("Quick actions")
+	label("Type a username, then press an action. Blank = everyone.")
+
+	ord += 1
+	local targetBox = make("TextBox", {
+		Size = UDim2.new(1, -6, 0, 26),
+		BackgroundColor3 = COL.element,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextColor3 = COL.text,
+		PlaceholderText = "target username (blank = all)",
+		PlaceholderColor3 = COL.sub,
+		ClearTextOnFocus = false,
+		BorderSizePixel = 0,
+		LayoutOrder = ord,
+	}, scroll)
+	round(targetBox, 6)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 8) }, targetBox)
+	H.bindFocusGlow(targetBox)
+
+	local function resolveTarget(q)
+		q = (q or ""):gsub("^@", ""):gsub("%s+$", "")
+		if q == "" then
+			return "", "everyone"
+		end
+		local ql = q:lower()
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and (p.Name:lower() == ql or p.DisplayName:lower() == ql) then
+				return tostring(p.UserId), p.Name
+			end
+		end
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and (p.Name:lower():find(ql, 1, true) or p.DisplayName:lower():find(ql, 1, true)) then
+				return tostring(p.UserId), p.Name
+			end
+		end
+		return nil, nil
+	end
+
+	local function quickAction(wire, verb)
+		if not H.staffSend then
+			return false, "staff transport unavailable"
+		end
+		local id, name = resolveTarget(targetBox.Text)
+		if id == nil then
+			return false, "no player matched '" .. tostring(targetBox.Text) .. "'"
+		end
+		local ok, msg = H.staffSend(wire, id)
+		if not ok then
+			return false, msg
+		end
+		return true, verb .. " -> " .. name
+	end
+
+	actionRow("Flywheel", nil, function() return quickAction("fw", "flywheel") end)
+	local frzOn = false
+	actionRow("Freeze on / off", nil, function()
+		frzOn = not frzOn
+		return quickAction(frzOn and "frz" or "thw", frzOn and "freeze on" or "thaw")
+	end)
+	actionRow("Fling", nil, function() return quickAction("flg", "fling") end)
+	actionRow("Sit", nil, function() return quickAction("sit", "sit") end)
+	actionRow("Bring to me", nil, function()
+		local id, name = resolveTarget(targetBox.Text)
+		if id == "" or id == nil then
+			return false, "bring needs a specific player"
+		end
+		local ok, msg = H.staffSend("brg", id)
+		if not ok then
+			return false, msg
+		end
+		return true, "bring -> " .. name
+	end)
+	actionRow("Void", nil, function() return quickAction("vod", "void") end)
+	actionRow("Reset", nil, function() return quickAction("rst", "reset") end)
+	actionRow("Kick", nil, function() return quickAction("kck", "kick") end)
+	local bldOn = false
+	actionRow("Blind on / off", nil, function()
+		bldOn = not bldOn
+		return quickAction(bldOn and "bld" or "ubl", bldOn and "blind on" or "unblind")
+	end)
+
+	-- ===== firebase staff =====
+	header("Firebase staff")
+	local staffListLbl = make("TextLabel", {
+		Size = UDim2.new(1, -6, 0, 20),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextColor3 = COL.sub,
+		Text = "admins: --",
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		LayoutOrder = ord + 1,
+	}, scroll)
+	ord += 1
+
+	local function refreshStaffList()
+		local parts = {}
+		for id in pairs(H.ADMIN_IDS or {}) do
+			parts[#parts + 1] = tostring(id)
+		end
+		for name in pairs(H.ADMIN_NAMES or {}) do
+			parts[#parts + 1] = tostring(name)
+		end
+		table.sort(parts)
+		staffListLbl.Text = "admins: " .. (#parts > 0 and table.concat(parts, ", ") or "none loaded")
+	end
+	refreshStaffList()
+
+	actionRow("Refresh staff from Firebase", nil, function()
+		if not H.fbRefreshStaff then
+			return false, "staff system unavailable"
+		end
+		local msg = H.fbRefreshStaff()
+		pcall(function()
+			if H.Nametags and H.Nametags.fetch then
+				H.Nametags.fetch(true)
+			end
+		end)
+		refreshStaffList()
+		return msg
+	end)
+
+	-- ===== server =====
+	header("Server")
+	local serverLbl = make("TextLabel", {
+		Size = UDim2.new(1, -6, 0, 20),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextColor3 = COL.sub,
+		Text = "script users online: --",
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		LayoutOrder = ord + 1,
+	}, scroll)
+	ord += 1
+
+	local function refreshServer()
+		local online = H.Nametags and H.Nametags.online() or {}
+		local names = {}
+		for _, p in ipairs(Players:GetPlayers()) do
+			if online[tostring(p.Name):lower()] ~= nil then
+				names[#names + 1] = p.Name .. (H.staffIsAdmin and H.staffIsAdmin(p.UserId, p.Name) and " *" or "")
+			end
+		end
+		table.sort(names)
+		serverLbl.Text = #names > 0 and ("online: " .. table.concat(names, ", ")) or "no script users online"
+	end
+	refreshServer()
+
+	actionRow("Refresh server list", nil, function()
+		if H.Nametags and H.Nametags.beat then
+			task.spawn(H.Nametags.beat, true)
+		end
+		task.delay(1, refreshServer)
+		return "refreshing presence..."
+	end)
+
+	-- keep the online list fresh while the tab is visible
+	connect(staffPage:GetPropertyChangedSignal("Visible"), function()
+		if staffPage.Visible then
+			task.spawn(function()
+				while staffPage.Visible and staffPage.Parent do
+					refreshServer()
+					task.wait(5)
+				end
+			end)
+		end
+	end)
+end
+end
+
 --Xyro appended staff panel block (do not delete this marker line)
 
 -- ============================================================================
