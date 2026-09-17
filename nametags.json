@@ -28,22 +28,22 @@
 	},
 	"tags": [
 		{
+			"match": "T4ieDc",
+			"label": "Taieㅤㅤㅤㅤㅤㅤㅤ",
+			"color": "#4C20FE",
+			"size": 16,
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/bf803839255bb23b233f36598b3a2421e981162d.jpeg",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/4fa713fe2cc4967ce73f9b0e5b6b6dc84f3d0b6c.gif"
+		},
+		{
 			"match": "Vertxxy2",
-			"label": "Vert",
+			"label": "Vertㅤㅤㅤㅤㅤㅤㅤ",
 			"color": "#6C80FF",
 			"rank": "purple",
 			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/0eacddd5646ecb32dcd5fba4c5c44891b2f34205.jpg",
 			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/f77b149da7816504bb573156677450a6e9562296.gif",
 			"bg": "#1C1CA6",
 			"badge": true
-		},
-		{
-			"match": "T4ieDc",
-			"label": "Taie",
-			"color": "#4C20FE",
-			"size": 16,
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/bf803839255bb23b233f36598b3a2421e981162d.jpeg",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/4fa713fe2cc4967ce73f9b0e5b6b6dc84f3d0b6c.gif"
 		},
 		{
 			"match": "*",
