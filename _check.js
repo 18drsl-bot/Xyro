@@ -40,6 +40,14 @@ if (!js.includes('wireFilePicker("edIconFile"') || !js.includes('wireFilePicker(
 }
 console.log("file pickers wired: OK");
 
+// badge preview must be the real verified seal image (not a plain text check)
+const sealImg = html.includes('id="edBadgeCheck" alt="" class="vseal"');
+if (!sealImg || !js.includes("RANK_TINTS") || !html.includes("verified_seal_blue.png")) {
+	console.log("badge preview: not using the verified seal image");
+	process.exit(1);
+}
+console.log("badge preview uses verified seal: OK");
+
 // bgImage must survive edSave and render in preview
 if (!js.includes("clean.bgImage") || !js.includes("backgroundImage")) {
 	console.log("bgImage plumbing missing");

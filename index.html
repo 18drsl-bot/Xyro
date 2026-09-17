@@ -247,6 +247,9 @@
 	.badge.big img { height: 27px; width: 27px; }
 	.badge.mini { font-size: 12px; padding: 4px 12px; box-shadow: none; }
 	.badge.mini img { height: 16px; width: 16px; }
+	/* verified seal shown in the mini editor preview (matches in-game) */
+	.badge .vseal { height: 15px; width: 15px; object-fit: contain; border-radius: 0; display: inline-block; }
+	.badge.mini .vseal { height: 15px; width: 15px; }
 
 	/* ---------- rules list ---------- */
 	.rlist { display: flex; flex-direction: column; gap: 9px; margin-top: 12px; }
@@ -552,7 +555,7 @@
 						<label><input id="fType" type="checkbox"> typewriter name reveal</label>
 					</div>
 				</div>
-				<div class="mini-stage"><span class="badge mini" id="edBadge"><img id="edImg" alt="" class="hidden"><span id="edLabel">?</span><span id="edBadgeCheck" style="display:none">&#10003;</span><span class="ubox plain" id="edUbox"><span id="edUser">@user</span></span></span></div>
+				<div class="mini-stage"><span class="badge mini" id="edBadge"><img id="edImg" alt="" class="hidden"><span id="edLabel">?</span><img id="edBadgeCheck" alt="" class="vseal" style="display:none" src="https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/verified_seal_blue.png"><span class="ubox plain" id="edUbox"><span id="edUser">@user</span></span></span></div>
 				<div class="eactions">
 					<button class="subtle" id="edCancel">Cancel</button>
 					<button class="ghost" id="edDelete" style="border-color:rgba(255,93,93,.45);color:var(--danger)">Delete rule</button>
@@ -932,7 +935,6 @@ function renderEditorPreview() {
 	badge.style.setProperty("--pill", hex6(t.bg) || "#0c0c10");
 	$("edLabel").textContent = t.label;
 	$("edUser").textContent = t.userText ? (t.userText.indexOf("@") === 0 ? t.userText : "@" + t.userText) : "@" + myName;
-	$("edBadgeCheck").style.display = t.badge ? "" : "none";
 	const radius = t.shape === "Square" ? "4px" : t.shape === "Rounded" ? "14px" : t.shape === "Circle" ? "999px" : "18px";
 	badge.style.borderRadius = radius;
 	/* @username box on the mini preview: per-rule override or global default */
@@ -945,10 +947,13 @@ function renderEditorPreview() {
 		ub.style.borderRadius = (parseInt($("optUBoxRadius").value) || 0) + "px";
 		ub.style.border = $("optUBoxStroke").value.trim() ? "1px solid " + $("optUBoxStroke").value.trim() : "none";
 	}
-	/* match in-game: rank seal colors (founder silver / hr white / support
-	   green / trial teal); plain staff without a rank show white */
-	const RANK_COLORS = { founder: "#d2d6de", hr: "#ffffff", support: "#42d878", trial: "#46cdc8", purple: "#b066ff" };
-	$("edBadgeCheck").style.color = RANK_COLORS[t.rank] || "#ffffff";
+	/* match in-game: the real verified seal for every badge:true rule.
+	   rank-tinted colors still preview via the tint filter (founder silver /
+	   hr white / support green / trial teal / purple) */
+	const RANK_TINTS = { founder: "hue-rotate(0deg) saturate(0.1) brightness(1.35)", hr: "saturate(0) brightness(4)", support: "hue-rotate(90deg) saturate(1.6)", trial: "hue-rotate(150deg) saturate(1.4)", purple: "hue-rotate(220deg) saturate(1.6)" };
+	const check = $("edBadgeCheck");
+	check.style.display = t.badge ? "" : "none";
+	check.style.filter = RANK_TINTS[t.rank] || "none";
 	const img = $("edImg");
 	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
 		img.src = t.image; img.classList.remove("hidden");

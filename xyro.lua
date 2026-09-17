@@ -7391,8 +7391,12 @@ local NT_FALLBACK_URL = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/n
 local NT_API_URL = "https://api.github.com/repos/vertxxy-1/Xyro/contents/nametags.json"
 local NT_ACCENT = Color3.fromRGB(108, 128, 255)
 
--- Roblox verified-podium glyph, shown as the badge ONLY for Xyro staff.
--- Everyone else with rule.badge gets the plain check mark.
+-- The REAL Roblox verified checkmark (blue scalloped seal + white check),
+-- served from the repo for EVERY badge:true rule - not just staff. Rank
+-- tints still override the color for staff tiers; without a rank everyone
+-- gets the official-blue seal. Tinted builds (via getcustomasset) and the
+-- rank PNGs stay as the colored path; this is the always-works fallback.
+local NT_BADGE_URL = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/verified_seal_blue.png"
 local NT_BADGE_GLYPH = ""
 pcall(function()
 	NT_BADGE_GLYPH = utf8.char(0xE000)
@@ -8778,7 +8782,7 @@ local function ntBuild(plr, rule)
 	local nameW = ntTextWidth(shownName, nameSize, font)
 	local userW = ntTextWidth(userText0, userSize, Enum.Font.Gotham)
 	local badgeRank, badgeTint = ntBadgeRankColor(plr, rule)
-	local badgeW = rule.badge and ((badgeRank or ntIsStaff(plr)) and (nameSize + 6) or 16) or 0
+	local badgeW = rule.badge and (nameSize + 6) or 0
 	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 400)
 
 	local bb = Instance.new("BillboardGui")
@@ -8913,56 +8917,55 @@ local function ntBuild(plr, rule)
 		b.Font = Enum.Font.GothamBold
 		b.TextSize = 12
 		local sealed = false
+		-- EVERYONE with badge:true gets the REAL Roblox verified seal artwork
+		-- (blue scalloped disc + white check) from the repo. Staff with a rank
+		-- get it recolored to their tier (founder silver / hr white / support
+		-- green / trial teal / purple) via the tinted builds.
+		b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
+		local img = Instance.new("ImageLabel")
+		img.Name = "Seal"
+		img.BackgroundTransparency = 1
+		img.AnchorPoint = Vector2.new(0.5, 0.5)
+		img.Position = UDim2.fromScale(0.5, 0.5)
+		img.Size = UDim2.fromOffset(math.max(nameSize + 5, 15), math.max(nameSize + 5, 15))
+		img.ScaleType = Enum.ScaleType.Fit
+		img.Parent = b
+		local sealUrl = nil
 		if badgeRank and badgeTint then
-			-- RANK SEAL: the verified badge artwork recolored per staff tier
-			-- (founder silver / hr white / support green / trial teal / purple).
-			-- Primary: the pre-tinted PNGs hosted in the repo, loaded through the
-			-- same media pipeline as every other tag image (works wherever GIF
-			-- backgrounds work). Backup: an in-engine tint of the embedded mask.
+			-- RANK TINT: prefer the in-engine tinted build, else the repo's
+			-- pre-tinted PNG (same pipeline as GIF backgrounds).
 			local seal = ntSealAsset(badgeRank)
-			local sealUrl = nil
 			if seal then
 				sealed = true
-				b.Text = ""
-			else
-				-- no in-engine asset: load the repo-hosted tinted seal through
-				-- the async media pipeline (same one that serves GIF bg's)
-				sealUrl = NT_SEAL_URL_BASE .. badgeRank .. ".png"
-			end
-			b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
-			local img = Instance.new("ImageLabel")
-			img.Name = "Seal"
-			img.BackgroundTransparency = 1
-			img.AnchorPoint = Vector2.new(0.5, 0.5)
-			img.Position = UDim2.fromScale(0.5, 0.5)
-			img.Size = UDim2.fromOffset(math.max(nameSize + 5, 15), math.max(nameSize + 5, 15))
-			img.ScaleType = Enum.ScaleType.Fit
-			img.Parent = b
-			if sealed then
 				img.Image = seal
-			elseif sealUrl then
-				b.Text = ""
-				task.spawn(function()
-					pcall(ntApplyImage, img, sealUrl)
-				end)
+			else
+				sealUrl = NT_SEAL_URL_BASE .. badgeRank .. ".png"
 			end
 		end
 		if not sealed then
-			-- fallback glyph path (seal unavailable): the official Roblox
-			-- verified glyph for staff - tinted in their rank color when they
-			-- have one, official blue otherwise - and a plain check for everyone
-			-- else. Rendered with the ~1px drop that fixes Roblox's known
-			-- off-center rendering of the private-use glyphs.
-			if ntIsStaff(plr) then
-				b.Text = NT_BADGE_GLYPH ~= "" and NT_BADGE_GLYPH or "\xE2\x9C\x93"
-				b.TextSize = math.max(nameSize + 5, 15)
-				b.TextColor3 = badgeTint or Color3.fromRGB(0, 170, 255)
-				b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 1)
-			else
-				b.Text = "\xE2\x9C\x93"
-				b.TextColor3 = ntColor(rule.color, NT_ACCENT)
-				b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
-			end
+			-- official blue verified seal through the async media pipeline;
+			-- last-ditch fallback: the verified glyph / plain check
+			sealUrl = NT_BADGE_URL
+		end
+		if sealUrl then
+			b.Text = ""
+			task.spawn(function()
+				local okS = pcall(ntApplyImage, img, sealUrl)
+				-- NOTE: a fresh URL returns true immediately (queued) and fills
+				-- the Seal ImageLabel in later; only an outright refusal (no
+				-- getcustomasset / no http / bad data URI) lands here - fall
+				-- back to a text glyph so the badge never vanishes. Runs
+				-- synchronously in that case, i.e. before b is parented.
+				if not okS then
+					if img.Parent then
+						img:Destroy()
+					end
+					b.Text = (badgeRank or ntIsStaff(plr)) and (NT_BADGE_GLYPH ~= "" and NT_BADGE_GLYPH or "\xE2\x9C\x93") or "\xE2\x9C\x93"
+					b.TextSize = math.max(nameSize + 5, 15)
+					b.TextColor3 = badgeTint or ntColor(rule.color, Color3.fromRGB(0, 170, 255))
+					b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 1)
+				end
+			end)
 		end
 		b.Parent = nameRow
 	end

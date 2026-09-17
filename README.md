@@ -69,9 +69,9 @@ run `!nametagsfetch` for instant reload.
 `label` (text above the head) · `color` (border color) · `image` (icon: https URL,
 asset id, or rbxassetid) · `bg` / `bgTransparency` (pill background) · `size` (name
 size) · `userSize` · `font` (GothamBlack, Bangers, Arcade, ...) · `textColor` ·
-`userColor` · `badge` (mark after the name — staff get the verified seal tinted by
-rank: founder silver, HR white, support green, trial teal; everyone else a plain
-check) · `rank` (force a badge color on this rule: `founder` / `hr` / `support` /
+`userColor` · `badge` (the **real Roblox verified seal** — blue scalloped disc with a
+white check — after the name; every rule with `badge: true` gets it, staff or not)
+· `rank` (recolor the seal for this rule: `founder` / `hr` / `support` /
 `trial` / `purple`) · `height` · `imageSize`. First matching rule wins —
 put exact names above the `*` catch-all.
 
@@ -116,3 +116,12 @@ script — point the script at a free Firebase Realtime Database:
 The script reads the list once at launch (and on `!staffrefresh`) and merges it
 with the hardcoded IDs. Staff get the Debug tab + the verified nametag badge.
 Full guide with every accepted layout: **[FIREBASE.md](FIREBASE.md)**.
+
+---
+
+## Controlling nametags from a Discord bot
+
+The tag editor is just a browser calling the GitHub Contents API — a Discord bot
+can do the exact same thing (Create / View / Edit / Delete / Transfer / Search
+rules, upload images) with a fine-grained GitHub token. Every publish lands
+in-game within seconds. Full copy-paste guide: **[DISCORD-BOT.md](DISCORD-BOT.md)**.
