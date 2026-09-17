@@ -14075,8 +14075,8 @@ do
 
 		staffPanel = Instance.new("Frame")
 		staffPanel.Name = "XyroStaffPanel"
-		staffPanel.Size = UDim2.new(0, 280, 0, 340)
-		staffPanel.Position = UDim2.new(0.5, 330, 0.5, -160)
+		staffPanel.Size = UDim2.new(0, 300, 0, 430)
+		staffPanel.Position = UDim2.new(0.5, 340, 0.5, -210)
 		staffPanel.BackgroundColor3 = COL.bg
 		staffPanel.BorderSizePixel = 0
 		staffPanel.Active = true
@@ -14184,7 +14184,7 @@ do
 			bodyVisible = not bodyVisible
 			staffBody.Visible = bodyVisible
 			statusLbl.Visible = bodyVisible
-			staffPanel.Size = bodyVisible and UDim2.new(0, 280, 0, 340) or UDim2.new(0, 280, 0, 38)
+			staffPanel.Size = bodyVisible and UDim2.new(0, 300, 0, 430) or UDim2.new(0, 300, 0, 38)
 		end)
 		H.makeDraggable(staffPanel, bar)
 	end)
@@ -14214,187 +14214,297 @@ do
 		}, staffBody)
 	end
 
-	-- selected target (nil = broadcast to all script users)
-	local selPlayer = nil
-	local selLbl, refreshPlayerList
+	-- multi-select: userId -> true; empty set = broadcast to everyone
+	local selSet = {}
 
-	local function targetId()
-		return selPlayer and selPlayer.UserId or ""
-	end
-
-	local function sendNotify(cmd, on, targetName)
-		local ok, msg = staffSend(cmd, targetId())
+	-- send one command either broadcast (ids empty) or chunked to id groups
+	-- (6 per message keeps the ntfy payload comfortably under the length cap)
+	local function sendTo(cmd, label, ids)
+		ids = ids or {}
+		local ok, msg
+		if #ids == 0 then
+			ok, msg = staffSend(cmd, "")
+		else
+			for i = 1, #ids, 6 do
+				ok, msg = staffSend(cmd, table.concat(ids, ",", i, math.min(i + 5, #ids)))
+				if not ok then
+					break
+				end
+			end
+		end
 		if H.notify then
 			H.notify({
 				title = PANEL_TITLE,
-				text = ok and (on .. " -> " .. (targetName or "everyone")) or tostring(msg),
+				text = ok and (label .. " sent") or tostring(msg),
 				kind = ok and "success" or "error",
 			})
 		end
+		return ok
 	end
 
-	-- paired action rows: label + on/off buttons; one-shots get a send button
-	sec("Broadcast + targeted")
-	local ACTIONS = {
-		{ "Fly Wheel", "fw", nil },
-		{ "Spin", "spn", "usp" },
-		{ "Freeze", "frz", "thw" },
-		{ "Fling", "flg", nil },
-		{ "Sit", "sit", nil },
-		{ "Jump", "jmp", nil },
-		{ "Blind", "bld", "ubl" },
-	}
-	for _, a in ipairs(ACTIONS) do
+	local function tpTo(plr)
+		local c = plr.Character
+		local target = c and c:FindFirstChild("HumanoidRootPart")
+		local my = getHRP()
+		if target and target:IsA("BasePart") and my then
+			my.CFrame = target.CFrame * CFrame.new(0, 0, 3)
+			return true
+		end
+		return false
+	end
+
+	-- Scythe-style card: rounded elevated surface with a title and a
+	-- 2-column button grid, all in Xyro's palette
+	local function makeCard(titleText)
 		ord += 1
-		local row = make("Frame", {
-			Size = UDim2.new(1, -12, 0, 30),
-			BackgroundTransparency = 1,
+		local cardF = make("Frame", {
+			Size = UDim2.new(1, -8, 0, 0),
+			AutomaticSize = Enum.AutomaticSize.Y,
+			BackgroundColor3 = COL.element,
 			LayoutOrder = ord,
 		}, staffBody)
-		make("TextLabel", {
-			Size = UDim2.new(0, 110, 1, 0),
+		round(cardF, 8)
+		make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.35 }, cardF)
+		make("UIPadding", {
+			PaddingTop = UDim.new(0, 8),
+			PaddingLeft = UDim.new(0, 8),
+			PaddingRight = UDim.new(0, 8),
+			PaddingBottom = UDim.new(0, 8),
+		}, cardF)
+		local head = make("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 20),
 			BackgroundTransparency = 1,
-			Font = Enum.Font.Gotham,
+			Font = Enum.Font.GothamBold,
 			TextSize = 12,
-			TextColor3 = COL.text,
-			Text = a[1],
+			TextColor3 = COL.sub,
+			Text = titleText,
 			TextXAlignment = Enum.TextXAlignment.Left,
-		}, row)
-		local function mini(x, label, cmd)
+		}, cardF)
+		return cardF, head
+	end
+
+	local function gridButtons(cardF, defs, onPick)
+		local inner = make("Frame", {
+			Size = UDim2.new(1, 0, 0, 0),
+			AutomaticSize = Enum.AutomaticSize.Y,
+			BackgroundTransparency = 1,
+			Position = UDim2.new(0, 0, 0, 26),
+		}, cardF)
+		make("UIGridLayout", {
+			CellSize = UDim2.new(0.5, -3, 0, 26),
+			CellPadding = UDim2.new(0, 4, 0, 5),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}, inner)
+		for i, d in ipairs(defs) do
 			local b = make("TextButton", {
-				Size = UDim2.new(0, 54, 0, 24),
-				Position = UDim2.new(0, 115 + (x == 2 and 60 or 0), 0.5, -12),
-				BackgroundColor3 = COL.element,
+				BackgroundColor3 = COL.contentBg,
 				Font = Enum.Font.GothamMedium,
 				TextSize = 12,
 				TextColor3 = COL.text,
-				Text = label,
+				Text = d[1],
 				AutoButtonColor = true,
 				BorderSizePixel = 0,
-			}, row)
+				LayoutOrder = i,
+			}, inner)
 			round(b, 6)
+			make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.5 }, b)
 			connect(b.MouseButton1Click, function()
 				click()
-				sendNotify(cmd, a[1] .. (label == "on" and " on" or label == "off" and " off" or ""))
+				onPick(d)
 			end)
-		end
-		if a[3] then
-			mini(1, "on", a[2])
-			mini(2, "off", a[3])
-		else
-			mini(1, "send", a[2])
 		end
 	end
 
-	sec("Target")
-	ord += 1
-	selLbl = make("TextLabel", {
-		Size = UDim2.new(1, -12, 0, 22),
+	-- ===== card 1: everyone (broadcast) =====
+	local everyoneCard = makeCard("Everyone")
+	gridButtons(everyoneCard, {
+		{ "Fly Wheel", "fw" }, { "Jump", "jmp" },
+		{ "Spin", "spn" }, { "Unspin", "usp" },
+		{ "Freeze", "frz" }, { "Unfreeze", "thw" },
+		{ "Fling", "flg" }, { "Sit", "sit" },
+		{ "Blind", "bld" }, { "Unblind", "ubl" },
+		{ "Bring", "brg" }, { "Void", "vod" },
+		{ "Reset", "rst" }, { "Kick all", "kck" },
+	}, function(d)
+		sendTo(d[2], d[1], {})
+	end)
+
+	-- ===== card 2: selected users =====
+	local selCard = makeCard("Selected users")
+	gridButtons(selCard, {
+		{ "Fly Wheel", "fw" }, { "Kick", "kck" },
+		{ "Spin", "spn" }, { "Freeze", "frz" },
+		{ "Fling", "flg" }, { "Sit", "sit" },
+		{ "Bring", "brg" }, { "Void", "vod" },
+		{ "Reset", "rst" }, { "Blind", "bld" },
+		{ "Unspin", "usp" }, { "Unfreeze", "thw" },
+		{ "Unblind", "ubl" }, { "Jump", "jmp" },
+	}, function(d)
+		local ids = {}
+		for uid in pairs(selSet) do
+			ids[#ids + 1] = tostring(uid)
+		end
+		if #ids == 0 then
+			if H.notify then
+				H.notify({ title = PANEL_TITLE, text = "select users below first (or use the Everyone card)", kind = "warn" })
+			end
+			return
+		end
+		table.sort(ids)
+		sendTo(d[2], d[1], ids)
+	end)
+
+	-- ===== card 3: script users (multi-select + TP/FW) =====
+	local usersCard = makeCard("Script users")
+	local selAllBtn = make("TextButton", {
+		Size = UDim2.new(0, 56, 0, 18),
+		Position = UDim2.new(1, -124, 0, 1),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.GothamMedium,
-		TextSize = 12,
-		TextColor3 = COL.sub,
-		Text = "targeting: everyone",
-		TextXAlignment = Enum.TextXAlignment.Left,
-		LayoutOrder = ord,
-	}, staffBody)
-
-	ord += 1
-	local listHolder = make("Frame", {
-		Size = UDim2.new(1, -12, 0, 0),
+		TextSize = 11,
+		TextColor3 = COL.accent,
+		Text = "Select all",
+		AutoButtonColor = false,
+		BorderSizePixel = 0,
+	}, usersCard)
+	local clearBtn = make("TextButton", {
+		Size = UDim2.new(0, 44, 0, 18),
+		Position = UDim2.new(1, -50, 0, 1),
 		BackgroundTransparency = 1,
-		LayoutOrder = ord,
-	}, staffBody)
+		Font = Enum.Font.GothamMedium,
+		TextSize = 11,
+		TextColor3 = COL.sub,
+		Text = "Clear",
+		AutoButtonColor = false,
+		BorderSizePixel = 0,
+	}, usersCard)
+	connect(selAllBtn.MouseButton1Click, function()
+		click()
+		local ntOnline = H.Nametags and H.Nametags.online() or {}
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= player and ntOnline[tostring(plr.Name):lower()] ~= nil then
+				selSet[plr.UserId] = true
+			end
+		end
+		refreshPlayerList()
+	end)
+	connect(clearBtn.MouseButton1Click, function()
+		click()
+		selSet = {}
+		refreshPlayerList()
+	end)
+
+	local rowsHolder = make("Frame", {
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		Position = UDim2.new(0, 0, 0, 26),
+	}, usersCard)
+	make("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, rowsHolder)
 
 	refreshPlayerList = function()
-		for _, ch in ipairs(listHolder:GetChildren()) do
-			ch:Destroy()
+		for _, ch in ipairs(rowsHolder:GetChildren()) do
+			if ch:IsA("Frame") then
+				ch:Destroy()
+			end
 		end
-		make("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, listHolder)
 		local ntOnline = H.Nametags and H.Nametags.online() or {}
 		local guys = {}
 		for _, plr in ipairs(Players:GetPlayers()) do
-			if plr ~= player and ntOnline[tostring(plr.Name):lower()] ~= nil then
+			if ntOnline[tostring(plr.Name):lower()] ~= nil then
 				guys[#guys + 1] = plr
 			end
 		end
 		table.sort(guys, function(p, q)
 			return p.Name:lower() < q.Name:lower()
 		end)
-		local h = 0
 		for i, plr in ipairs(guys) do
-			h += 28
-			local row = make("TextButton", {
-				Size = UDim2.new(1, 0, 0, 24),
-				BackgroundColor3 = COL.element,
-				Font = Enum.Font.Gotham,
-				TextSize = 12,
-				TextColor3 = COL.text,
-				Text = plr.Name .. (selPlayer == plr and "   (selected)" or ""),
-				TextXAlignment = Enum.TextXAlignment.Left,
-				AutoButtonColor = true,
+			local isMe = plr == player
+			local isSel = selSet[plr.UserId] == true
+			local rowF = make("Frame", {
+				Size = UDim2.new(1, 0, 0, 26),
+				BackgroundColor3 = isSel and COL.accent or COL.contentBg,
+				BackgroundTransparency = isSel and 0.55 or 0,
 				BorderSizePixel = 0,
 				LayoutOrder = i,
-			}, listHolder)
-			round(row, 6)
-			make("UIPadding", { PaddingLeft = UDim.new(0, 8) }, row)
-			connect(row.MouseButton1Click, function()
-				click()
-				selPlayer = (selPlayer == plr) and nil or plr
-				selLbl.Text = "targeting: " .. (selPlayer and selPlayer.Name or "everyone")
-				refreshPlayerList()
-			end)
+			}, rowsHolder)
+			round(rowF, 6)
+			make("UIStroke", {
+				Color = isSel and COL.accent or COL.stroke,
+				Thickness = 1,
+				Transparency = isSel and 0.2 or 0.5,
+			}, rowF)
+			local nameBtn = make("TextButton", {
+				Size = UDim2.new(1, -88, 1, 0),
+				BackgroundTransparency = 1,
+				Font = Enum.Font.Gotham,
+				TextSize = 12,
+				TextColor3 = isMe and COL.sub or COL.text,
+				Text = "  " .. plr.Name .. (isMe and "  (you)" or ""),
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				AutoButtonColor = not isMe,
+				BorderSizePixel = 0,
+			}, rowF)
+			if not isMe then
+				connect(nameBtn.MouseButton1Click, function()
+					click()
+					if selSet[plr.UserId] then
+						selSet[plr.UserId] = nil
+					else
+						selSet[plr.UserId] = true
+					end
+					refreshPlayerList()
+				end)
+				local tpBtn = make("TextButton", {
+					Size = UDim2.new(0, 38, 1, -6),
+					Position = UDim2.new(1, -84, 0.5, -10),
+					BackgroundColor3 = COL.element,
+					Font = Enum.Font.GothamMedium,
+					TextSize = 11,
+					TextColor3 = COL.text,
+					Text = "TP",
+					AutoButtonColor = true,
+					BorderSizePixel = 0,
+				}, rowF)
+				round(tpBtn, 5)
+				connect(tpBtn.MouseButton1Click, function()
+					click()
+					if not tpTo(plr) and H.notify then
+						H.notify({ title = PANEL_TITLE, text = "teleport failed (no character?)", kind = "error" })
+					end
+				end)
+				local fwBtn = make("TextButton", {
+					Size = UDim2.new(0, 38, 1, -6),
+					Position = UDim2.new(1, -42, 0.5, -10),
+					BackgroundColor3 = COL.element,
+					Font = Enum.Font.GothamMedium,
+					TextSize = 11,
+					TextColor3 = COL.on,
+					Text = "FW",
+					AutoButtonColor = true,
+					BorderSizePixel = 0,
+				}, rowF)
+				round(fwBtn, 5)
+				connect(fwBtn.MouseButton1Click, function()
+					click()
+					sendTo("fw", "flywheel -> " .. plr.Name, { tostring(plr.UserId) })
+				end)
+			end
 		end
-		listHolder.Size = UDim2.new(1, 0, 0, h)
+		if #guys == 0 then
+			make("TextLabel", {
+				Size = UDim2.new(1, 0, 0, 26),
+				BackgroundTransparency = 1,
+				Font = Enum.Font.Gotham,
+				TextSize = 12,
+				TextColor3 = COL.sub,
+				Text = "no script users online",
+				LayoutOrder = 9999,
+			}, rowsHolder)
+		end
 	end
 	refreshPlayerList()
-
-	-- per-user only actions: bring to me / void / reset (need a target)
-	sec("Per-user (pick a target)")
-	local PER_USER = {
-		{ "Bring to me", "brg" },
-		{ "Void", "vod" },
-		{ "Reset", "rst" },
-	}
-	for _, a in ipairs(PER_USER) do
-		ord += 1
-		local row = make("Frame", {
-			Size = UDim2.new(1, -12, 0, 30),
-			BackgroundTransparency = 1,
-			LayoutOrder = ord,
-		}, staffBody)
-		make("TextLabel", {
-			Size = UDim2.new(0, 110, 1, 0),
-			BackgroundTransparency = 1,
-			Font = Enum.Font.Gotham,
-			TextSize = 12,
-			TextColor3 = COL.text,
-			Text = a[1],
-			TextXAlignment = Enum.TextXAlignment.Left,
-		}, row)
-		local go = make("TextButton", {
-			Size = UDim2.new(0, 60, 0, 24),
-			Position = UDim2.new(0, 115, 0.5, -12),
-			BackgroundColor3 = COL.element,
-			Font = Enum.Font.GothamMedium,
-			TextSize = 12,
-			TextColor3 = COL.text,
-			Text = "send",
-			AutoButtonColor = true,
-			BorderSizePixel = 0,
-		}, row)
-		round(go, 6)
-		connect(go.MouseButton1Click, function()
-			click()
-			if not selPlayer then
-				if H.notify then
-					H.notify({ title = PANEL_TITLE, text = "pick a player in Target first", kind = "warn" })
-				end
-				return
-			end
-			sendNotify(a[2], a[1], selPlayer.Name)
-		end)
-	end
 
 	-- refresh the player list as presence changes
 	task.spawn(function()
@@ -14411,7 +14521,7 @@ do
 			bodyVisible = true
 			staffBody.Visible = true
 			statusLbl.Visible = true
-			staffPanel.Size = UDim2.new(0, 280, 0, 340)
+			staffPanel.Size = UDim2.new(0, 300, 0, 430)
 			local sc = staffPanel:FindFirstChildOfClass("UIScale") or Instance.new("UIScale")
 			sc.Parent = staffPanel
 			local base = H.scales and H.scales["XyroStaffPanel"] or 1
