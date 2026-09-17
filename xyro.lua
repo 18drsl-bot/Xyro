@@ -123,17 +123,18 @@ H.setBind = function(action, keyName)
 end
 
 local COL = {
-	-- carbon shell + near-black content card, Xyro-brand periwinkle accent
-	-- (same #6C80FF as the nametag pill borders / tag editor)
-	bg = Color3.fromRGB(20, 22, 31), -- #14161F window shell
-	element = Color3.fromRGB(31, 34, 47), -- #1F222F rows / pills
-	stroke = Color3.fromRGB(44, 48, 66), -- #2C3042 hairlines & outlines
-	accent = Color3.fromRGB(108, 128, 255), -- #6C80FF Xyro brand
-	on = Color3.fromRGB(235, 76, 76),
-	text = Color3.fromRGB(240, 242, 250), -- #F0F2FA
-	sub = Color3.fromRGB(148, 155, 178), -- #949BB2 secondary text
-	off = Color3.fromRGB(52, 56, 74), -- #34384A disabled / hover fill
-	contentBg = Color3.fromRGB(11, 12, 17), -- always re-derived from bg in applyTheme
+	-- Rayfield palette: neutral near-black shell, flat surfaces and ONE
+	-- saturated blue accent. No gradients, no glow rings - hover feedback is
+	-- a hairline fading in, and depth comes from the shell/card/value steps.
+	bg = Color3.fromRGB(15, 15, 19), -- #0F0F13 window shell
+	element = Color3.fromRGB(26, 26, 32), -- #1A1A20 rows / pills / cards
+	stroke = Color3.fromRGB(46, 46, 54), -- #2E2E36 hairlines & outlines
+	accent = Color3.fromRGB(80, 105, 255), -- #5069FF rayfield blue
+	on = Color3.fromRGB(235, 76, 76), -- danger red (errors, kick, reset)
+	text = Color3.fromRGB(237, 237, 242), -- #EDEDF2
+	sub = Color3.fromRGB(139, 139, 147), -- #8B8B93 secondary text
+	off = Color3.fromRGB(42, 42, 50), -- #2A2A32 disabled / switch off
+	contentBg = Color3.fromRGB(8, 8, 10), -- always re-derived from bg in applyTheme
 }
 
 local ESPCOL = {
@@ -196,27 +197,29 @@ H.animate = function(btn)
 	if btn:FindFirstChild("HoverGlow") or btn:GetAttribute("NoAnim") then
 		return btn
 	end
-	local glow = make("UIStroke", {
+	-- Rayfield hover: a 1px hairline that fades in. No glow bloom, no scale
+	-- pop, no thickness growth on press - the edge just lights up and dims.
+	local line = make("UIStroke", {
 		Name = "HoverGlow",
 		Color = Color3.new(1, 1, 1),
-		Thickness = 0,
-		Transparency = 0.35,
+		Thickness = 1,
+		Transparency = 1,
 		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 	}, btn)
 	local hovering = false
 	connect(btn.MouseEnter, function()
 		hovering = true
-		tween(glow, { Thickness = 1.5 })
+		tween(line, { Transparency = 0.62 })
 	end)
 	connect(btn.MouseLeave, function()
 		hovering = false
-		tween(glow, { Thickness = 0 })
+		tween(line, { Transparency = 1 })
 	end)
 	connect(btn.MouseButton1Down, function()
-		tween(glow, { Thickness = 3 })
+		tween(line, { Transparency = 0.4 })
 	end)
 	connect(btn.MouseButton1Up, function()
-		tween(glow, { Thickness = hovering and 1.5 or 0 })
+		tween(line, { Transparency = hovering and 0.62 or 1 })
 	end)
 	return btn
 end
@@ -245,7 +248,9 @@ H.popIn = function(frame)
 	local startS = base * 0.7
 	sc.Scale = startS
 	frame.Position = shiftedPos(rest, w, h, base, startS)
-	local info = TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+	-- Quint Out, not Back: Rayfield windows snap in without a springy
+	-- overshoot (the bounce was the last Fluent tell left in the shell)
+	local info = TweenInfo.new(0.18, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 	TweenService:Create(sc, info, { Scale = base }):Play()
 	TweenService:Create(frame, info, { Position = rest }):Play()
 end
@@ -324,16 +329,11 @@ local main = make("Frame", {
 	BorderSizePixel = 0,
 	Active = true,
 }, gui)
-round(main, 14)
--- Rayfield-depth window outline: tinted hairline instead of pure stroke-gray
+round(main, 10)
+-- Rayfield window: flat shell with a single hairline outline. The old
+-- white-to-gray UIGradient is gone - Rayfield surfaces are matte, so depth
+-- comes from the bg/contentBg/element steps instead of a sheen.
 make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.15 }, main)
-
--- faint brand glow down the shell (barely-there vertical depth; the dark
--- theme already carries contrast, this just stops it feeling flat)
-make("UIGradient", {
-	Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(219, 222, 236)),
-	Rotation = 90,
-}, main)
 
 -- dark content card inset on the right (pages render on top of this)
 local contentCard = make("Frame", {
@@ -344,7 +344,7 @@ local contentCard = make("Frame", {
 	BackgroundTransparency = 0,
 	BorderSizePixel = 0,
 }, main)
-round(contentCard, 10)
+round(contentCard, 8)
 contentCard.ZIndex = 0
 -- its color tracks the shell via the theme system, with a hairline outline
 -- so the card reads as a raised surface against the shell
@@ -485,18 +485,61 @@ H.chrome = function(frame, opts)
 	opts = opts or {}
 	local headerH = opts.header or 38
 
-	local closeBtn = make("TextButton", {
-		Name = "Close",
-		Size = UDim2.new(0, 18, 0, 18),
-		Position = UDim2.new(1, -27, 0, 9),
-		BackgroundColor3 = Color3.fromRGB(225, 65, 65),
-		Text = "",
-		AutoButtonColor = false,
-		BorderSizePixel = 0,
-		ZIndex = 10,
-	}, frame)
-	round(closeBtn, 9)
-	H.animate(closeBtn)
+	-- Rayfield chrome: flat monochrome glyphs instead of traffic-light dots.
+	-- The glyphs are vector (frames), not font characters, so they can never
+	-- show up as a tofu box on an executor missing that glyph.
+	local function glyphBar(parent, w, rot)
+		local f = make("Frame", {
+			Size = UDim2.new(0, w, 0, 1.5),
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			BackgroundColor3 = COL.sub,
+			BorderSizePixel = 0,
+			Rotation = rot or 0,
+			ZIndex = 11,
+		}, parent)
+		round(f, 1)
+		return f
+	end
+
+	local function chromeBtn(name, xOffset, isClose)
+		local b = make("TextButton", {
+			Name = name,
+			Size = UDim2.new(0, 20, 0, 20),
+			Position = UDim2.new(1, xOffset, 0, 8),
+			BackgroundColor3 = COL.element,
+			BackgroundTransparency = 1,
+			Text = "",
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			ZIndex = 10,
+		}, frame)
+		round(b, 5)
+		if isClose then
+			glyphBar(b, 9, 45)
+			glyphBar(b, 9, -45)
+		else
+			glyphBar(b, 9, 0)
+		end
+		local function paint(c)
+			for _, g in ipairs(b:GetChildren()) do
+				if g:IsA("Frame") then
+					tween(g, { BackgroundColor3 = c })
+				end
+			end
+		end
+		connect(b.MouseEnter, function()
+			tween(b, { BackgroundTransparency = 0 })
+			paint(isClose and COL.on or COL.text)
+		end)
+		connect(b.MouseLeave, function()
+			tween(b, { BackgroundTransparency = 1 })
+			paint(COL.sub)
+		end)
+		return b
+	end
+
+	local closeBtn = chromeBtn("Close", -29, true)
 	connect(closeBtn.MouseButton1Click, function()
 		click()
 		H.popOut(frame, function()
@@ -510,18 +553,7 @@ H.chrome = function(frame, opts)
 
 	local minBtn
 	if opts.minimize ~= false then
-		minBtn = make("TextButton", {
-			Name = "Minimize",
-			Size = UDim2.new(0, 18, 0, 18),
-			Position = UDim2.new(1, -49, 0, 9),
-			BackgroundColor3 = Color3.fromRGB(235, 190, 45),
-			Text = "",
-			AutoButtonColor = false,
-			BorderSizePixel = 0,
-			ZIndex = 10,
-		}, frame)
-		round(minBtn, 9)
-		H.animate(minBtn)
+		minBtn = chromeBtn("Minimize", -53, false)
 
 		local collapsed, saved, hidden = false, nil, {}
 		connect(minBtn.MouseButton1Click, function()
@@ -683,6 +715,7 @@ local function makeTab(name, onClick, display)
 	local btn = make("TextButton", {
 		Size = UDim2.new(0, TAB_WIDTH, 0, 30),
 		BackgroundColor3 = COL.element,
+		BackgroundTransparency = 1, -- idle = bare label on the shell (Rayfield rail)
 		Font = Enum.Font.GothamMedium,
 		TextSize = 12,
 		TextColor3 = COL.sub,
@@ -693,25 +726,8 @@ local function makeTab(name, onClick, display)
 		LayoutOrder = tabOrder,
 	}, tabStrip)
 	make("UIPadding", { PaddingLeft = UDim.new(0, 12) }, btn)
-	round(btn, 9)
+	round(btn, 6)
 	btn:SetAttribute("NoAnim", true)
-	-- quiet hairline under idle pills so the column reads as structured
-	-- rows instead of floating bubbles (active tab keeps its accent fill)
-	make("UIStroke", { Color = COL.off, Thickness = 1, Transparency = 0.35 }, btn)
-
-	-- Fluent-style selection notch on the pill's LEFT edge; grows when active.
-	-- x = -6 lands just inside the pill's visual edge (UIPadding shifts children,
-	-- which is why an inset bar previously collided with the label)
-	local underline = make("Frame", {
-		Name = "Underline",
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, -6, 0.5, 0),
-		Size = UDim2.new(0, 3, 0, 0),
-		BackgroundColor3 = Color3.new(1, 1, 1),
-		BorderSizePixel = 0,
-		ZIndex = 2,
-	}, btn)
-	round(underline, 2)
 	local page = make("Frame", {
 		Size = UDim2.new(0, 326, 1, -70),
 		Position = UDim2.new(0, 200, 0, 44),
@@ -723,14 +739,12 @@ local function makeTab(name, onClick, display)
 
 	connect(btn.MouseEnter, function()
 		if currentTab ~= name then
-			tween(btn, { BackgroundColor3 = COL.off, TextColor3 = COL.text })
-			tween(underline, { Size = UDim2.new(0, 3, 0, 10) })
+			tween(btn, { BackgroundTransparency = 0, TextColor3 = COL.text })
 		end
 	end)
 	connect(btn.MouseLeave, function()
 		if currentTab ~= name then
-			tween(btn, { BackgroundColor3 = COL.element, TextColor3 = COL.sub })
-			tween(underline, { Size = UDim2.new(0, 3, 0, 0) })
+			tween(btn, { BackgroundTransparency = 1, TextColor3 = COL.sub })
 		end
 	end)
 
@@ -1154,13 +1168,20 @@ function selectTab(name)
 			page.Position = UDim2.new(0, 200, 0, 52)
 			tween(page, { Position = UDim2.new(0, 200, 0, 44) })
 		end
-		tween(tabs[n], {
-			BackgroundColor3 = active and COL.accent or COL.element,
-			TextColor3 = active and Color3.new(1, 1, 1) or COL.sub,
-		})
-		local ul = tabs[n]:FindFirstChild("Underline")
-		if ul then
-			tween(ul, { Size = UDim2.new(0, 3, 0, active and 16 or 0) })
+		-- Rayfield rail: the active tab is a solid accent row; every other tab is
+		-- a bare label whose hover fill fades in (no notch, no idle hairline)
+		if active then
+			tween(tabs[n], {
+				BackgroundColor3 = COL.accent,
+				BackgroundTransparency = 0,
+				TextColor3 = Color3.new(1, 1, 1),
+			})
+		else
+			tween(tabs[n], {
+				BackgroundColor3 = COL.element,
+				BackgroundTransparency = 1,
+				TextColor3 = COL.sub,
+			})
 		end
 	end
 end
@@ -1179,42 +1200,29 @@ local function row(parent, y, text)
 end
 
 local function makeSwitch(parent, y, initial, onChanged)
+	-- Rayfield toggle: flat pill, no sheen, no glow ring. Off is a hollow dark
+	-- track, on is solid accent - the knob is the only thing that moves.
 	local btn = make("TextButton", {
-		Size = UDim2.new(0, 44, 0, 22),
-		Position = UDim2.new(1, -44, 0, y),
-		BackgroundColor3 = initial and COL.accent or COL.contentBg,
+		Size = UDim2.new(0, 38, 0, 20),
+		Position = UDim2.new(1, -38, 0, y + 1),
+		BackgroundColor3 = initial and COL.accent or COL.off,
 		Text = "",
 		AutoButtonColor = false,
 		BorderSizePixel = 0,
 	}, parent)
-	round(btn, 11)
+	round(btn, 10)
 	H.animate(btn)
-	-- Fluent-style two-tone track: faint vertical sheen so the switch reads
-	-- as a physical control instead of a flat pill
-	make("UIGradient", {
-		Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(226, 229, 243)),
-		Rotation = 90,
-	}, btn)
-	-- accent glow ring that appears while the switch is live
-	local glow = make("UIStroke", {
-		Color = COL.accent,
-		Thickness = initial and 1.5 or 0,
-		Transparency = 0.35,
-		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-	}, btn)
 	local knob = make("Frame", {
 		Size = UDim2.new(0, 16, 0, 16),
-		Position = initial and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
+		Position = initial and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
 	}, btn)
 	round(knob, 8)
-	make("UIStroke", { Color = Color3.fromRGB(186, 191, 212), Thickness = 1, Transparency = 0.55 }, knob)
 	local state = initial
 	local function render()
-		tween(btn, { BackgroundColor3 = state and COL.accent or COL.contentBg })
-		tween(knob, { Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8) })
-		tween(glow, { Thickness = state and 1.5 or 0 })
+		tween(btn, { BackgroundColor3 = state and COL.accent or COL.off })
+		tween(knob, { Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8) })
 	end
 	themeRefreshers[#themeRefreshers + 1] = render
 	local function toggle()
@@ -1243,7 +1251,7 @@ H.bindFocusGlow = function(box)
 		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 	}, box)
 	connect(box.Focused, function()
-		tween(ring, { Thickness = 1.5 })
+		tween(ring, { Thickness = 1 })
 	end)
 	connect(box.FocusLost, function()
 		tween(ring, { Thickness = 0 })
@@ -1251,21 +1259,15 @@ H.bindFocusGlow = function(box)
 	return box
 end
 
--- Linoria-style section header: small-caps label with an accent tick
+-- Rayfield section label: plain small-caps gray text sitting above its rows.
+-- No accent tick, no box - the label stays quiet so the elements carry the eye.
 H.sectionHeader = function(parent, y, text)
-	local tick = make("Frame", {
-		Size = UDim2.new(0, 3, 0, 12),
-		Position = UDim2.new(0, 0, 0, y + 4),
-		BackgroundColor3 = COL.accent,
-		BorderSizePixel = 0,
-	}, parent)
-	round(tick, 2)
 	make("TextLabel", {
-		Size = UDim2.new(1, -12, 0, 20),
-		Position = UDim2.new(0, 9, 0, y),
+		Size = UDim2.new(1, -12, 0, 18),
+		Position = UDim2.new(0, 0, 0, y + 2),
 		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold,
-		TextSize = 11,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 10,
 		TextColor3 = COL.sub,
 		Text = string.upper(text),
 		TextXAlignment = Enum.TextXAlignment.Left,
@@ -1277,7 +1279,7 @@ H.makeSlider = function(parent, y, minV, maxV, initial, format, onChanged)
 	minV, maxV = tonumber(minV) or 0, tonumber(maxV) or 100
 	local value = math.clamp(tonumber(initial) or minV, minV, maxV)
 	local track = make("TextButton", {
-		Size = UDim2.new(1, -56, 0, 6),
+		Size = UDim2.new(1, -56, 0, 5),
 		Position = UDim2.new(0, 0, 0, y + 14),
 		BackgroundColor3 = COL.contentBg,
 		Text = "",
@@ -1292,7 +1294,7 @@ H.makeSlider = function(parent, y, minV, maxV, initial, format, onChanged)
 	}, track)
 	round(fill, 3)
 	local knob = make("Frame", {
-		Size = UDim2.new(0, 10, 0, 10),
+		Size = UDim2.new(0, 9, 0, 9),
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
@@ -1721,7 +1723,7 @@ local function notify(a, b, c)
 		BorderSizePixel = 0,
 		ZIndex = 50,
 	}, slot)
-	round(card, 8)
+	round(card, 6)
 	make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.2 }, card)
 
 	make("Frame", {
@@ -1907,7 +1909,8 @@ local function credits(duration)
 	TweenService:Create(card, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		GroupTransparency = 0,
 	}):Play()
-	TweenService:Create(scale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+	-- flat Rayfield entrance: fade + settle, no springy overshoot
+	TweenService:Create(scale, TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 		Scale = 1,
 	}):Play()
 
@@ -4410,7 +4413,7 @@ local function gatherConfig()
 		espColors[k] = toHex(v)
 	end
 	return {
-		paletteVer = 3, -- 3 = carbon palette; configs saved by older builds are ignored on load
+		paletteVer = 4, -- 4 = Rayfield palette; configs saved by older builds are ignored on load
 		colors = colors,
 		espColors = espColors,
 		cframeSpeed = _G.CFrameSpeed,
@@ -4439,7 +4442,7 @@ local function applyConfig(cfg)
 	if type(cfg) ~= "table" then
 		return
 	end
-	if cfg.paletteVer == 3 and type(cfg.colors) == "table" then
+	if cfg.paletteVer == 4 and type(cfg.colors) == "table" then
 		for k, hex in pairs(cfg.colors) do
 			if COL[k] ~= nil then
 				local c = fromHex(hex)
@@ -5031,6 +5034,12 @@ for i, role in ipairs(COLOR_ROLES) do
 end
 
 local PRESETS = {
+	{
+		name = "Rayfield",
+		colors = { bg = "#0F0F13", element = "#1A1A20", stroke = "#2E2E36", accent = "#5069FF",
+			on = "#EB4C4C", text = "#EDEDF2", sub = "#8B8B93", off = "#2A2A32" },
+		espColors = { box = "#E64444", name = "#FFFFFF", skeleton = "#E64444" },
+	},
 	{
 		name = "Default",
 		colors = { bg = "#14161F", element = "#1F222F", stroke = "#2C3042", accent = "#6C80FF",
@@ -14337,30 +14346,62 @@ do
 		title.TextXAlignment = Enum.TextXAlignment.Left
 		title.ZIndex = 3
 		title.Parent = bar
-		local closeBtn = Instance.new("TextButton")
-		closeBtn.Size = UDim2.new(0, 18, 0, 18)
-		closeBtn.Position = UDim2.new(1, -27, 0, 10)
-		closeBtn.BackgroundColor3 = Color3.fromRGB(225, 65, 65)
-		closeBtn.Text = ""
-		closeBtn.AutoButtonColor = false
-		closeBtn.BorderSizePixel = 0
-		closeBtn.ZIndex = 3
-		closeBtn.Parent = bar
-		local cc = Instance.new("UICorner")
-		cc.CornerRadius = UDim.new(0, 9)
-		cc.Parent = closeBtn
-		local minBtn = Instance.new("TextButton")
-		minBtn.Size = UDim2.new(0, 18, 0, 18)
-		minBtn.Position = UDim2.new(1, -49, 0, 10)
-		minBtn.BackgroundColor3 = Color3.fromRGB(235, 190, 45)
-		minBtn.Text = ""
-		minBtn.AutoButtonColor = false
-		minBtn.BorderSizePixel = 0
-		minBtn.ZIndex = 3
-		minBtn.Parent = bar
-		local mc = Instance.new("UICorner")
-		mc.CornerRadius = UDim.new(0, 9)
-		mc.Parent = minBtn
+		-- flat Rayfield chrome: monochrome vector glyphs (drawn from frames, so
+		-- no font can turn them into tofu boxes)
+		local function glyph(parent, w, rot, color)
+			local f = Instance.new("Frame")
+			f.Size = UDim2.new(0, w, 0, 1.5)
+			f.AnchorPoint = Vector2.new(0.5, 0.5)
+			f.Position = UDim2.fromScale(0.5, 0.5)
+			f.BackgroundColor3 = color
+			f.BorderSizePixel = 0
+			f.Rotation = rot
+			f.ZIndex = 4
+			f.Parent = parent
+			local gc = Instance.new("UICorner")
+			gc.CornerRadius = UDim.new(0, 1)
+			gc.Parent = f
+			return f
+		end
+
+		local function chromeBtn(xOffset, isClose)
+			local b = Instance.new("TextButton")
+			b.Size = UDim2.new(0, 20, 0, 20)
+			b.Position = UDim2.new(1, xOffset, 0, 9)
+			b.BackgroundColor3 = COL.element
+			b.BackgroundTransparency = 1
+			b.Text = ""
+			b.AutoButtonColor = false
+			b.BorderSizePixel = 0
+			b.ZIndex = 3
+			b.Parent = bar
+			local bc = Instance.new("UICorner")
+			bc.CornerRadius = UDim.new(0, 5)
+			bc.Parent = b
+			local bars = {}
+			if isClose then
+				bars[1] = glyph(b, 9, 45, COL.sub)
+				bars[2] = glyph(b, 9, -45, COL.sub)
+			else
+				bars[1] = glyph(b, 9, 0, COL.sub)
+			end
+			b.MouseEnter:Connect(function()
+				TweenService:Create(b, TweenInfo.new(0.15), { BackgroundTransparency = 0 }):Play()
+				for _, g in ipairs(bars) do
+					TweenService:Create(g, TweenInfo.new(0.15), { BackgroundColor3 = isClose and COL.on or COL.text }):Play()
+				end
+			end)
+			b.MouseLeave:Connect(function()
+				TweenService:Create(b, TweenInfo.new(0.15), { BackgroundTransparency = 1 }):Play()
+				for _, g in ipairs(bars) do
+					TweenService:Create(g, TweenInfo.new(0.15), { BackgroundColor3 = COL.sub }):Play()
+				end
+			end)
+			return b
+		end
+
+		local closeBtn = chromeBtn(-29, true)
+		local minBtn = chromeBtn(-53, false)
 
 		staffBody = Instance.new("ScrollingFrame")
 		staffBody.Name = "Body"
@@ -14498,10 +14539,10 @@ do
 		local head = make("TextLabel", {
 			Size = UDim2.new(1, 0, 0, 20),
 			BackgroundTransparency = 1,
-			Font = Enum.Font.GothamBold,
-			TextSize = 12,
+			Font = Enum.Font.GothamMedium,
+			TextSize = 10,
 			TextColor3 = COL.sub,
-			Text = titleText,
+			Text = string.upper(titleText),
 			TextXAlignment = Enum.TextXAlignment.Left,
 		}, cardF)
 		return cardF, head
@@ -14526,12 +14567,13 @@ do
 				TextSize = 12,
 				TextColor3 = COL.text,
 				Text = d[1],
-				AutoButtonColor = true,
+				AutoButtonColor = false,
 				BorderSizePixel = 0,
 				LayoutOrder = i,
 			}, inner)
-			round(b, 6)
+			round(b, 5)
 			make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.5 }, b)
+			H.animate(b)
 			connect(b.MouseButton1Click, function()
 				click()
 				onPick(d)
@@ -14750,7 +14792,7 @@ do
 			sc.Parent = staffPanel
 			local base = H.scales and H.scales["XyroStaffPanel"] or 1
 			sc.Scale = base * 0.8
-			local info = TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+			local info = TweenInfo.new(0.18, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 			TweenService:Create(sc, info, { Scale = base }):Play()
 		end
 		return staffPanel.Visible
