@@ -7969,17 +7969,11 @@ local function ntRuleFor(plr)
 	return nil
 end
 
--- rule lookup with the self-guarantee: YOU always get a tag on execute,
--- even if no rule in nametags.json matches your name
+-- rule lookup. Tags come ONLY from the published nametags.json rules -
+-- no built-in fallback tag for yourself (it used to auto-tag you with your
+-- display name when no rule matched, ignoring the website config)
 local function ntRuleForPlayer(plr)
-	local rule = ntRuleFor(plr)
-	if plr == player and rule == nil then
-		rule = {
-			label = (plr.DisplayName ~= "" and plr.DisplayName or plr.Name),
-			color = "#6C80FF",
-		}
-	end
-	return rule
+	return ntRuleFor(plr)
 end
 
 local function ntHideAll()
@@ -9564,16 +9558,26 @@ connect(RunService.RenderStepped, function(dt)
 					-- the full pill expands again until the mouse moves off it
 					-- (screen-space check: a raycast would false-positive on sky).
 					-- Includes self: zoom out and your pill collapses to the icon too
-					local wantCollapsed = doCol and ntOpts.collapseDistance > 0 and o.collapsed ~= nil and dist > ntOpts.collapseDistance
+					local wantCollapsed = ntOpts.collapseDistance > 0 and o.collapsed ~= nil and dist > ntOpts.collapseDistance
 					local hoverOpen = false
-					-- hover projection runs ONLY on collapse ticks (10x/s), never
-					-- every frame, and calls the API directly instead of through
-					-- a per-call closure + pcall allocation
-					if wantCollapsed and o.collapsedState and ntMouse then
+					-- HOVER FIX: the check used to run only while COLLAPSED, so the
+					-- tick after it expanded the guard skipped the check, the pill
+					-- re-collapsed, the next tick expanded it again -> rapid flicker
+					-- whenever the mouse sat near the tag. Now it runs while
+					-- wantCollapsed regardless of the current state, with a 48px
+					-- open radius and a 64px close radius (hysteresis band: a mouse
+					-- parked between the two holds the current state instead of
+					-- flip-flopping at collapse-tick rate).
+					if wantCollapsed and ntMouse then
 						local okPt, sp = pcall(cam.WorldToViewportPoint, cam, head.Position)
 						if okPt and typeof(sp) == "Vector3" and sp.Z > 0 then -- was type(sp)=="table": never true for a Vector3, hover-expand never fired
 						local dx, dy = ntMouse.X - sp.X, ntMouse.Y - sp.Y
-						hoverOpen = dx * dx + dy * dy <= 2304 -- 48px radius squared
+						local d2 = dx * dx + dy * dy
+						if o.collapsedState then
+							hoverOpen = d2 <= 2304 -- 48px radius squared: open
+						else
+							hoverOpen = d2 <= 4096 -- 64px: stay open until clearly away
+						end
 						end
 					end
 					if doCol and o.collapsed then
