@@ -1053,19 +1053,22 @@ if tostring(H.FIREBASE_URL or "") ~= "" then
 		return ok
 	end
 
-	-- one-time boot prune: drop entries older than 10 minutes so the nodes
-	-- never grow unbounded (readers also ignore anything older than the
-	-- window, so a prune failure is harmless)
-	task.spawn(function()
-		-- cmd: append-style keys "<sec>-<rand>" -> key carries the age
+	-- drop entries older than `olderThan` seconds so the nodes never grow
+	-- unbounded (readers ignore anything past their own window anyway, so a
+	-- prune failure is harmless). Called once at boot, then periodically from
+	-- the staff poll loop - the old version only ran at boot, so the queue kept
+	-- every command ever sent for the life of the session.
+	H.fbQueuePrune = function(olderThan)
+		olderThan = tonumber(olderThan) or 600
+		local now = os.time()
+		-- cmd: append-style keys "<sec>-<rand>" -> the key carries the age
 		local body = fbHttpGet(fbBase .. "/cmd.json" .. fbAuth)
 		if body and body ~= "null" and #body > 2 then
 			local okD, data = pcall(H.HS.JSONDecode, H.HS, body)
 			if okD and type(data) == "table" then
-				local now = os.time()
 				for key in pairs(data) do
 					local sec = tonumber(key:match("^(%d+)%-"))
-					if sec and (now - sec) > 600 then
+					if sec and (now - sec) > olderThan then
 						fbReq("DELETE", fbBase .. "/cmd/" .. key .. ".json" .. fbAuth)
 					end
 				end
@@ -1076,15 +1079,18 @@ if tostring(H.FIREBASE_URL or "") ~= "" then
 		if hb and hb ~= "null" and #hb > 2 then
 			local okD2, data2 = pcall(H.HS.JSONDecode, H.HS, hb)
 			if okD2 and type(data2) == "table" then
-				local now = os.time()
 				for key, value in pairs(data2) do
 					local sec = tonumber(value)
-					if sec and (now - sec) > 600 then
+					if sec and (now - sec) > olderThan then
 						fbReq("DELETE", fbBase .. "/here/" .. key .. ".json" .. fbAuth)
 					end
 				end
 			end
 		end
+	end
+
+	task.spawn(function()
+		pcall(H.fbQueuePrune, 600)
 	end)
 end
 local isAdmin = ADMIN_IDS[player.UserId] == true or ADMIN_NAMES[tostring(player.Name):lower()] == true
@@ -9935,8 +9941,17 @@ local function ntBeatsFromFirebase()
 	local fbBase = tostring(H.FIREBASE_URL):gsub("/+$", "")
 	local fbAuth = H.FIREBASE_AUTH ~= "" and ("?auth=" .. H.FIREBASE_AUTH) or ""
 	local body = ntHttpGet(fbBase .. "/here.json" .. fbAuth)
-	if not (body and body ~= "" and body ~= "null") then
-		return nil
+	if body == nil or body == "" then
+		return nil -- read genuinely failed: caller falls back to ntfy
+	end
+	if body == "null" then
+		-- The database is reachable and simply has no beats yet. This used to
+		-- return nil ("Firebase unusable"), which dropped every client onto the
+		-- ntfy fallback - and because the Firebase beat was only written in the
+		-- success branch of the caller, the node could never become non-empty.
+		-- Presence was stuck listing yourself forever, so the staff panel's user
+		-- list had nobody to target and most of the panel did nothing.
+		return {}
 	end
 	local okD, data = pcall(H.HttpService.JSONDecode, H.HttpService, body)
 	if not (okD and type(data) == "table") then
@@ -9958,12 +9973,18 @@ local function ntBeat(manual)
 	if not ntMember("HttpGet") then
 		return manual and "no HttpGet on this executor" or nil
 	end
+	-- announce on Firebase whenever it is configured, independent of the read
+	-- below: the write used to live inside the read-succeeded branch, so an
+	-- empty node could never be seeded and presence never left the dead ntfy
+	-- path
+	if H.fbStatePut and H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "" then
+		H.fbStatePut("here", player.Name, os.time())
+	end
 	local fbSeen = ntBeatsFromFirebase()
 	if fbSeen then
 		-- Firebase presence: no publish quotas (ntfy's daily quota was
 		-- getting exhausted and silently dropping beats). One fixed key
 		-- per player keeps the node tiny.
-		H.fbStatePut("here", player.Name, os.time())
 		fbSeen[ntNormalize(player.Name)] = true
 		ntOnline = fbSeen
 	else
@@ -13939,6 +13960,16 @@ do
 	local PANEL_TITLE = "Staff"
 	local CMD_TOPIC = "xyro-cmd-k8q3v1m"
 
+	-- transport telemetry, shown in the panel footer. "Commands don't work" was
+	-- unfalsifiable before this: staff/ntfy quota exhaustion, an unpublished
+	-- Firebase rule and a url typo all looked like a silent no-op.
+	local transport = {
+		mode = (H.fbQueuePost and H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "") and "firebase" or "ntfy",
+		lastPollOk = false,
+		lastPoll = 0,
+		lastRecv = 0,
+	}
+
 	-- issuer must be a CURRENT Firebase admin for receivers to accept commands
 	local function staffIsAdmin(userId, userName)
 		if H.ADMIN_IDS[userId] == true then
@@ -14053,10 +14084,21 @@ do
 	end
 
 	local function fxReset()
-		local hum = getHum()
-		if hum then
-			hum.Health = 0
+		local hum, chr = getHum(), getChar()
+		if not hum then
+			return
 		end
+		-- Health is server-authoritative: the plain assignment is often ignored
+		-- (which is why "reset" looked dead). Set it, then fall back to breaking
+		-- the joints if the humanoid is still alive a moment later.
+		hum.Health = 0
+		task.delay(0.35, function()
+			if hum.Parent and chr and chr.Parent and hum.Health > 0 then
+				pcall(function()
+					chr:BreakJoints()
+				end)
+			end
+		end)
 	end
 
 	local function fxKick()
@@ -14103,6 +14145,9 @@ do
 	local SELF_SAFE = {
 		fw = true, spn = true, frz = true, flg = true, sit = true,
 		jmp = true, brg = true, vod = true, rst = true, bld = true, kck = true,
+		-- the inverse toggles too: a broadcast must not spin, freeze, blind or
+		-- unfreeze the staff member who pressed the button
+		usp = true, thw = true, ubl = true,
 	}
 	-- destructive actions a staff member's client never applies to itself
 	-- (matches Scythe: staff can't be voided/reset/kicked by other staff)
@@ -14183,6 +14228,7 @@ do
 		local cmd, targets = rest:match("^([%a]+):?(.*)$")
 		if cmd and cmd ~= "" then
 			if targets == nil or targets == "" or targetsMe(targets) then
+				transport.lastRecv = os.time()
 				applyCmd(cmd, tonumber(issuerId), issuerName)
 			end
 		end
@@ -14191,14 +14237,24 @@ do
 	-- Firebase cmd queue (no daily quotas - ntfy's anonymous publish quota
 	-- was getting exhausted and silently dropping every command)
 	local seenCmd = {} -- dedupe: poll windows re-deliver messages; each is applied once
+	-- ignore anything issued before this client loaded the script: with a wider
+	-- freshness window a fresh execute must not replay a minute of old commands
+	-- (a kick from before you joined should not land on you)
+	local startedAt = os.time() - 5
 	local fbReadCmd = nil
 	if H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "" then
 		local fbBase = tostring(H.FIREBASE_URL):gsub("/+$", "")
 		local fbAuth = H.FIREBASE_AUTH ~= "" and ("?auth=" .. H.FIREBASE_AUTH) or ""
 		fbReadCmd = function()
 			local body = ntHttpGet(fbBase .. "/cmd.json" .. fbAuth)
-			if not (body and body ~= "" and body ~= "null") then
+			if body == nil or body == "" then
+				transport.lastPollOk = false -- read failed: footer will say so
 				return
+			end
+			transport.lastPollOk = true
+			transport.lastPoll = os.time()
+			if body == "null" then
+				return -- reachable, queue simply empty
 			end
 			local okD, data = pcall(H.HttpService.JSONDecode, H.HttpService, body)
 			if not (okD and type(data) == "table") then
@@ -14207,7 +14263,10 @@ do
 			local now = os.time()
 			for key, value in pairs(data) do
 				local sec = tonumber(key:match("^(%d+)-"))
-				if type(value) == "string" and sec and (now - sec) <= 60 and not seenCmd[key] then
+				-- 90s window (was 60): a receiver that polls on a 30s cadence could
+				-- miss a command entirely if one poll was slow, which is exactly
+				-- how panel actions silently vanished
+				if type(value) == "string" and sec and (now - sec) <= 90 and sec >= startedAt and not seenCmd[key] then
 					seenCmd[key] = true
 					handleWire(value)
 				end
@@ -14247,11 +14306,19 @@ do
 		end
 	end
 
-	-- everyone listens (receivers must hear commands); staff poll faster
+	-- everyone listens, and everyone polls fast: Firebase reads are free, and
+	-- the old 30s non-staff cadence could miss the freshness window outright
+	-- (a command sent just after a poll had to survive 30s of silence). Staff
+	-- stay slightly quicker so the panel feels instant on your own client.
 	task.spawn(function()
+		local ticks = 0
 		while true do
 			pcall(staffPoll)
-			task.wait(amStaff() and 2 or 30)
+			ticks += 1
+			if H.fbQueuePrune and ticks % 40 == 0 then
+				task.spawn(pcall, H.fbQueuePrune, 300)
+			end
+			task.wait(amStaff() and 2 or 5)
 		end
 	end)
 
@@ -14497,10 +14564,26 @@ do
 				end
 			end
 		end
+		-- how many other clients could actually receive this? A command that
+		-- "does nothing" is usually a command with nobody running Xyro to run the
+		-- effect, so say that out loud instead of a bare "sent".
+		local reach = 0
+		local ntOnline = H.Nametags and H.Nametags.online() or {}
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= player and ntOnline[tostring(plr.Name):lower()] ~= nil then
+				reach += 1
+			end
+		end
 		if H.notify then
+			local reachText
+			if reach == 0 then
+				reachText = " - no other script user online, nothing will react"
+			else
+				reachText = " - " .. reach .. " script user" .. (reach == 1 and "" or "s") .. " online"
+			end
 			H.notify({
 				title = PANEL_TITLE,
-				text = ok and (label .. " sent") or tostring(msg),
+				text = ok and (label .. " sent" .. reachText) or tostring(msg),
 				kind = ok and "success" or "error",
 			})
 		end
@@ -14644,12 +14727,36 @@ do
 		AutoButtonColor = false,
 		BorderSizePixel = 0,
 	}, usersCard)
+	-- who the panel can target. Presence-verified script users sort to the top,
+	-- but a real player is never hidden just because their beat hasn't landed
+	-- yet: this list used to be presence-only, so whenever presence was cold
+	-- (your own name and nothing else) the Selected-users card had nobody to
+	-- target and 14 of the panel's buttons did nothing but complain.
+	local function scriptUsers()
+		local ntOnline = H.Nametags and H.Nametags.online() or {}
+		local list = {}
+		for _, plr in ipairs(Players:GetPlayers()) do
+			list[#list + 1] = {
+				plr = plr,
+				verified = plr == player or ntOnline[tostring(plr.Name):lower()] ~= nil,
+			}
+		end
+		table.sort(list, function(a, b)
+			if a.verified ~= b.verified then
+				return a.verified
+			end
+			return a.plr.Name:lower() < b.plr.Name:lower()
+		end)
+		return list
+	end
+
+	local refreshPlayerList -- forward declaration (the handlers below call it)
+
 	connect(selAllBtn.MouseButton1Click, function()
 		click()
-		local ntOnline = H.Nametags and H.Nametags.online() or {}
-		for _, plr in ipairs(Players:GetPlayers()) do
-			if plr ~= player and ntOnline[tostring(plr.Name):lower()] ~= nil then
-				selSet[plr.UserId] = true
+		for _, entry in ipairs(scriptUsers()) do
+			if entry.plr ~= player then
+				selSet[entry.plr.UserId] = true
 			end
 		end
 		refreshPlayerList()
@@ -14674,17 +14781,9 @@ do
 				ch:Destroy()
 			end
 		end
-		local ntOnline = H.Nametags and H.Nametags.online() or {}
-		local guys = {}
-		for _, plr in ipairs(Players:GetPlayers()) do
-			if ntOnline[tostring(plr.Name):lower()] ~= nil then
-				guys[#guys + 1] = plr
-			end
-		end
-		table.sort(guys, function(p, q)
-			return p.Name:lower() < q.Name:lower()
-		end)
-		for i, plr in ipairs(guys) do
+		local guys = scriptUsers()
+		for i, entry in ipairs(guys) do
+			local plr, isScript = entry.plr, entry.verified
 			local isMe = plr == player
 			local isSel = selSet[plr.UserId] == true
 			local rowF = make("Frame", {
@@ -14705,8 +14804,10 @@ do
 				BackgroundTransparency = 1,
 				Font = Enum.Font.Gotham,
 				TextSize = 12,
-				TextColor3 = isMe and COL.sub or COL.text,
-				Text = "  " .. plr.Name .. (isMe and "  (you)" or ""),
+				-- a dot marks a presence-verified script user; the rest are still
+				-- listed so you can target them by name the moment they run Xyro
+				TextColor3 = isScript and COL.text or COL.sub,
+				Text = "  " .. (isScript and "• " or "") .. plr.Name .. (isMe and "  (you)" or ""),
 				TextXAlignment = Enum.TextXAlignment.Left,
 				TextTruncate = Enum.TextTruncate.AtEnd,
 				AutoButtonColor = not isMe,
@@ -14765,18 +14866,31 @@ do
 				Font = Enum.Font.Gotham,
 				TextSize = 12,
 				TextColor3 = COL.sub,
-				Text = "no script users online",
+				Text = "no other players in this server",
 				LayoutOrder = 9999,
 			}, rowsHolder)
 		end
 	end
 	refreshPlayerList()
 
-	-- refresh the player list as presence changes
+	-- refresh the player list as presence changes, and keep transport health in
+	-- the footer - a dead pipe should be visible, not a silent no-op
 	task.spawn(function()
 		while staffPanel.Parent do
 			task.wait(5)
 			pcall(refreshPlayerList)
+			pcall(function()
+				local msg
+				if transport.mode == "firebase" then
+					msg = transport.lastPollOk and "firebase queue ok" or "firebase unreachable (url/rules?)"
+				else
+					msg = "no firebase - ntfy fallback (quota limited)"
+				end
+				if transport.lastRecv > 0 then
+					msg = msg .. " - last cmd " .. (os.time() - transport.lastRecv) .. "s ago"
+				end
+				statusLbl.Text = msg
+			end)
 		end
 	end)
 
