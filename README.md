@@ -72,7 +72,7 @@ size) · `userSize` · `font` (GothamBlack, Bangers, Arcade, ...) · `textColor`
 `userColor` · `badge` (the **real Roblox verified seal** — blue scalloped disc with a
 white check — after the name; every rule with `badge: true` gets it, staff or not)
 · `rank` (recolor the seal for this rule: `founder` / `hr` / `support` /
-`trial` / `purple`) · `height` · `imageSize`. First matching rule wins —
+`trial` / `purple` / `partner`) · `height` · `imageSize`. First matching rule wins —
 put exact names above the `*` catch-all.
 
 **Options:** `size` · `userSize` · `height` · `imageSize` · `maxDistance` (studs, 0 =

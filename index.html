@@ -551,6 +551,7 @@
 							<option value="support">support (green)</option>
 							<option value="trial">trial (teal)</option>
 							<option value="purple">purple (custom)</option>
+							<option value="partner">partner (dark blue)</option>
 						</select>
 						<label><input id="fType" type="checkbox"> typewriter name reveal</label>
 					</div>
@@ -948,12 +949,15 @@ function renderEditorPreview() {
 		ub.style.border = $("optUBoxStroke").value.trim() ? "1px solid " + $("optUBoxStroke").value.trim() : "none";
 	}
 	/* match in-game: the real verified seal for every badge:true rule.
-	   rank-tinted colors still preview via the tint filter (founder silver /
-	   hr white / support green / trial teal / purple) */
-	const RANK_TINTS = { founder: "hue-rotate(0deg) saturate(0.1) brightness(1.35)", hr: "saturate(0) brightness(4)", support: "hue-rotate(90deg) saturate(1.6)", trial: "hue-rotate(150deg) saturate(1.4)", purple: "hue-rotate(220deg) saturate(1.6)" };
+	   rank rules swap in the repo's actual pre-tinted seal PNGs so preview
+	   colors always match the game exactly (hue-rotate filters skewed trial
+	   to red and purple to yellow) */
+	const RANK_SEALS = { founder: "seal_founder.png", hr: "seal_hr.png", support: "seal_support.png", trial: "seal_trial.png", purple: "seal_purple.png", partner: "seal_partner.png" };
 	const check = $("edBadgeCheck");
 	check.style.display = t.badge ? "" : "none";
-	check.style.filter = RANK_TINTS[t.rank] || "none";
+	const sealFile = RANK_SEALS[t.rank];
+	if (t.badge && sealFile) check.src = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/" + sealFile;
+	else check.src = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/verified_seal_blue.png";
 	const img = $("edImg");
 	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
 		img.src = t.image; img.classList.remove("hidden");

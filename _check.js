@@ -40,13 +40,22 @@ if (!js.includes('wireFilePicker("edIconFile"') || !js.includes('wireFilePicker(
 }
 console.log("file pickers wired: OK");
 
-// badge preview must be the real verified seal image (not a plain text check)
+// badge preview must use the real pre-tinted seal PNGs (not hue-rotate
+// filters - those skewed trial to red and purple to yellow)
 const sealImg = html.includes('id="edBadgeCheck" alt="" class="vseal"');
-if (!sealImg || !js.includes("RANK_TINTS") || !html.includes("verified_seal_blue.png")) {
+if (!sealImg || !js.includes("RANK_SEALS") || !html.includes("verified_seal_blue.png")) {
 	console.log("badge preview: not using the verified seal image");
 	process.exit(1);
 }
-console.log("badge preview uses verified seal: OK");
+if (js.includes("RANK_TINTS") || js.includes("hue-rotate(")) {
+	console.log("badge preview: hue-rotate filters are back (colors skew)");
+	process.exit(1);
+}
+if (!html.includes('value="partner"') || !html.includes("seal_partner.png")) {
+	console.log("partner rank missing from editor");
+	process.exit(1);
+}
+console.log("badge preview uses real seal PNGs + partner rank: OK");
 
 // bgImage must survive edSave and render in preview
 if (!js.includes("clean.bgImage") || !js.includes("backgroundImage")) {

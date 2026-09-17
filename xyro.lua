@@ -7431,6 +7431,7 @@ end
 ----------------------------------------------------------------------------
 -- Staff RANKS - they set the verified badge color on nametags:
 --   founder -> silver | hr -> white | support -> green | trial -> teal
+--   purple -> custom purple | partner -> custom dark blue (partners)
 -- Precedence: rule.rank (nametags.json / tag editor) beats the Firebase
 -- "ranks" node (staff.json), which beats NT_STAFF_RANKS here; staff without
 -- any explicit rank default to hr (white). Non-staff players with an
@@ -7443,6 +7444,7 @@ local NT_RANK_COLORS = {
 	support = Color3.fromRGB(66, 216, 120), -- green
 	trial = Color3.fromRGB(70, 205, 200), -- teal
 	purple = Color3.fromRGB(176, 102, 255), -- custom purple
+	partner = Color3.fromRGB(36, 82, 220), -- custom dark blue (partners)
 }
 local NT_RANK_ALIASES = {
 	founder = { founder = true, owner = true, dev = true, developer = true },
@@ -7450,6 +7452,7 @@ local NT_RANK_ALIASES = {
 	support = { support = true, helper = true, supports = true },
 	trial = { trial = true, trials = true, trialstaff = true, trialsupport = true, trialmod = true, trialhelper = true, trialadmin = true },
 	purple = { purple = true, custom = true, violet = true },
+	partner = { partner = true, partners = true, darkblue = true, darkbluecustom = true, navy = true },
 }
 local NT_STAFF_RANKS = {
 	-- [123456789] = "founder", -- by userid...
@@ -8920,7 +8923,7 @@ local function ntBuild(plr, rule)
 		-- EVERYONE with badge:true gets the REAL Roblox verified seal artwork
 		-- (blue scalloped disc + white check) from the repo. Staff with a rank
 		-- get it recolored to their tier (founder silver / hr white / support
-		-- green / trial teal / purple) via the tinted builds.
+		-- green / trial teal / purple / partner dark blue) via the tinted builds.
 		b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
 		local img = Instance.new("ImageLabel")
 		img.Name = "Seal"

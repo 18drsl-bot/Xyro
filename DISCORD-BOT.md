@@ -92,7 +92,8 @@ commands.
 
 Just set `"badge": true` on a rule — players get the **real Roblox verified
 seal** (blue scalloped checkmark). Optional `"rank"` recolors it: `founder`
-(silver) / `hr` (white) / `support` (green) / `trial` (teal) / `purple`.
+(silver) / `hr` (white) / `support` (green) / `trial` (teal) / `purple` /
+`partner` (dark blue).
 
 ## Testing
 
