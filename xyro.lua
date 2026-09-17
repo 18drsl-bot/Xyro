@@ -109,16 +109,17 @@ H.setBind = function(action, keyName)
 end
 
 local COL = {
-	-- periwinkle shell + dark content card (HaxterHub-style layered UI)
-	bg = Color3.fromRGB(87, 89, 138),
-	element = Color3.fromRGB(80, 82, 128),
-	stroke = Color3.fromRGB(64, 66, 106),
-	accent = Color3.fromRGB(122, 124, 184),
+	-- carbon shell + near-black content card, Xyro-brand periwinkle accent
+	-- (same #6C80FF as the nametag pill borders / tag editor)
+	bg = Color3.fromRGB(20, 22, 31), -- #14161F window shell
+	element = Color3.fromRGB(31, 34, 47), -- #1F222F rows / pills
+	stroke = Color3.fromRGB(44, 48, 66), -- #2C3042 hairlines & outlines
+	accent = Color3.fromRGB(108, 128, 255), -- #6C80FF Xyro brand
 	on = Color3.fromRGB(235, 76, 76),
-	text = Color3.fromRGB(255, 255, 255),
-	sub = Color3.fromRGB(219, 222, 240),
-	off = Color3.fromRGB(106, 108, 156),
-	contentBg = Color3.fromRGB(30, 30, 52), -- always re-derived from bg in applyTheme
+	text = Color3.fromRGB(240, 242, 250), -- #F0F2FA
+	sub = Color3.fromRGB(148, 155, 178), -- #949BB2 secondary text
+	off = Color3.fromRGB(52, 56, 74), -- #34384A disabled / hover fill
+	contentBg = Color3.fromRGB(11, 12, 17), -- always re-derived from bg in applyTheme
 }
 
 local ESPCOL = {
@@ -312,9 +313,10 @@ local main = make("Frame", {
 round(main, 14)
 make("UIStroke", { Color = COL.stroke, Thickness = 1 }, main)
 
--- soft vertical gradient over the shell (lighter top, deeper bottom)
+-- faint brand glow down the shell (barely-there vertical depth; the dark
+-- theme already carries contrast, this just stops it feeling flat)
 make("UIGradient", {
-	Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(172, 172, 205)),
+	Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(206, 210, 228)),
 	Rotation = 90,
 }, main)
 
@@ -329,13 +331,18 @@ local contentCard = make("Frame", {
 }, main)
 round(contentCard, 10)
 contentCard.ZIndex = 0
--- its color tracks the shell via the theme system
+-- its color tracks the shell via the theme system, with a hairline outline
+-- so the card reads as a raised surface against the shell
+local contentStroke = make("UIStroke", { Color = COL.stroke, Thickness = 1 }, contentCard)
 themeRefreshers[#themeRefreshers + 1] = function()
 	if contentCard then
 		contentCard.BackgroundColor3 = COL.contentBg
 	end
+	if contentStroke then
+		contentStroke.Color = COL.stroke
+	end
 end
-contentCard.BackgroundColor3 = Color3.fromRGB(30, 30, 52)
+contentCard.BackgroundColor3 = COL.contentBg
 
 H.scales = {}
 local liveScales = {}
@@ -575,7 +582,7 @@ end)
 local keyChip = make("TextButton", {
 	Size = UDim2.new(0, 28, 0, 20),
 	Position = UDim2.new(0, 158, 0, 10), -- under the title, right edge of the sidebar column
-	BackgroundColor3 = COL.contentBg, -- themed dark chip (default gray without this)
+	BackgroundColor3 = COL.element, -- raised keycap chip on the dark shell
 	Font = Enum.Font.Gotham,
 	TextSize = 11,
 	TextColor3 = COL.sub,
@@ -585,6 +592,7 @@ local keyChip = make("TextButton", {
 }, titleBar)
 
 round(keyChip, 6)
+make("UIStroke", { Color = COL.off, Thickness = 1, Transparency = 0.25 }, keyChip)
 
 H.keyRefreshers[#H.keyRefreshers + 1] = function()
 	if not waitingForToggleKey then
@@ -641,14 +649,14 @@ local tabStrip = make("ScrollingFrame", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	ScrollBarThickness = 2,
-	ScrollBarImageColor3 = COL.sub,
+	ScrollBarImageColor3 = COL.off,
 	ScrollingDirection = Enum.ScrollingDirection.Y,
 	CanvasSize = UDim2.new(0, 0, 0, 0),
 }, main)
 
 local tabLayout = make("UIListLayout", {
 	FillDirection = Enum.FillDirection.Vertical,
-	Padding = UDim.new(0, 6),
+	Padding = UDim.new(0, 4),
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, tabStrip)
 make("UIPadding", { PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 4), PaddingTop = UDim.new(0, 2) }, tabStrip)
@@ -672,6 +680,9 @@ local function makeTab(name, onClick, display)
 	make("UIPadding", { PaddingLeft = UDim.new(0, 12) }, btn)
 	round(btn, 9)
 	btn:SetAttribute("NoAnim", true)
+	-- quiet hairline under idle pills so the column reads as structured
+	-- rows instead of floating bubbles (active tab keeps its accent fill)
+	make("UIStroke", { Color = COL.off, Thickness = 1, Transparency = 0.35 }, btn)
 
 	-- selection bar: pinned to the button's RIGHT edge (UIPadding shifts children too,
 	-- so an inset-positioned bar was landing on top of the label). Grows upward when active.
@@ -696,7 +707,7 @@ local function makeTab(name, onClick, display)
 
 	connect(btn.MouseEnter, function()
 		if currentTab ~= name then
-			tween(btn, { BackgroundColor3 = COL.stroke, TextColor3 = COL.text })
+			tween(btn, { BackgroundColor3 = COL.off, TextColor3 = COL.text })
 			tween(underline, { Size = UDim2.new(0, 4, 0, 10) })
 		end
 	end)
@@ -3915,8 +3926,17 @@ end
 
 local function applyTheme()
 	-- the dark content card always follows the shell color (heavily
-	-- darkened), so custom themes and presets keep the layered look
-	COL.contentBg = Color3.new(COL.bg.R * 0.34, COL.bg.G * 0.34, COL.bg.B * 0.34)
+	-- darkened), so custom themes and presets keep the layered look.
+	-- The multiplier is tuned per palette brightness: on dark shells a
+	-- flat 0.34 multiply makes the card indistinguishable from the shell,
+	-- so dark palettes DROP to near-black instead (card below shell =
+	-- sunken surface) while light palettes keep the classic dark card.
+	local lum = COL.bg.R * 0.2126 + COL.bg.G * 0.7152 + COL.bg.B * 0.0722
+	if lum < 0.22 then
+		COL.contentBg = Color3.new(COL.bg.R * 0.55, COL.bg.G * 0.55, COL.bg.B * 0.55)
+	else
+		COL.contentBg = Color3.new(COL.bg.R * 0.34, COL.bg.G * 0.34, COL.bg.B * 0.34)
+	end
 	for _, ref in ipairs(themedRefs) do
 		local c = COL[ref.role]
 		if c and ref.obj then
@@ -3939,7 +3959,7 @@ local function gatherConfig()
 		espColors[k] = toHex(v)
 	end
 	return {
-		paletteVer = 2, -- 2 = periwinkle palette; configs saved by older builds are ignored on load
+		paletteVer = 3, -- 3 = carbon palette; configs saved by older builds are ignored on load
 		colors = colors,
 		espColors = espColors,
 		cframeSpeed = _G.CFrameSpeed,
@@ -3968,7 +3988,7 @@ local function applyConfig(cfg)
 	if type(cfg) ~= "table" then
 		return
 	end
-	if cfg.paletteVer == 2 and type(cfg.colors) == "table" then
+	if cfg.paletteVer == 3 and type(cfg.colors) == "table" then
 		for k, hex in pairs(cfg.colors) do
 			if COL[k] ~= nil then
 				local c = fromHex(hex)
@@ -4562,8 +4582,8 @@ end
 local PRESETS = {
 	{
 		name = "Default",
-		colors = { bg = "#57598A", element = "#505280", stroke = "#40426A", accent = "#7A7CB8",
-			on = "#EB4C4C", text = "#FFFFFF", sub = "#DBDEF0", off = "#6A6C9C" },
+		colors = { bg = "#14161F", element = "#1F222F", stroke = "#2C3042", accent = "#6C80FF",
+			on = "#EB4C4C", text = "#F0F2FA", sub = "#949BB2", off = "#34384A" },
 		espColors = { box = "#E64444", name = "#FFFFFF", skeleton = "#E64444" },
 	},
 	{
