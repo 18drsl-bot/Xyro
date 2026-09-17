@@ -7670,8 +7670,10 @@ local ntEnabled = false
 	local ntMouse = player and player.GetMouse and player:GetMouse() or nil -- hover-expand reads this in the render loop
 local ntFetchAcc = 0
 local NT_FETCH_EVERY = 15 -- tag rules re-check; editor-tunable via options.refreshSeconds (10-300)
+local NT_API_EVERY_N = 6 -- every Nth periodic fetch tries the GitHub API first (never CDN-cached); 6 x 15s = 90s ceiling on purge-throttled staleness while staying well under the 60 req/hr unauthenticated API budget
+local ntFetchN = 0
 local NT_TOPIC = "xyro-presence-k2m9x7q" -- anonymous presence DB: every script user heartbeats here
-local NT_BEAT_EVERY = 45
+local NT_BEAT_EVERY = 25 -- presence heartbeat; used to be 45s, which made newly-joined players wait up to ~75s for their tag
 local ntBeatAcc = 0
 local NT_BEAT_WINDOW = 75 -- beats every 45s, so a stopped script drops out within ~75s (no ghost tags)
 local ntOnline = {} -- lowercase username -> true for everyone seen in the last few minutes
@@ -7868,12 +7870,26 @@ end
 
 local function ntFetch(manual)
 	-- priority: GitHub API on manual fetches (never stale, always the
-	-- published truth) -> jsDelivr edge for the periodic background fetch
+	-- published truth) -> jsDelivr edge for the periodic background fetch.
+	-- Periodic fetches also try the API every NT_API_EVERY_Nth round: the
+	-- ?t= buster does NOT bust jsDelivr's edge (only the editor's purge
+	-- does, and purges get rate-throttled), so without this a throttled
+	-- purge meant stale rules until the CDN's own expiry.
 	local text = nil
 	if manual then
 		text = ntFromAPI(ntHttpGet(NT_API_URL) or "")
 		if text then
 			ntLastSource = "api"
+		end
+	end
+	if not text then
+		ntFetchN += 1
+		local apiRound = not manual and NT_API_EVERY_N > 0 and (ntFetchN % NT_API_EVERY_N == 0)
+		if apiRound then
+			text = ntFromAPI(ntHttpGet(NT_API_URL) or "")
+			if text then
+				ntLastSource = "api"
+			end
 		end
 	end
 	if not text then
