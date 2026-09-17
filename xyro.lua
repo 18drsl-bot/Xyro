@@ -1128,6 +1128,218 @@ H.bindFocusGlow = function(box)
 	return box
 end
 
+-- Linoria-style section header: small-caps label with an accent tick
+H.sectionHeader = function(parent, y, text)
+	local tick = make("Frame", {
+		Size = UDim2.new(0, 3, 0, 12),
+		Position = UDim2.new(0, 0, 0, y + 4),
+		BackgroundColor3 = COL.accent,
+		BorderSizePixel = 0,
+	}, parent)
+	round(tick, 2)
+	make("TextLabel", {
+		Size = UDim2.new(1, -12, 0, 20),
+		Position = UDim2.new(0, 9, 0, y),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		TextSize = 11,
+		TextColor3 = COL.sub,
+		Text = string.upper(text),
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, parent)
+end
+
+-- Linoria-style slider: thin accent track, draggable knob, live value readout
+H.makeSlider = function(parent, y, minV, maxV, initial, format, onChanged)
+	minV, maxV = tonumber(minV) or 0, tonumber(maxV) or 100
+	local value = math.clamp(tonumber(initial) or minV, minV, maxV)
+	local track = make("TextButton", {
+		Size = UDim2.new(1, -56, 0, 6),
+		Position = UDim2.new(0, 0, 0, y + 14),
+		BackgroundColor3 = COL.contentBg,
+		Text = "",
+		AutoButtonColor = false,
+		BorderSizePixel = 0,
+	}, parent)
+	round(track, 3)
+	make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.4 }, track)
+	local fill = make("Frame", {
+		BackgroundColor3 = COL.accent,
+		BorderSizePixel = 0,
+	}, track)
+	round(fill, 3)
+	local knob = make("Frame", {
+		Size = UDim2.new(0, 10, 0, 10),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, track)
+	round(knob, 5)
+	local valLbl = make("TextLabel", {
+		Size = UDim2.new(0, 52, 0, 18),
+		Position = UDim2.new(1, -52, 0, y + 3),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextColor3 = COL.text,
+		TextXAlignment = Enum.TextXAlignment.Right,
+	}, parent)
+	local function render()
+		local a = (maxV > minV) and (value - minV) / (maxV - minV) or 0
+		fill.Size = UDim2.new(a, 0, 1, 0)
+		knob.Position = UDim2.new(a, 0, 0.5, 0)
+		valLbl.Text = format(value)
+	end
+	local dragging = false
+	local function apply(x)
+		local w = track.AbsoluteSize.X
+		if w <= 0 then
+			return
+		end
+		local a = math.clamp((x - track.AbsolutePosition.X) / w, 0, 1)
+		value = math.floor(minV + a * (maxV - minV) + 0.5)
+		render()
+		onChanged(value)
+	end
+	local function isDrag(i)
+		return i.UserInputType == Enum.UserInputType.MouseButton1
+			or i.UserInputType == Enum.UserInputType.Touch
+	end
+	local function begin(i)
+		dragging = true
+		apply(i.Position.X)
+	end
+	connect(track.InputBegan, function(i)
+		if isDrag(i) then begin(i) end
+	end)
+	connect(knob.InputBegan, function(i)
+		if isDrag(i) then begin(i) end
+	end)
+	connect(UIS.InputChanged, function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
+			or i.UserInputType == Enum.UserInputType.Touch) then
+			apply(i.Position.X)
+		end
+	end)
+	connect(UIS.InputEnded, function(i)
+		if isDrag(i) then dragging = false end
+	end)
+	render()
+	return function(v)
+		value = math.clamp(tonumber(v) or minV, minV, maxV)
+		render()
+	end
+end
+
+-- Linoria-style dropdown: closed pill with chevron, animated expanding list
+H.makeDropdown = function(parent, y, options, initial, onChanged)
+	local current = initial
+	local list, chev
+	local btn = make("TextButton", {
+		Size = UDim2.new(1, -56, 0, 26),
+		Position = UDim2.new(0, 0, 0, y),
+		BackgroundColor3 = COL.element,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextColor3 = COL.text,
+		Text = tostring(initial or "select..."),
+		TextXAlignment = Enum.TextXAlignment.Left,
+		AutoButtonColor = false,
+		BorderSizePixel = 0,
+	}, parent)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 8) }, btn)
+	round(btn, 6)
+	make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.4 }, btn)
+	chev = make("TextLabel", {
+		Size = UDim2.new(0, 20, 1, 0),
+		Position = UDim2.new(1, -24, 0, 0),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		TextSize = 10,
+		TextColor3 = COL.sub,
+		Text = "▼",
+		TextXAlignment = Enum.TextXAlignment.Center,
+	}, btn)
+	list = make("Frame", {
+		Size = UDim2.new(1, -56, 0, 0),
+		Position = UDim2.new(0, 0, 0, y + 28),
+		BackgroundColor3 = COL.element,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		Visible = false,
+		ZIndex = 15,
+	}, parent)
+	round(list, 6)
+	make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.4 }, list)
+	local layout = make("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+	make("UIPadding", {
+		PaddingTop = UDim.new(0, 3),
+		PaddingLeft = UDim.new(0, 3),
+		PaddingRight = UDim.new(0, 3),
+	}, list)
+	local open = false
+	local function rebuild()
+		for _, c in ipairs(list:GetChildren()) do
+			if c:IsA("TextButton") then
+				c:Destroy()
+			end
+		end
+		for i, opt in ipairs(options) do
+			local b = make("TextButton", {
+				Size = UDim2.new(1, -6, 0, 22),
+				BackgroundColor3 = COL.bg,
+				Font = Enum.Font.Gotham,
+				TextSize = 12,
+				TextColor3 = (opt == current) and COL.accent or COL.sub,
+				Text = tostring(opt),
+				TextXAlignment = Enum.TextXAlignment.Left,
+				AutoButtonColor = false,
+				BorderSizePixel = 0,
+				LayoutOrder = i,
+				ZIndex = 16,
+			}, list)
+			round(b, 4)
+			connect(b.MouseButton1Click, function()
+				click()
+				current = opt
+				btn.Text = tostring(opt)
+				onChanged(opt)
+				open = false
+				chev.Text = "▼"
+				tween(list, { Size = UDim2.new(1, -56, 0, 0) })
+				task.delay(0.16, function()
+					list.Visible = false
+				end)
+				rebuild()
+			end)
+		end
+		return layout.AbsoluteContentSize.Y + 6
+	end
+	connect(btn.MouseButton1Click, function()
+		click()
+		open = not open
+		if open then
+			local h = rebuild()
+			list.Visible = true
+			tween(list, { Size = UDim2.new(1, -56, 0, math.min(h, 144)) })
+			chev.Text = "▲"
+		else
+			tween(list, { Size = UDim2.new(1, -56, 0, 0) })
+			task.delay(0.16, function()
+				if not open then
+					list.Visible = false
+				end
+			end)
+			chev.Text = "▼"
+		end
+	end)
+	return function(v)
+		current = v
+		btn.Text = tostring(v or "select...")
+		rebuild()
+	end
+end
+
 do
 	local Games = { default = {}, tabs = {} }
 
@@ -1614,6 +1826,16 @@ local hrp = char:WaitForChild("HumanoidRootPart")
 
 local speedEnabled = false
 
+H.sectionHeader(speedPage, 96, "Quick set")
+H.makeSlider(speedPage, 118, 16, 500, 16, function(v)
+	return tostring(v)
+end, function(v)
+	_G.CFrameSpeed = v
+	if H.Speed and H.Speed.updateUI then
+		H.Speed.updateUI()
+	end
+end)
+
 local speedRow = row(speedPage, 0, "CFrame movement")
 H.keyRefreshers[#H.keyRefreshers + 1] = function()
 	speedRow.Text = "CFrame movement" .. H.keySuffix("cframe")
@@ -1700,6 +1922,14 @@ end
 local customGravity = normalGravity
 local gravEnabled = false
 local applyingGravity = false
+
+H.sectionHeader(gravPage, 212, "Quick set")
+H.makeSlider(gravPage, 234, 0, 500, 196, function(v)
+	return tostring(v)
+end, function(v)
+	customGravity = v
+	workspace.Gravity = v
+end)
 
 local gravRow = row(gravPage, 110, "Custom gravity")
 H.keyRefreshers[#H.keyRefreshers + 1] = function()
@@ -1798,6 +2028,7 @@ local espHealth = false
 local espSkeleton = false
 local espTracer = false
 local espChams = false
+local espMaxDistance = 0 -- 0 = unlimited; Linoria slider on the ESP tab sets this
 local drawingOk = (Drawing ~= nil)
 local espObjects = {}
 
@@ -1832,7 +2063,7 @@ local espHost = make("ScrollingFrame", {
 	BorderSizePixel = 0,
 	ScrollBarThickness = 3,
 	ScrollBarImageColor3 = COL.sub,
-	CanvasSize = UDim2.new(0, 0, 0, 168),
+	CanvasSize = UDim2.new(0, 0, 0, 252),
 }, espPage)
 
 row(espHost, 0, "Enabled")
@@ -1963,6 +2194,15 @@ espSetters.chams, espToggles.chams = makeSwitch(espHost, 144, espChams, function
 	end
 end)
 
+-- Linoria-style section header + detection-range slider
+H.sectionHeader(espHost, 168, "Detection")
+row(espHost, 190, "Max distance  (0 = unlimited)")
+H.makeSlider(espHost, 214, 0, 1000, 0, function(v)
+	return v == 0 and "OFF" or (v .. " studs")
+end, function(v)
+	espMaxDistance = v
+end)
+
 connect(RunService.RenderStepped, function()
 	if not espEnabled then
 		return
@@ -1974,11 +2214,13 @@ connect(RunService.RenderStepped, function()
 		local head = ch and ch:FindFirstChild("Head")
 		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
 		if rootPart and head and hum and hum.Health > 0 then
+			local inRange = espMaxDistance <= 0
+				or (camera.CFrame.Position - rootPart.Position).Magnitude <= espMaxDistance
 			local topPos = head.Position + Vector3.new(0, 0.5, 0)
 			local botPos = rootPart.Position - Vector3.new(0, 3, 0)
 			local top, onTop = camera:WorldToViewportPoint(topPos)
 			local bot = camera:WorldToViewportPoint(botPos)
-			if onTop then
+			if onTop and inRange then
 				local height = math.abs(bot.Y - top.Y)
 				local width = height * 0.5
 				local boxX = top.X - width / 2
@@ -7444,6 +7686,86 @@ local cmdBox = make("TextBox", {
 }, main)
 round(cmdBox, 6)
 H.bindFocusGlow(cmdBox)
+
+-- Linoria-style command history: focuses pops a dropdown of recent commands
+local cmdHistory = {}
+local cmdHistoryList = make("Frame", {
+	Size = UDim2.new(0, 190, 0, 0),
+	Position = UDim2.new(1, -342, 1, -36),
+	AnchorPoint = Vector2.new(0, 1), -- grows upward, above the command bar
+	BackgroundColor3 = COL.element,
+	BorderSizePixel = 0,
+	ClipsDescendants = true,
+	Visible = false,
+	ZIndex = 40,
+}, main)
+round(cmdHistoryList, 6)
+make("UIStroke", { Color = COL.stroke, Thickness = 1, Transparency = 0.3 }, cmdHistoryList)
+local cmdHistoryLayout = make("UIListLayout", {
+	Padding = UDim.new(0, 2),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, cmdHistoryList)
+make("UIPadding", {
+	PaddingTop = UDim.new(0, 3),
+	PaddingLeft = UDim.new(0, 3),
+	PaddingRight = UDim.new(0, 3),
+}, cmdHistoryList)
+
+local function hideCmdHistory()
+	tween(cmdHistoryList, { Size = UDim2.new(0, 190, 0, 0) })
+	task.delay(0.16, function()
+		cmdHistoryList.Visible = false
+	end)
+end
+
+connect(cmdBox.Focused, function()
+	if #cmdHistory == 0 then
+		return
+	end
+	for _, c in ipairs(cmdHistoryList:GetChildren()) do
+		if c:IsA("TextButton") then
+			c:Destroy()
+		end
+	end
+	for i, entry in ipairs(cmdHistory) do
+		local b = make("TextButton", {
+			Size = UDim2.new(1, -6, 0, 22),
+			BackgroundColor3 = COL.bg,
+			Font = Enum.Font.Gotham,
+			TextSize = 12,
+			TextColor3 = COL.sub,
+			Text = tostring(entry),
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			LayoutOrder = i,
+			ZIndex = 41,
+		}, cmdHistoryList)
+		round(b, 4)
+		connect(b.MouseButton1Click, function()
+			click()
+			cmdHistoryList.Visible = false
+			cmdHistoryList.Size = UDim2.new(0, 190, 0, 0)
+			pcall(hubRunCommand, entry)
+		end)
+	end
+	local h = math.min(cmdHistoryLayout.AbsoluteContentSize.Y + 6, 160)
+	cmdHistoryList.Visible = true
+	tween(cmdHistoryList, { Size = UDim2.new(0, 190, 0, h) })
+end)
+
+connect(cmdBox.FocusLost, function(enter)
+	-- delay so clicking a history row (which steals focus) still registers
+	task.delay(0.15, hideCmdHistory)
+	local input = cmdBox.Text
+	if enter and input ~= "" then
+		table.insert(cmdHistory, 1, input)
+		if #cmdHistory > 8 then
+			table.remove(cmdHistory)
+		end
+	end
+end)
 
 local IDLE = "command...  (type help)"
 
