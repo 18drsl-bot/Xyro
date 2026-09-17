@@ -8916,12 +8916,16 @@ local function ntBuild(plr, rule)
 		userText0 = rule.userText:sub(1, 1) == "@" and rule.userText or ("@" .. rule.userText)
 	end
 	-- tags GROW with their text: no artificial width caps. Truncation only
-	-- kicks in past the hard 400px billboard ceiling (very long labels)
+	-- kicks in past the 560px billboard ceiling (very long labels) - and at
+	-- the ceiling the name truncates AT the pill edge, so text can never
+	-- spill past the pill / its bgImage
 	local nameW = ntTextWidth(shownName, nameSize, font)
 	local userW = ntTextWidth(userText0, userSize, Enum.Font.Gotham)
 	local badgeRank, badgeTint = ntBadgeRankColor(plr, rule)
 	local badgeW = rule.badge and (nameSize + 6) or 0
-	local width = math.clamp(math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT), 120, 400)
+	local contentW = math.ceil(ICON_LEFT + iconSize + TEXT_GAP + math.max(nameW + badgeW, userW) + PAD_RIGHT)
+	local over = contentW > 560
+	local width = math.clamp(contentW, 120, 560)
 
 	local bb = Instance.new("BillboardGui")
 	bb.Name = "XyroTag_" .. tostring(plr.UserId)
@@ -9035,14 +9039,21 @@ local function ntBuild(plr, rule)
 	local name = Instance.new("TextLabel")
 	name.Name = "Name"
 	name.BackgroundTransparency = 1
-	name.AutomaticSize = Enum.AutomaticSize.X
-	name.Size = UDim2.fromOffset(math.ceil(nameW + 4), NAME_H)
+	if over then
+		-- ceiling reached: fill the row (minus badge) and truncate at the
+		-- pill edge - the background always spans exactly what the text shows
+		name.AutomaticSize = Enum.AutomaticSize.None
+		name.Size = UDim2.new(1, badgeW > 0 and -(badgeW + 8) or 0, 0, NAME_H)
+	else
+		name.AutomaticSize = Enum.AutomaticSize.X
+		name.Size = UDim2.fromOffset(math.ceil(nameW + 4), NAME_H)
+	end
 	name.Font = font
 	name.TextSize = nameSize
 	name.TextXAlignment = Enum.TextXAlignment.Left
 	name.TextYAlignment = Enum.TextYAlignment.Center
 	name.TextColor3 = ntColor(rule.textColor, ntColor(ntOpts.textColor, Color3.new(1, 1, 1)))
-	name.TextTruncate = Enum.TextTruncate.AtEnd -- only ever bites past 400px
+	name.TextTruncate = Enum.TextTruncate.AtEnd -- bites only at the 560px ceiling
 	name.Text = shownName
 	name.Parent = nameRow
 
@@ -9058,7 +9069,14 @@ local function ntBuild(plr, rule)
 		-- (blue scalloped disc + white check) from the repo. Staff with a rank
 		-- get it recolored to their tier (founder silver / hr white / support
 		-- green / trial teal / purple / partner dark blue).
-		b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
+		if over then
+			-- truncated name: pin the badge to the row's right edge instead
+			-- of the untruncated text width
+			b.AnchorPoint = Vector2.new(1, 0.5)
+			b.Position = UDim2.new(1, -2, 0.5, 0)
+		else
+			b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 0)
+		end
 		local img = Instance.new("ImageLabel")
 		img.Name = "Seal"
 		img.BackgroundTransparency = 1
@@ -9077,7 +9095,12 @@ local function ntBuild(plr, rule)
 			b.Text = (badgeRank or ntIsStaff(plr)) and (NT_BADGE_GLYPH ~= "" and NT_BADGE_GLYPH or "\xE2\x9C\x93") or "\xE2\x9C\x93"
 			b.TextSize = math.max(nameSize + 5, 15)
 			b.TextColor3 = badgeTint or ntColor(rule.color, Color3.fromRGB(0, 170, 255))
-			b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 1)
+			if over then
+				b.AnchorPoint = Vector2.new(1, 0.5)
+				b.Position = UDim2.new(1, -2, 0.5, 1)
+			else
+				b.Position = UDim2.new(0, math.ceil(nameW + 6), 0.5, 1)
+			end
 		end
 
 		-- cache-buster: a bumped version gives every seal URL a fresh
