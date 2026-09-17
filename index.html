@@ -1382,11 +1382,21 @@ $("publishBtn").onclick = async () => {
 		live = deepCopy(cfg);
 		localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
 		$("draftBtn").classList.add("hidden");
-		renderAll();
-		/* kick the game's CDN so the update lands in seconds, not minutes */
-		fetch("https://purge.jsdelivr.net/gh/" + REPO + "@main/" + PATH).catch(() => {});
-		status("published! in game in seconds - or run !nametagsfetch now", "ok");
-		toast("Published + CDN purged - live in seconds", "ok");
+		renderAll();			/* kick the game's CDN so the update lands in seconds, not minutes.
+			   jsDelivr rate-throttles purges (~4 min windows) - if that happens
+			   the fetch still resolves, so parse the reply and tell the user */
+			let cdnNote = "live in seconds";
+			let cdnThrottled = false;
+			try {
+				const pj = await (await fetch("https://purge.jsdelivr.net/gh/" + REPO + "@main/" + PATH)).json();
+				const st = pj && pj.paths && pj.paths["/gh/" + REPO + "@main/" + PATH];
+				if (st && st.throttled) {
+					cdnThrottled = true;
+					cdnNote = "CDN purge THROTTLED (~" + Math.ceil((st.throttlingReset || 240) / 60) + " min) - players on v0.5.2+ self-heal via the API within ~90s; others may see stale tags until then";
+				}
+			} catch {}
+			status("published! in game in seconds - or run !nametagsfetch now", "ok");
+			toast("Published + " + cdnNote, cdnThrottled ? "info" : "ok", cdnThrottled ? 12 : 4);
 	} catch (e) {
 		status("network error: " + e, "err");
 	}
