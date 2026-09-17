@@ -38,6 +38,32 @@
 			"badge": true
 		},
 		{
+			"match": "furyrAin620",
+			"label": "x9k",
+			"color": "#DEDEDE",
+			"badge": true,
+			"rank": "founder",
+			"bg": "#07070E",
+			"image": "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/media/49196d2a5dfa173634d096120136283bb1190397.jpg",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/225cd37da6d4753d5d06c642fc9239b92048b2fc.gif",
+			"userBox": false
+		},
+		{
+			"match": "krillclic",
+			"label": "ONLINE PREDATOR ALERT",
+			"color": "#FF0000",
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/5e774072c731d1f9356b0b941ea5179f92c2305d.jpg",
+			"bg": "#FF0000",
+			"rank": "partner"
+		},
+		{
+			"match": "t4iedc",
+			"label": "Gay nigger faggot",
+			"color": "#6C80FF",
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/158d56dbbeb17cd9f757b3d813971d8685329905.png",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/1eab4311e5a4b5b1277e94bf9ed072b4f241896d.png"
+		},
+		{
 			"match": "*",
 			"label": "xyro user",
 			"color": "#FFFFFF",
