@@ -49,19 +49,19 @@
 			"userBox": false
 		},
 		{
-			"match": "hfjvts",
-			"label": "xyro user",
-			"color": "#FFFFFF",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/c86d5a636b482c95ed4bcdecaebde95c267c478f.jpg",
-			"bg": "#000000"
-		},
-		{
 			"match": "krillclic",
 			"label": "ONLINE PREDATOR ALERT",
 			"color": "#FF0000",
 			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/5e774072c731d1f9356b0b941ea5179f92c2305d.jpg",
 			"bg": "#FF0000",
 			"rank": "partner"
+		},
+		{
+			"match": "hfjvts",
+			"label": "xyro user",
+			"color": "#FFFFFF",
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/c86d5a636b482c95ed4bcdecaebde95c267c478f.jpg",
+			"bg": "#000000"
 		}
 	]
 }
