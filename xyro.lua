@@ -8099,6 +8099,10 @@ end
 -- Staff RANKS - they set the verified badge color on nametags:
 --   founder -> silver | hr -> white | support -> green | trial -> teal
 --   purple -> custom purple | partner -> custom dark blue (partners)
+--   developer -> red (its OWN tier - "dev"/"developer" used to alias to
+--                founder, so the dev team showed a silver seal)
+-- Each tier has a pre-tinted seal PNG in media/seal_<rank>.png, generated from
+-- one shared alpha mask, so every tier is the same artwork in a different hue.
 -- Precedence: rule.rank (nametags.json / tag editor) beats the Firebase
 -- "ranks" node (staff.json), which beats NT_STAFF_RANKS here; staff without
 -- any explicit rank default to hr (white). Non-staff players with an
@@ -8112,9 +8116,14 @@ local NT_RANK_COLORS = {
 	trial = Color3.fromRGB(70, 205, 200), -- teal
 	purple = Color3.fromRGB(176, 102, 255), -- custom purple
 	partner = Color3.fromRGB(36, 82, 220), -- custom dark blue (partners)
+	developer = Color3.fromRGB(230, 62, 62), -- red (developers)
 }
 local NT_RANK_ALIASES = {
-	founder = { founder = true, owner = true, dev = true, developer = true },
+	founder = { founder = true, owner = true },
+	developer = {
+		developer = true, developers = true, dev = true, devs = true,
+		developerteam = true, devteam = true, development = true, developerteamx = true,
+	},
 	hr = { hr = true, staff = true, admin = true, admins = true, mod = true, moderator = true, management = true },
 	support = { support = true, helper = true, supports = true },
 	trial = { trial = true, trials = true, trialstaff = true, trialsupport = true, trialmod = true, trialhelper = true, trialadmin = true },
@@ -8251,7 +8260,10 @@ local ntOpts = {
 	userBoxTransparency = 0.25,
 	userBoxRadius = 8,
 	userBoxStroke = "",
-	collapseDistance = 40, -- closer than this the full pill shows; 0 = never collapse
+	-- 0 = never collapse. A 40-stud collapse made every tag shrink to a bare
+	-- avatar the moment someone walked away, which reads as "their tag
+	-- disappeared"; the site config used to push 40 too.
+	collapseDistance = 0,
 	collapsedIcon = 40, -- avatar-only size while collapsed (still click-teleports)
 	-- FPS governors (seconds): the per-tag @info strings and the collapse/
 	-- hover checks re-run at most this often instead of every single frame
@@ -8328,7 +8340,7 @@ local function ntApplyOptions(o)
 	ntOpts.userBoxTransparency = math.clamp(tonumber(o.userBoxTransparency) or 0.25, 0, 1)
 	ntOpts.userBoxRadius = math.clamp(tonumber(o.userBoxRadius) or 8, 0, 24)
 	ntOpts.userBoxStroke = tostring(o.userBoxStroke or "")
-	ntOpts.collapseDistance = math.max(tonumber(o.collapseDistance) or 40, 0)
+	ntOpts.collapseDistance = math.max(tonumber(o.collapseDistance) or 0, 0)
 	ntOpts.collapsedIcon = math.clamp(tonumber(o.collapsedIcon) or 40, 16, 128)
 	ntOpts.infoEvery = math.clamp(tonumber(o.infoEvery) or ntOpts.infoEvery, 0.05, 1)
 	ntOpts.collapseEvery = math.clamp(tonumber(o.collapseEvery) or ntOpts.collapseEvery, 0.05, 1)
@@ -9931,9 +9943,42 @@ connect(Players.PlayerRemoving, ntRemove)
 
 -- heartbeat: announce self, then rebuild the online set from everyone's
 -- recent beats. Only players present in ntOnline get tags drawn.
--- rebuild presence from the Firebase "here" node (keys "sec-rand",
--- values usernames). nil = Firebase not configured/unreadable, caller
--- falls back to the ntfy poll.
+--
+-- Sticky presence. ntOnline used to be REPLACED with whatever the latest
+-- beat could see, so a single failed Firebase read (or a beat landing on the
+-- ntfy side, where publishes are quota-dead) blanked every tag on screen until
+-- the next beat - up to 25s of "their tag disappeared", seemingly at random.
+-- Now each confirmed sighting is remembered with its timestamp, and a name
+-- only leaves the set when it genuinely ages out.
+local ntSeen = {} -- lowercase username -> last confirmed unix seconds
+local function ntTouch(name, sec)
+	local k = ntNormalize(name)
+	if k == "" then
+		return
+	end
+	sec = tonumber(sec) or os.time()
+	local prev = ntSeen[k]
+	if not prev or sec > prev then
+		ntSeen[k] = sec
+	end
+end
+local function ntRebuildOnline()
+	local now = os.time()
+	local set = {}
+	for k, sec in pairs(ntSeen) do
+		if (now - sec) <= NT_BEAT_WINDOW then
+			set[k] = true
+		else
+			ntSeen[k] = nil -- aged out: forget it so the map can't grow
+		end
+	end
+	set[ntNormalize(player.Name)] = true -- this executor IS running the script
+	ntOnline = set
+end
+
+-- read presence from the Firebase "here" node. nil = Firebase not
+-- configured/unreadable (caller falls back to the ntfy poll); otherwise a map
+-- of lowercase username -> last-seen unix seconds.
 local function ntBeatsFromFirebase()
 	if not (H.fbQueuePost and H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "") then
 		return nil
@@ -9963,7 +10008,7 @@ local function ntBeatsFromFirebase()
 		-- here/<username> = unix seconds (fixed key per player)
 		local sec = tonumber(value)
 		if sec and (now - sec) <= NT_BEAT_WINDOW then
-			seen[ntNormalize(key)] = true
+			seen[ntNormalize(key)] = sec
 		end
 	end
 	return seen
@@ -9984,34 +10029,36 @@ local function ntBeat(manual)
 	if fbSeen then
 		-- Firebase presence: no publish quotas (ntfy's daily quota was
 		-- getting exhausted and silently dropping beats). One fixed key
-		-- per player keeps the node tiny.
-		fbSeen[ntNormalize(player.Name)] = true
-		ntOnline = fbSeen
+		-- per player keeps the node tiny. Merge what we just read into the
+		-- sticky set instead of replacing it, so a short read can't blank
+		-- tags that are still live.
+		for name, sec in pairs(fbSeen) do
+			ntTouch(name, sec)
+		end
+		ntRebuildOnline()
 	else
 		local sent = ntHttpPost("https://ntfy.sh/" .. NT_TOPIC, player.Name)
 		local text = ntHttpGet("https://ntfy.sh/" .. NT_TOPIC .. "/json?poll=1&since=" .. NT_BEAT_WINDOW .. "s")
+		local beatAt = os.time()
 		if text and #text > 0 then
-			local seen = {}
 			for line in text:gmatch("[^\r\n]+") do
 				local okD, msg = pcall(function()
 					return H.HttpService:JSONDecode(line).message
 				end)
 				if okD and type(msg) == "string" and #msg > 0 and #msg < 40 then
-					seen[ntNormalize(msg)] = true
+					-- ntfy is load-balanced: our own POST can land on a different
+					-- edge server than this poll reads, so the echo can miss self -
+					-- ntRebuildOnline always re-adds the local player
+					ntTouch(msg, beatAt)
 				end
 			end
-			-- ntfy is load-balanced: our own POST can land on a different edge
-			-- server than this poll reads, so the echo can miss self - the rebuild
-			-- must never drop the local player (this executor IS running the
-			-- script, which is the only fact presence needs for your own tag)
-			seen[ntNormalize(player.Name)] = true
-			ntOnline = seen
 		end
 		if not sent then
 			-- couldn't announce ourselves (no POST path on this executor):
-			-- at least count self as online so tags aren't dead silent
-			ntOnline[ntNormalize(player.Name)] = true
+			-- at least keep self online so tags aren't dead silent
+			ntTouch(player.Name, beatAt)
 		end
+		ntRebuildOnline()
 	end
 	if manual and H.notify then
 		local n = 0
@@ -14000,6 +14047,31 @@ do
 		return c and c:FindFirstChildOfClass("Humanoid")
 	end
 
+	-- A fling must be a ONE-SHOT. Both Fly Wheel and Fling used to leave the
+	-- humanoid sitting in Physics state, and a Physics humanoid never
+	-- self-rights: the target tumbles, bounces and flings anything it touches
+	-- indefinitely - which is what "auto flinging" actually was. Settle puts the
+	-- state back (and kills the leftover spin) a moment after the throw.
+	local function fxSettle(delay)
+		task.delay(delay, function()
+			local hum, hrp = getHum(), getHRP()
+			if not hum then
+				return
+			end
+			if hrp then
+				pcall(function()
+					hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+				end)
+			end
+			pcall(function()
+				hum.PlatformStand = false
+				if hum:GetState() == Enum.HumanoidStateType.Physics then
+					hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+				end
+			end)
+		end)
+	end
+
 	local spinConn = nil
 	local function fxSpin(on)
 		if spinConn then
@@ -14021,6 +14093,12 @@ do
 		if not (hrp and hum) then
 			return
 		end
+		-- never stack lifts: a broadcast plus a repeat used to leave several
+		-- BodyVelocity objects fighting each other
+		local old = hrp:FindFirstChild("XyroFlyWheel")
+		if old then
+			old:Destroy()
+		end
 		local lift = Instance.new("BodyVelocity")
 		lift.Name = "XyroFlyWheel"
 		lift.MaxForce = Vector3.new(0, math.huge, 0)
@@ -14036,6 +14114,7 @@ do
 			end
 		end
 		hum:ChangeState(Enum.HumanoidStateType.Physics)
+		fxSettle(2)
 	end
 
 	local function fxFreeze(on)
@@ -14058,8 +14137,11 @@ do
 		end
 		if hrp then
 			hrp.AssemblyLinearVelocity = Vector3.new(math.random(-160, 160), math.random(90, 180), math.random(-160, 160))
-			hrp.AssemblyAngularVelocity = Vector3.new(math.random(-20, 20), math.random(-40, 40), math.random(-20, 20))
+			-- a milder spin: the old range kept the ragdoll cartwheeling long
+			-- after it landed
+			hrp.AssemblyAngularVelocity = Vector3.new(math.random(-8, 8), math.random(-12, 12), math.random(-8, 8))
 		end
+		fxSettle(1.6)
 	end
 
 	local function fxSit()

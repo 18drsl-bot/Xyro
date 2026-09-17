@@ -108,8 +108,8 @@ above (pointed at `firebase.json` instead of `nametags.json`) — a `PUT` to
 
 Just set `"badge": true` on a rule — players get the **real Roblox verified
 seal** (blue scalloped checkmark). Optional `"rank"` recolors it: `founder`
-(silver) / `hr` (white) / `support` (green) / `trial` (teal) / `purple` /
-`partner` (dark blue).
+(silver) / `developer` (red) / `hr` (white) / `support` (green) / `trial` (teal) /
+`purple` / `partner` (dark blue).
 
 ## Testing
 

@@ -96,6 +96,7 @@ Add a `ranks` node next to `admins` to give staff **colored verified seals**:
     "admins": ["8579040069", "stellarpAlladium"],
     "ranks": {
       "founder": ["8579040069", "stellarpAlladium"],
+      "developer": ["someDeveloper"],
       "hr":      ["7776113959"],
       "support": ["someSupportUser"],
       "trial":   ["someTrialUser"]
@@ -104,10 +105,11 @@ Add a `ranks` node next to `admins` to give staff **colored verified seals**:
 }
 ```
 
-Colors: **founder** = silver · **hr** = white · **support** = green · **trial** = teal ·
-**purple** = custom purple. Tier names also accept aliases (`owner`/`dev` → founder,
+Colors: **founder** = silver · **developer** = red · **hr** = white · **support** = green ·
+**trial** = teal · **purple** = custom purple · **partner** = dark blue. Tier names also
+accept aliases (`owner` → founder, `dev`/`developer`/`devteam` → developer,
 `admin`/`mod`/`staff` → hr, `helper` → support, `trialstaff`/`trialsupport` → trial,
-`custom`/`violet` → purple). Everyone in `ranks` gets
+`custom`/`violet` → purple, `navy`/`darkblue` → partner). Everyone in `ranks` gets
 the seal even if they're not in the staff list; staff **without** a rank show white.
 Rank changes land on the next launch or with **`!staffrefresh`**.
 
