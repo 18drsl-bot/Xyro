@@ -37,6 +37,20 @@ if _G.ScriptHubCleanup then
 	pcall(_G.ScriptHubCleanup)
 end
 
+-- kill leftovers from a previous execution: the staff panel lives in its
+-- own protected ScreenGui (CoreGui/gethui, ResetOnSpawn=false) that no
+-- other cleanup touches, so without this a re-execute leaves the OLD panel
+-- on screen and mounts the new one behind it
+pcall(function()
+	local host = (gethui and gethui()) or game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui") or game:GetService("CoreGui")
+	for _, name in { "XyroStaffPanelGui", "XyroStaffBlind" } do
+		local stale = host:FindFirstChild(name)
+		if stale then
+			stale:Destroy()
+		end
+	end
+end)
+
 local conns = {}
 local function connect(sig, fn)
 	local c = sig:Connect(fn)
