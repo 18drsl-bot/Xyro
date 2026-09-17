@@ -13760,6 +13760,7 @@ do
 	local make, round, connect, click = H.make, H.round, H.connect, H.click
 	local COL, player, Players = H.COL, H.player, H.Players
 	local RunService = H.RunService
+	local TweenService = H.TweenService or game:GetService("TweenService")
 	local ntHttpPost, ntHttpGet = H.ntHttpPost, H.ntHttpGet
 
 	local PANEL_TITLE = "Staff"
@@ -13905,6 +13906,8 @@ do
 		if not on then
 			return
 		end
+		-- ScreenGuis cannot render nested inside other ScreenGuis - parent to
+		-- the gui host (PlayerGui/gethui), not H.gui
 		local g = Instance.new("ScreenGui")
 		g.Name = "XyroStaffBlind"
 		g.IgnoreGuiInset = true
@@ -13915,7 +13918,7 @@ do
 		cover.BorderSizePixel = 0
 		cover.Size = UDim2.fromScale(1, 1)
 		cover.Parent = g
-		g.Parent = H.gui
+		g.Parent = H.guiHost or game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
 		blindGui = g
 	end
 
@@ -14048,63 +14051,153 @@ do
 	end
 
 	-- ---------------------------------------------------------------
-	-- panel UI (chrome matches the main window; draggable + minimizable)
+	-- panel UI - mounted in its OWN ScreenGui (a frame inside H.gui can
+	-- end up behind main's surfaces depending on gui host/executor, and
+	-- when that happened the panel rendered as an empty black box).
+	-- Explicit ZIndexes + hand-rolled chrome; no H.chrome dependence.
 	-- ---------------------------------------------------------------
-	local staffPanel = make("Frame", {
-		Name = "XyroStaffPanel",
-		Size = UDim2.new(0, 280, 0, 340),
-		Position = UDim2.new(0.5, 330, 0.5, -160),
-		BackgroundColor3 = COL.bg,
-		BorderSizePixel = 0,
-		Visible = false,
-		Active = true,
-		ZIndex = 30,
-	}, H.gui)
-	round(staffPanel, 10)
-	make("UIStroke", { Color = COL.off, Thickness = 1, Transparency = 0.2 }, staffPanel)
+	local staffPanel, staffBody, statusLbl
+	local bodyVisible = true
 
-	local bar = make("TextLabel", {
-		Size = UDim2.new(1, -50, 0, 38),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold,
-		TextSize = 14,
-		TextColor3 = COL.text,
-		Text = "Staff",
-		TextXAlignment = Enum.TextXAlignment.Left,
-	}, staffPanel)
-	make("UIPadding", { PaddingLeft = UDim.new(0, 14) }, bar)
-	bar.Active = true
+	local mountOk, mountErr = pcall(function()
+		local pgui = Instance.new("ScreenGui")
+		pgui.Name = "XyroStaffPanelGui"
+		pgui.ResetOnSpawn = false
+		-- same max DisplayOrder as the main gui (2^31-1); added later, so as a
+		-- sibling it draws above main. Do NOT arithmetic on it - int32 max + anything wraps.
+		pgui.DisplayOrder = H.DISPLAY_ORDER or 2147483647
+		pgui.Parent = H.guiHost or game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+		pcall(function()
+			if syn and syn.protect_gui then
+				syn.protect_gui(pgui)
+			end
+		end)
 
-	H.chrome(staffPanel, {
-		header = 38,
-		title = bar,
-		onClose = function()
+		staffPanel = Instance.new("Frame")
+		staffPanel.Name = "XyroStaffPanel"
+		staffPanel.Size = UDim2.new(0, 280, 0, 340)
+		staffPanel.Position = UDim2.new(0.5, 330, 0.5, -160)
+		staffPanel.BackgroundColor3 = COL.bg
+		staffPanel.BorderSizePixel = 0
+		staffPanel.Active = true
+		staffPanel.Visible = false
+		staffPanel.ZIndex = 1
+		staffPanel.Parent = pgui
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 10)
+		corner.Parent = staffPanel
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = COL.off
+		stroke.Thickness = 1
+		stroke.Transparency = 0.2
+		stroke.Parent = staffPanel
+
+		-- header (drag handle) + close/min, ZIndex 2 so nothing can cover them
+		local bar = Instance.new("TextButton")
+		bar.Name = "Header"
+		bar.Size = UDim2.new(1, 0, 0, 38)
+		bar.BackgroundTransparency = 1
+		bar.Text = ""
+		bar.AutoButtonColor = false
+		bar.ZIndex = 2
+		bar.Parent = staffPanel
+		local title = Instance.new("TextLabel")
+		title.Size = UDim2.new(1, -70, 1, 0)
+		title.Position = UDim2.new(0, 14, 0, 0)
+		title.BackgroundTransparency = 1
+		title.Font = Enum.Font.GothamBold
+		title.TextSize = 14
+		title.TextColor3 = COL.text
+		title.Text = "Staff"
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.ZIndex = 3
+		title.Parent = bar
+		local closeBtn = Instance.new("TextButton")
+		closeBtn.Size = UDim2.new(0, 18, 0, 18)
+		closeBtn.Position = UDim2.new(1, -27, 0, 10)
+		closeBtn.BackgroundColor3 = Color3.fromRGB(225, 65, 65)
+		closeBtn.Text = ""
+		closeBtn.AutoButtonColor = false
+		closeBtn.BorderSizePixel = 0
+		closeBtn.ZIndex = 3
+		closeBtn.Parent = bar
+		local cc = Instance.new("UICorner")
+		cc.CornerRadius = UDim.new(0, 9)
+		cc.Parent = closeBtn
+		local minBtn = Instance.new("TextButton")
+		minBtn.Size = UDim2.new(0, 18, 0, 18)
+		minBtn.Position = UDim2.new(1, -49, 0, 10)
+		minBtn.BackgroundColor3 = Color3.fromRGB(235, 190, 45)
+		minBtn.Text = ""
+		minBtn.AutoButtonColor = false
+		minBtn.BorderSizePixel = 0
+		minBtn.ZIndex = 3
+		minBtn.Parent = bar
+		local mc = Instance.new("UICorner")
+		mc.CornerRadius = UDim.new(0, 9)
+		mc.Parent = minBtn
+
+		staffBody = Instance.new("ScrollingFrame")
+		staffBody.Name = "Body"
+		staffBody.Size = UDim2.new(1, -20, 1, -66)
+		staffBody.Position = UDim2.new(0, 10, 0, 40)
+		staffBody.BackgroundTransparency = 1
+		staffBody.BorderSizePixel = 0
+		staffBody.ScrollBarThickness = 4
+		staffBody.ScrollBarImageColor3 = COL.sub
+		staffBody.CanvasSize = UDim2.new(0, 0, 0, 0)
+		staffBody.ZIndex = 2
+		staffBody.Parent = staffPanel
+
+		statusLbl = Instance.new("TextLabel")
+		statusLbl.Size = UDim2.new(1, -20, 0, 16)
+		statusLbl.Position = UDim2.new(0, 10, 1, -22)
+		statusLbl.BackgroundTransparency = 1
+		statusLbl.Font = Enum.Font.Code
+		statusLbl.TextSize = 10
+		statusLbl.TextColor3 = COL.sub
+		statusLbl.Text = "panel ready - transport live"
+		statusLbl.TextXAlignment = Enum.TextXAlignment.Left
+		statusLbl.ZIndex = 2
+		statusLbl.Parent = staffPanel
+
+		local layout = Instance.new("UIListLayout")
+		layout.Padding = UDim.new(0, 5)
+		layout.SortOrder = Enum.SortOrder.LayoutOrder
+		layout.Parent = staffBody
+		local pad = Instance.new("UIPadding")
+		pad.PaddingTop = UDim.new(0, 4)
+		pad.PaddingLeft = UDim.new(0, 4)
+		pad.PaddingRight = UDim.new(0, 4)
+		pad.Parent = staffBody
+		layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+			staffBody.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
+		end)
+
+		closeBtn.MouseButton1Click:Connect(function()
+			click()
 			staffPanel.Visible = false
-		end,
-	})
-	H.makeDraggable(staffPanel, bar)
-
-	local staffBody = make("ScrollingFrame", {
-		Size = UDim2.new(1, -20, 1, -48),
-		Position = UDim2.new(0, 10, 0, 40),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ScrollBarThickness = 4,
-		ScrollBarImageColor3 = COL.sub,
-		CanvasSize = UDim2.new(0, 0, 0, 0),
-	}, staffPanel)
-	local layout = make("UIListLayout", {
-		Padding = UDim.new(0, 5),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-	}, staffBody)
-	make("UIPadding", {
-		PaddingTop = UDim.new(0, 4),
-		PaddingLeft = UDim.new(0, 4),
-		PaddingRight = UDim.new(0, 4),
-	}, staffBody)
-	connect(layout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
-		staffBody.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
+		end)
+		minBtn.MouseButton1Click:Connect(function()
+			click()
+			bodyVisible = not bodyVisible
+			staffBody.Visible = bodyVisible
+			statusLbl.Visible = bodyVisible
+			staffPanel.Size = bodyVisible and UDim2.new(0, 280, 0, 340) or UDim2.new(0, 280, 0, 38)
+		end)
+		H.makeDraggable(staffPanel, bar)
 	end)
+
+	if not mountOk then
+		warn("[Xyro] staff panel mount failed: " .. tostring(mountErr))
+		if H.notify then
+			H.notify({ title = "Staff", text = "panel mount failed: " .. tostring(mountErr), kind = "error" })
+		end
+		return
+	end
+	-- (body layout lives inside the pcall above; rows added below inherit
+	-- the body's ZIndex 2 baseline)
 
 	local ord = 0
 	local function sec(text)
@@ -14313,6 +14406,19 @@ do
 
 	H.staffPanelToggle = function()
 		staffPanel.Visible = not staffPanel.Visible
+		if staffPanel.Visible then
+			-- re-open resets minimize + H.popIn-style scale animation
+			bodyVisible = true
+			staffBody.Visible = true
+			statusLbl.Visible = true
+			staffPanel.Size = UDim2.new(0, 280, 0, 340)
+			local sc = staffPanel:FindFirstChildOfClass("UIScale") or Instance.new("UIScale")
+			sc.Parent = staffPanel
+			local base = H.scales and H.scales["XyroStaffPanel"] or 1
+			sc.Scale = base * 0.8
+			local info = TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+			TweenService:Create(sc, info, { Scale = base }):Play()
+		end
 		return staffPanel.Visible
 	end
 
