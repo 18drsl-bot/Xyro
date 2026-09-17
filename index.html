@@ -1042,8 +1042,16 @@ $("edSave").onclick = () => {
 	else if (t.userBox === "false") clean.userBox = false;
 	else delete clean.userBox;
 	if (t.userText) clean.userText = t.userText; else delete clean.userText;
-	if (editing >= cfg.tags.length) cfg.tags.push(clean);
-	else cfg.tags[editing] = clean;
+	if (editing >= cfg.tags.length) {
+		// insert BEFORE the "*" catch-all: rules match first-wins, so a rule
+		// appended after the wildcard could never fire. If there's no
+		// catch-all, plain append keeps the author's order.
+		const star = cfg.tags.findIndex(t => (t.match || "") === "*");
+		if (star >= 0) cfg.tags.splice(star, 0, clean);
+		else cfg.tags.push(clean);
+	} else {
+		cfg.tags[editing] = clean;
+	}
 	toast("Rule saved (not published yet)");
 	closeEditor();
 	changed("rule saved");
@@ -1147,6 +1155,8 @@ function renderUsers() {
 		btn.textContent = "+ tag";
 		btn.style.cssText = "padding:5px 12px;font-size:12px;flex:none";
 		btn.onclick = () => {
+			// insert before the catch-all so a new rule from the live-users
+			// list actually fires (openEditor handles the ordering on save)
 			openEditor(cfg.tags.length);
 			$("fMatch").value = n;
 			$("fLabel").value = n;
