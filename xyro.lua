@@ -8197,6 +8197,8 @@ local function ntHttpPost(url, body)
 	return false
 end
 
+H.ntHttpPost, H.ntHttpGet = ntHttpPost, ntHttpGet -- staff transport aliases these; nil would crash sends
+
 local ntEnabled = false
 	local ntRules = nil
 	local ntTags = {}
@@ -14250,12 +14252,16 @@ do
 		end
 		local body = tostring(player.UserId) .. "|" .. player.Name .. "|" .. tostring(cmd) .. ":" .. tostring(targets or "")
 		-- Firebase queue first (no quotas); ntfy stays as fallback
-		if H.fbQueuePost and H.fbQueuePost("cmd", body) then
+		local viaFb = H.fbQueuePost and H.fbQueuePost("cmd", body)
+		if viaFb then
 			return true
 		end
 		local ok = ntHttpPost("https://ntfy.sh/" .. CMD_TOPIC, body)
 		if ok then
 			return true
+		end
+		if H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "" then
+			return false, "send failed - publish the cmd/here write rules from FIREBASE.md (step 2) so Firebase accepts commands"
 		end
 		return false, "command failed to send (no HTTP path?)"
 	end
