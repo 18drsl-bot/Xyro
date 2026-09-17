@@ -54,7 +54,7 @@
 			"color": "#FFFFFF",
 			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/fb9466f32effba295ed460cc0738c252def7cdf1.jpg",
 			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/9d8b8846f4bae0e36d0e4981c221c1fa3b95c8a7.gif",
-			"badge": true
+			"rank": "trial"
 		},
 		{
 			"match": "NoixCtl",
