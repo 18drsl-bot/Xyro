@@ -85,10 +85,16 @@ curl https://xyro-api.<you>.workers.dev/health
   "writes": "key required",
   "admin_writes": "admin key required",
   "gate": { "enabled": true, "message": "", "source": "default" },
-  "presence_window": 120,
+  "presence_window": 75,
   "queue_ttl": 600
 }
 ```
+
+`presence_window` is deliberately the same 75 seconds the game and the editor
+use (`NT_BEAT_WINDOW` in xyro.lua, `PRESENCE_WINDOW` in index.html). It was 120
+here against their 75, which made `/online` and the status page count a player
+as running for 45 seconds after the game had already taken their tag away.
+`Tools/test_contract.js` fails if the three ever drift apart again.
 
 `gate.source` is worth knowing: `default` means no gate node exists, `database`
 means it was read, and `unreachable`/`unreadable` mean the Worker could not get

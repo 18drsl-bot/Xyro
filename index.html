@@ -421,7 +421,7 @@
 						</select>
 					</div>
 					<div><label>Max distance (0 = &infin;)</label><input id="optDist" type="number" min="0" value="0"></div>
-					<div><label>Icon size (8&ndash;128)</label><input id="optImgSize" type="number" min="8" max="128" value="36"></div>
+					<div><label>Icon size (8&ndash;128)</label><input id="optImgSize" type="number" min="8" max="128" value="44"></div>
 				</div>
 				<div class="row">
 					<div><label>Pill background</label><input id="optPillColor" type="color" value="#0c0c10"></div>
@@ -461,7 +461,7 @@
 					<span class="hl">Script users <span id="userCount" class="chip"></span></span>
 					<span class="chip" id="usersLive">checking...</span>
 				</h2>
-				<div class="hint" style="margin-top:0">Everyone currently running the script (live presence, refreshes every 20s). Click +tag to create a rule for them.</div>
+				<div class="hint" style="margin-top:0">Everyone currently running the script (live presence, refreshes every 20s). Green means the game is drawing a tag for them right now &mdash; a rule matching their username, or a <code>*</code> catch-all. A rule that only matches their display name cannot be seen from here. Click +tag to create a rule for them.</div>
 				<div class="rlist" id="userList"></div>
 			</div>
 		</div>
@@ -1217,20 +1217,28 @@ function renderUsers() {
 	}
 	const star = cfg.tags.some(t => (t.match || "") === "*");
 	for (const n of names) {
-		const matched = cfg.tags.some(t => {
+		/* ntRuleFor() in xyro.lua matches a rule's `match` against the username OR
+		   the display name, and treats "*" as a catch-all that tags everyone. Only
+		   the username is knowable from presence, so the two cases the site CAN
+		   judge are: a named rule matching this username, and the catch-all. */
+		const ruleMatch = cfg.tags.some(t => {
 			const m = (t.match || "").toLowerCase();
 			return m !== "" && m !== "*" && n.startsWith(m);
 		});
+		/* green means "has a tag in game". A catch-all user is tagged by the game,
+		   so they must be green too - amber here read as "no tag" while their pill
+		   was on screen, which is the site disagreeing with the game. */
+		const tagged = ruleMatch || star;
 		const row = document.createElement("div");
 		row.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.05)";
 		const dot = document.createElement("span");
-		dot.style.cssText = "width:8px;height:8px;border-radius:50%;background:" + (matched ? "#3ddc84" : "#e5b83c") + ";flex:none";
+		dot.style.cssText = "width:8px;height:8px;border-radius:50%;background:" + (tagged ? "#3ddc84" : "#e5b83c") + ";flex:none";
 		const nm = document.createElement("b");
 		nm.textContent = n; // usernames come off the wire - never innerHTML them
 		nm.style.cssText = "font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis";
 		const state = document.createElement("span");
 		state.className = "hint";
-		state.textContent = matched ? "tagged" : star ? "catch-all" : "no rule";
+		state.textContent = ruleMatch ? "tagged" : star ? "catch-all" : "no rule";
 		const btn = document.createElement("button");
 		btn.textContent = "+ tag";
 		btn.style.cssText = "padding:5px 12px;font-size:12px;flex:none";
@@ -1305,7 +1313,11 @@ async function pollUsers() {
 					for (const key of Object.keys(data)) {
 						const n = String(key).trim().toLowerCase();
 						const sec = Number(data[key]);
-						if (n && n.length < 40 && sec && nowSec - sec <= PRESENCE_WINDOW) seenUsers[n] = Date.now();
+						/* stamp with the BEAT's own time, not Date.now(). This poll runs every
+						   20s, so re-stamping a 70-second-old beat as "now" kept a player
+						   listed for up to another 20s after the window the game uses - their
+						   tag was already gone in game while the site still showed them. */
+						if (n && n.length < 40 && sec && nowSec - sec <= PRESENCE_WINDOW) seenUsers[n] = sec * 1000;
 					}
 				}
 				sawSource = true;

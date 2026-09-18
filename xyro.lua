@@ -770,6 +770,23 @@ local toolsPage = makeTab("Tools")
 local ADMIN_IDS = {} -- filled ONLY from Firebase (fbAddIdentity)
 local ADMIN_NAMES = {} -- lowercase username -> true (filled from Firebase)
 
+-- Wipe a table in place. In place matters: H.ADMIN_IDS, H.NT_RANKS and the
+-- blacklist maps are aliased all over the file (the nametag resolver, the staff
+-- panel, the exporter), so replacing a table would leave every alias pointing at
+-- the old one.
+local function fbClear(t)
+	if type(t) ~= "table" then
+		return
+	end
+	if table.clear then
+		table.clear(t)
+		return
+	end
+	for k in pairs(t) do
+		t[k] = nil
+	end
+end
+
 H.HS = game:GetService("HttpService")
 
 -- === EDIT THESE TWO LINES to enable Firebase (OPTIONAL) ===
@@ -1054,8 +1071,9 @@ local function apiLoadRepoConfig()
 end
 
 -- accepts {"ids":{"8579040069":true}, "usernames":{"x9ksa":true}}
--- or flat arrays {"admins":["8579040069","x9ksa"]} — values of false remove
--- (additive: entries deleted from Firebase stay admin until script reload).
+-- or flat arrays {"admins":["8579040069","x9ksa"]}. A false value means "not an
+-- admin" - the section is rebuilt from each payload, so false and simply
+-- leaving someone out are now the same thing.
 local function fbAddIdentity(raw)
 	if type(raw) ~= "string" and type(raw) ~= "number" then
 		return
@@ -1103,26 +1121,43 @@ local function fbApplyStaff(body)
 	if not ok or type(data) ~= "table" then
 		return false
 	end
-	for _, list in pairs({ data.ids, data.usernames }) do
-		if type(list) == "table" then
-			for key, value in pairs(list) do
-				if type(value) == "string" or type(value) == "number" then
-					fbAddIdentity(value) -- array form
-				elseif value == nil or value == true then
-					fbAddIdentity(key) -- map form: key is the id/username
+	-- EVERY section present in the payload is REBUILT, not added to. Adding was
+	-- the old behaviour and it was the reason a demoted admin stayed admin, an
+	-- unbanned account stayed blocked and a changed rank tier kept its old badge
+	-- colour on a running client until the player re-executed the script: the
+	-- fetch re-read the file every 15s, found the entry gone, and added nothing,
+	-- leaving the stale entry in place.
+	--
+	-- A section that is ABSENT from the payload is left untouched on purpose: a
+	-- partial or truncated write must never be able to empty your staff list.
+	local hasAdmins = type(data.ids) == "table" or type(data.usernames) == "table" or type(data.admins) == "table"
+	if hasAdmins then
+		fbClear(ADMIN_IDS)
+		fbClear(ADMIN_NAMES)
+		for _, list in pairs({ data.ids, data.usernames }) do
+			if type(list) == "table" then
+				for key, value in pairs(list) do
+					if type(value) == "string" or type(value) == "number" then
+						fbAddIdentity(value) -- array form
+					elseif value == nil or value == true then
+						fbAddIdentity(key) -- map form: key is the id/username
+					end
 				end
 			end
 		end
-	end
-	if type(data.admins) == "table" then
-		for _, name in ipairs(data.admins) do
-			fbAddIdentity(name)
+		if type(data.admins) == "table" then
+			for _, name in ipairs(data.admins) do
+				fbAddIdentity(name)
+			end
 		end
 	end
 	-- rank tiers: {"ranks":{"founder":["x9ksa","8579040069"],"hr":[...],
 	-- "support":[...],"trial":[...]}} - sets each person's badge color
 	-- (tier names are normalized later, in the nametag rank resolver)
 	if type(data.ranks) == "table" then
+		-- rebuilt, so moving someone between tiers - or dropping them from the
+		-- table entirely - changes their seal on the next fetch instead of never
+		fbClear(H.NT_RANKS)
 		for tier, list in pairs(data.ranks) do
 			if type(list) == "table" then
 				for _, who in pairs(list) do
@@ -1138,9 +1173,13 @@ local function fbApplyStaff(body)
 	end
 	-- blacklist: {"8579040069":"ban evasion"} (id or username -> reason),
 	-- or arrays ["8579040069","someone"], or {"ids":[...],"usernames":[...]}.
-	-- Re-read on every fetch, so clearing an entry takes effect on the next
-	-- refresh without a script change.
+	-- Re-read on every fetch - and REBUILT here, so an entry you delete in the
+	-- console actually unblocks that account on the next refresh. Adding to the
+	-- old map (the previous behaviour) meant "unblock" never reached a client
+	-- that had already seen the entry.
 	if type(data.blacklist) == "table" then
+		fbClear(H.BLACKLIST_IDS)
+		fbClear(H.BLACKLIST_NAMES)
 		local blockList = data.blacklist
 		local function addMember(raw, reason)
 			local s = tostring(raw or "")
@@ -8822,9 +8861,10 @@ local ntFetchN = 0
 local NT_TOPIC = "xyro-presence-k2m9x7q" -- anonymous presence DB: every script user heartbeats here
 local NT_BEAT_EVERY = 25 -- presence heartbeat; used to be 45s, which made newly-joined players wait up to ~75s for their tag
 local ntBeatAcc = 0
-local NT_BEAT_WINDOW = 75 -- beats every 45s, so a stopped script drops out within ~75s (no ghost tags)
+local NT_BEAT_WINDOW = 75 -- beats every 25s, so three misses are needed before someone drops off: a stopped script leaves within ~75s, and one lost beat does not blank their tag (no ghost tags, no flicker). The editor and the API use this same 75 - see Tools/test_contract.js
 local ntOnline = {} -- lowercase username -> true for everyone seen in the last few minutes
-local ntLastSource = "none" -- where the current rules came from: api | local | cdn | raw
+local ntLastSource = "none" -- where the current rules came from: api | local | cdn | raw | api (corrected a stale ...)
+local ntAppliedText = nil -- the exact JSON we last applied, to recognise a stale copy
 local ntOpts = {
 	size = 15,
 	userSize = 10,
@@ -9084,6 +9124,21 @@ local function ntFetch(manual)
 			ntLastSource = "cdn"
 		end
 	end
+	-- A raw/jsDelivr answer is a CDN's memory of the file, and right after a
+	-- publish it can still be the PREVIOUS revision. Applying that over rules we
+	-- already have is how a tag "keeps showing" an old colour: changing a rank
+	-- from support to founder (or partner to support) does not change the file's
+	-- length, so no size or timestamp check can see it. When such a copy disagrees
+	-- with what is applied - or there is nothing applied yet - the never-cached
+	-- API settles it. If the API cannot answer, the copy is trusted as before
+	-- (a database hiccup must not be able to freeze the tags).
+	if text and ntLastSource ~= "api" and (ntAppliedText == nil or text ~= ntAppliedText) then
+		local fromApi = ntFromAPI(ntHttpGet(NT_API_URL) or "")
+		if fromApi and fromApi ~= text then
+			text = fromApi
+			ntLastSource = "api (corrected a stale " .. ntLastSource .. " copy)"
+		end
+	end
 	if not text or #text == 0 then
 		return manual and "fetch failed (no HttpGet on this executor?)" or nil
 	end
@@ -9118,6 +9173,7 @@ local function ntFetch(manual)
 		return "staff only"
 	end
 	ntRules = cfg
+	ntAppliedText = text -- what we applied, so a stale copy can be recognised later
 	-- v2 wrapper: schema bump invalidates ancient disk caches exactly once,
 	-- then every later save carries the same marker
 	pcall(function()
@@ -9126,11 +9182,14 @@ local function ntFetch(manual)
 	if manual and H.notify then
 		H.notify({
 			title = "Nametags",
-			text = "loaded " .. n .. " tag rule" .. (n == 1 and "" or "s"),
+			-- the source is worth naming: "raw" or "cdn" means a cache answered,
+			-- which is the difference between "the file says that" and "a cache
+			-- thinks it does"
+			text = "loaded " .. n .. " tag rule" .. (n == 1 and "" or "s") .. " via " .. ntLastSource,
 			kind = "success",
 		})
 	end
-	return "loaded " .. n .. " tag rule" .. (n == 1 and "" or "s")
+	return "loaded " .. n .. " tag rule" .. (n == 1 and "" or "s") .. " via " .. ntLastSource
 end
 
 local function ntRuleFor(plr)

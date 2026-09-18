@@ -95,8 +95,16 @@
 
 const NODES = new Set(["staff", "cmd", "here"]);
 
-/** A presence beat is "online" while it is newer than this (seconds). */
-const PRESENCE_WINDOW = 120;
+/** A presence beat is "online" while it is newer than this (seconds).
+ *
+ *  This MUST equal the clients' own window, or the three disagree: the game
+ *  draws a player's tag until NT_BEAT_WINDOW (xyro.lua), the editor lists them
+ *  until its PRESENCE_WINDOW (index.html), and this Worker reports them running
+ *  until PRESENCE_WINDOW here. It used to be 120 against the clients' 75, so the
+ *  status page and /online kept calling someone "running now" for 45 seconds
+ *  after the game had already taken their tag away - which reads as the site
+ *  showing a ghost. Tools/test_contract.js asserts all three stay equal. */
+const PRESENCE_WINDOW = 75;
 /** Queue entries older than this are deleted (matches H.fbQueuePrune in the script). */
 const QUEUE_TTL = 600;
 /** How far into the future a timestamp may be before it is treated as junk. */
@@ -711,7 +719,10 @@ async function online(env, url) {
 	const window = Math.min(Math.max(Number(url.searchParams.get("window")) || PRESENCE_WINDOW, 5), 600);
 	const data = parseNode(await fb(env, "here"));
 	const fresh = freshOnly("here", data, window);
-	const names = Object.keys(fresh).sort((a, b) => b - a);
+	// newest beat first. This was .sort((a, b) => b - a) on the KEYS, which are
+	// usernames: subtracting strings is NaN, a comparator that returns NaN leaves
+	// the order untouched, so the "most recent first" promise was never true.
+	const names = Object.keys(fresh).sort((a, b) => fresh[b] - fresh[a]);
 	return json(env, { count: names.length, online: names, beats: fresh, window });
 }
 
