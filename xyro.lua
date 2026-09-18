@@ -9365,6 +9365,10 @@ local function ntSignature(plr, rule)
 		tostring(rule.label or ""),
 		tostring(rule.color or ""),
 		tostring(rule.textColor or ""),
+		-- userColor was missing here while textColor was present, so a rule whose
+		-- ONLY change was the @username colour kept the old one on every client
+		-- until something else forced a rebuild (a respawn or a re-execute).
+		tostring(rule.userColor or ""),
 		tostring(rule.bg or ntOpts.pillColor),
 		tostring(rule.bgTransparency or ntOpts.pillTransparency),
 		tostring(rule.image or ""),
