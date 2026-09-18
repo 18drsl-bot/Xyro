@@ -1025,6 +1025,10 @@ local function fbApplyStaff(body)
 			end
 		end
 	end
+	-- revision counter: the nametag render caches (rule lookup + rebuild
+	-- signature) key off this, so a !staffrefresh is picked up immediately
+	-- instead of being assumed static
+	H.fbStaffRev = (H.fbStaffRev or 0) + 1
 	return true
 end
 
@@ -2400,6 +2404,63 @@ local SKELETON_R15 = {
 }
 local SKELETON_POOL = 16
 
+-- PER-CHARACTER RIG CACHE -------------------------------------------------
+-- Both ESP loops used to walk the character for HumanoidRootPart / Head /
+-- Humanoid on EVERY frame: 5 FindFirstChild lookups per player per frame
+-- (plus 2 more per bone pair - 30+ extra for R15 - whenever the skeleton
+-- overlay was on). A rig only changes when the character respawns, so it is
+-- resolved once per character and reused.
+--
+-- Weak keys, and the stored table deliberately holds NO reference back to the
+-- character: a value that referenced its own key would pin every destroyed
+-- character (and its parts) in memory forever.
+local rigCache = setmetatable({}, { __mode = "k" })
+local function rigOf(ch)
+	if not ch then
+		return nil
+	end
+	local r = rigCache[ch]
+	-- hot path: one property read proves the cached rig is still the live one
+	if r and r.head and r.head.Parent == ch and r.root and r.hum then
+		return r
+	end
+	r = {
+		head = ch:FindFirstChild("Head"),
+		root = ch:FindFirstChild("HumanoidRootPart"),
+		hum = ch:FindFirstChildOfClass("Humanoid"),
+	}
+	rigCache[ch] = r
+	return r
+end
+
+-- bone pairs resolved once per rig type; cached only when every limb was
+-- found, so a half-replicated rig is retried (and a genuinely missing limb
+-- keeps the old per-frame behavior rather than silently drawing nothing)
+local boneCache = setmetatable({}, { __mode = "k" })
+local function bonesOf(ch, rigType)
+	local c = boneCache[ch]
+	if c and c.rig == rigType and c.complete then
+		return c.list
+	end
+	local rig = rigType == Enum.HumanoidRigType.R15 and SKELETON_R15 or SKELETON_R6
+	local list, complete = {}, true
+	for i = 1, #rig do
+		local a = ch:FindFirstChild(rig[i][1])
+		local b = ch:FindFirstChild(rig[i][2])
+		if not (a and b) then
+			complete = false
+		end
+		list[i] = { a, b }
+	end
+	boneCache[ch] = { rig = rigType, list = list, complete = complete }
+	return list
+end
+
+-- hoisted out of the frame loops: these differ only in the Y offset, so
+-- building them per player per frame was pure allocation churn
+local HEAD_UP = Vector3.new(0, 0.5, 0)
+local FEET_DOWN = Vector3.new(0, 3, 0)
+
 local espHost = make("ScrollingFrame", {
 	Size = UDim2.new(1, 0, 1, 0),
 	BackgroundTransparency = 1,
@@ -2551,16 +2612,17 @@ connect(RunService.RenderStepped, function()
 		return
 	end
 	local camera = workspace.CurrentCamera
+	local now = os.clock()
 	for plr, o in pairs(espObjects) do
-		local ch = plr.Character
-		local rootPart = ch and ch:FindFirstChild("HumanoidRootPart")
-		local head = ch and ch:FindFirstChild("Head")
-		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+		local rk = rigOf(plr.Character)
+		local rootPart = rk and rk.root
+		local head = rk and rk.head
+		local hum = rk and rk.hum
 		if rootPart and head and hum and hum.Health > 0 then
 			local inRange = espMaxDistance <= 0
 				or (camera.CFrame.Position - rootPart.Position).Magnitude <= espMaxDistance
-			local topPos = head.Position + Vector3.new(0, 0.5, 0)
-			local botPos = rootPart.Position - Vector3.new(0, 3, 0)
+			local topPos = head.Position + HEAD_UP
+			local botPos = rootPart.Position - FEET_DOWN
 			local top, onTop = camera:WorldToViewportPoint(topPos)
 			local bot = camera:WorldToViewportPoint(botPos)
 			if onTop and inRange then
@@ -2576,13 +2638,25 @@ connect(RunService.RenderStepped, function()
 					o.box.Visible = false
 				end
 
+				-- label text is rebuilt at most 10x/s: the string.format pair was
+				-- two allocations per player per frame to redraw digits nobody can
+				-- read at 60Hz. With distance/health off it still just uses the
+				-- name, exactly as before.
 				local label = plr.Name
-				if espDistance then
-					local dist = (camera.CFrame.Position - rootPart.Position).Magnitude
-					label = string.format("%s [%dm]", label, math.floor(dist))
-				end
-				if espHealth then
-					label = string.format("%s (%d)", label, math.floor(hum.Health))
+				if espDistance or espHealth then
+					if now - (o.labelAt or 0) >= 0.1 then
+						o.labelAt = now
+						if espDistance then
+							local dist = (camera.CFrame.Position - rootPart.Position).Magnitude
+							label = string.format("%s [%dm]", label, math.floor(dist))
+						end
+						if espHealth then
+							label = string.format("%s (%d)", label, math.floor(hum.Health))
+						end
+						o.lastLabel = label
+					else
+						label = o.lastLabel or label
+					end
 				end
 				o.name.Text = label
 				o.name.Color = ESPCOL.name
@@ -2607,11 +2681,12 @@ connect(RunService.RenderStepped, function()
 				end
 
 				if espSkeleton then
-					local rig = hum.RigType == Enum.HumanoidRigType.R15 and SKELETON_R15 or SKELETON_R6
+					-- resolved once per rig instead of 2 FindFirstChild per bone pair
+					-- per frame (30+ lookups a frame for an R15 rig)
+					local pairs2 = bonesOf(plr.Character, hum.RigType)
 					local used = 0
-					for _, pair in ipairs(rig) do
-						local a = ch:FindFirstChild(pair[1])
-						local b = ch:FindFirstChild(pair[2])
+					for pi = 1, #pairs2 do
+						local a, b = pairs2[pi][1], pairs2[pi][2]
 						if a and b then
 							local pa, va = camera:WorldToViewportPoint(a.Position)
 							local pb, vb = camera:WorldToViewportPoint(b.Position)
@@ -2657,13 +2732,16 @@ connect(RunService.RenderStepped, function()
 	local camera = workspace.CurrentCamera
 	local vp = camera.ViewportSize
 	for plr, o in pairs(espObjects) do
+		-- same cached rig as the box loop: no FindFirstChild per frame here.
+		-- `ch` is still needed: the chams Highlight is parented to the character.
 		local ch = plr.Character
-		local root = ch and ch:FindFirstChild("HumanoidRootPart")
-		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+		local rk = rigOf(ch)
+		local root = rk and rk.root
+		local hum = rk and rk.hum
 		local alive = root and hum and hum.Health > 0
 
 		if espTracer and alive then
-			local feet, onScreen = camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
+			local feet, onScreen = camera:WorldToViewportPoint(root.Position - FEET_DOWN)
 			if onScreen then
 				o.tracer.Color = ESPCOL.tracer
 				o.tracer.From = Vector2.new(vp.X / 2, vp.Y)
@@ -8534,6 +8612,11 @@ local function ntTextWidth(text, size, font)
 	return math.max(24, #text * size * 0.55)
 end
 
+-- bumped every time a published option set is applied. The per-player render
+-- caches below key off it, so "the config changed" is distinguishable from
+-- "nothing changed" without rebuilding any strings.
+local ntOptRev = 0
+
 local function ntApplyOptions(o)
 	ntOpts.size = math.clamp(tonumber(o.size) or 15, 8, 48)
 	ntOpts.userSize = math.clamp(tonumber(o.userSize) or 10, 8, 24)
@@ -8569,6 +8652,7 @@ local function ntApplyOptions(o)
 	-- how often rules are re-checked, seconds (floor of 10 keeps the
 	-- fetch chain polite even if someone publishes a silly value)
 	NT_FETCH_EVERY = math.clamp(tonumber(o.refreshSeconds) or 15, 10, 300)
+	ntOptRev += 1
 end
 
 -- your tag is saved to disk after every successful fetch and re-applied
@@ -8761,8 +8845,42 @@ end
 -- rule lookup. Tags come ONLY from the published nametags.json rules -
 -- no built-in fallback tag for yourself (it used to auto-tag you with your
 -- display name when no rule matched, ignoring the website config)
+--
+-- MEMOISED. This ran per player per frame from the render loop, and each call
+-- cost two :lower() allocations for the names, a blacklist lookup (another
+-- :lower()), then a :lower() of every rule's match string until one hit. The
+-- answer only changes when the rule list, the player's names, or the staff/
+-- blacklist revision changes - so it is cached against exactly those.
+--
+-- Weak keys, and no reference back to the player is stored, so a departed
+-- player cannot be pinned in memory by their own cache entry.
+local ntNameKeys = setmetatable({}, { __mode = "k" })
+local ntMemos = setmetatable({}, { __mode = "k" })
+
+local function ntNameKey(plr)
+	local k = ntNameKeys[plr]
+	if k == nil then
+		k = ntNormalize(plr.Name)
+		ntNameKeys[plr] = k
+	end
+	return k
+end
+
+local function ntMemoFor(plr)
+	local staffRev = H.fbStaffRev or 0
+	local name, dn = plr.Name, plr.DisplayName
+	local m = ntMemos[plr]
+	if m and m.rules == ntRules and m.rev == staffRev and m.name == name and m.dn == dn then
+		return m
+	end
+	m = { rules = ntRules, rev = staffRev, name = name, dn = dn, key = ntNameKey(plr) }
+	m.rule = ntRuleFor(plr)
+	ntMemos[plr] = m
+	return m
+end
+
 local function ntRuleForPlayer(plr)
-	return ntRuleFor(plr)
+	return ntMemoFor(plr).rule
 end
 
 local function ntHideAll()
@@ -8797,6 +8915,26 @@ local function ntAttachPart(character)
 		end
 	end
 	return nil
+end
+
+-- MEMOISED attach part. ntAttachPart walks up to 5 FindFirstChild calls (and
+-- in the worst case allocates a GetChildren array) and the render loop called
+-- it for every player every frame. The answer only changes when the character
+-- changes, so it is cached per character - weak keys, and the cached table
+-- holds no reference back to the character, so nothing is pinned.
+local ntHeadCache = setmetatable({}, { __mode = "k" })
+local function ntAttachPartCached(character)
+	if not character then
+		return nil
+	end
+	local c = ntHeadCache[character]
+	-- one property read proves the cached part still belongs to this character
+	if c and c.Parent == character then
+		return c
+	end
+	local part = ntAttachPart(character)
+	ntHeadCache[character] = part
+	return part
 end
 
 -- head mounts higher than torso parts so the tag never clips the body
@@ -8881,6 +9019,22 @@ local function ntSignature(plr, rule)
 		tostring(plr.DisplayName),
 		tostring(plr.Name),
 	}, "|")
+end
+
+-- the rebuild signature ("did anything the pill draws from change?") is a
+-- ~28-field concat - about 28 allocations per player per frame before this.
+-- It now rebuilds only when the resolved rule, the options revision or the
+-- staff revision moves. ntSignature reads ntIsStaff and ntBadgeRankColor,
+-- both fed from staff.json, which is why the staff revision is part of the
+-- memo invalidation in ntMemoFor above.
+local function ntSignatureMemo(plr, rule, memo)
+	if memo.sig ~= nil and memo.sigRule == rule and memo.sigRev == ntOptRev then
+		return memo.sig
+	end
+	memo.sig = ntSignature(plr, rule)
+	memo.sigRule = rule
+	memo.sigRev = ntOptRev
+	return memo.sig
 end
 
 local ntEnsureDirDone = false
@@ -10406,10 +10560,13 @@ connect(RunService.RenderStepped, function(dt)
 	end
 	for _, plr in ipairs(ntPlayers) do
 		do -- includes self: your own pill renders above your head too
+			-- memoised per player: rule + lowercase name (was: 2 :lower() plus a
+			-- blacklist lookup plus a rule sweep, every frame for every player)
+			local memo = ntMemoFor(plr)
 			local ch = plr.Character
-			local head = ntAttachPart(ch)
-			local rule = ntRuleForPlayer(plr)
-			local known = (not ntOpts.onlyScriptUsers) or ntOnline[ntNormalize(plr.Name)] ~= nil
+			local head = ntAttachPartCached(ch)
+			local rule = memo.rule
+			local known = (not ntOpts.onlyScriptUsers) or ntOnline[memo.key] ~= nil
 			local want = rule ~= nil and known
 			local o = ntTags[plr]
 
@@ -10417,7 +10574,7 @@ connect(RunService.RenderStepped, function(dt)
 			-- rule changed. Rebuilds past the per-frame budget wait for a later
 			-- frame; the old pill stays visible until its replacement is ready
 			local fresh = o and o.gui and o.gui.Parent and o.head == head
-			local dirty = want and head ~= nil and not (fresh and o.sig == ntSignature(plr, rule))
+			local dirty = want and head ~= nil and not (fresh and o.sig == ntSignatureMemo(plr, rule, memo))
 			if dirty and ntBuildLeft > 0 then
 				ntBuildLeft -= 1
 				ntRemove(plr)
