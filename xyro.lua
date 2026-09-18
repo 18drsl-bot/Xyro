@@ -795,6 +795,19 @@ H.HS = game:GetService("HttpService")
 -- the repo config, e.g. for a private test database.
 H.FIREBASE_URL = "" -- e.g. "https://your-db-default-rtdb.firebaseio.com"
 H.FIREBASE_AUTH = "" -- optional: database secret (only if rules require auth)
+-- Xyro API (the Cloudflare Worker in api/ - see api/README.md). When api.json
+-- in the repo root has a url, the script talks to the Worker instead of the
+-- database: the database secret stays on the server, the rules can be closed
+-- to the public, and no client ever ships a database credential. api.json is
+-- read at boot exactly like firebase.json, so turning the API on or off is a
+-- repo commit - never a script edit. Empty url = talk to the database directly
+-- (the original behaviour).
+H.API_URL = "" -- e.g. "https://xyro-api.you.workers.dev"
+H.API_KEY = "" -- sent as x-api-key, and ?key= for plain game:HttpGet
+H.API_MODE = false -- true once api.json points somewhere
+-- the direct database address, remembered so an unreachable API can fall back
+H.FB_DIRECT_URL = ""
+H.FB_DIRECT_AUTH = ""
 H.NT_RANKS = H.NT_RANKS or {} -- nametag rank tiers (filled from staff.json "ranks")
 -- blacklist: <id or username> -> reason. Filled from staff.json's "blacklist"
 -- (see fbApplyStaff). Read-only for clients ON PURPOSE: if clients could write
@@ -837,7 +850,7 @@ local function fbHttpGet(url)
 	end
 	local req = (syn and syn.request) or http_request or request
 	if req then
-		local ok2, resp = pcall(req, { Url = url, Method = "GET" })
+		local ok2, resp = pcall(req, { Url = url, Method = "GET", Headers = H.fbHeaders(url) })
 		if ok2 and resp and type(resp.Body) == "string" and resp.Body ~= "" then
 			return resp.Body
 		end
@@ -845,11 +858,141 @@ local function fbHttpGet(url)
 	return nil
 end
 
+-- exported because the blocks that read presence and poll the queue live far
+-- enough down the file that a bare local from up here is not reliably in scope
+-- (the same trap that produced the old "attempt to call a nil value" errors)
+H.fbGet = fbHttpGet
+
+-- ------------------------------------------------------------- Xyro API --
+-- The script can talk to a Cloudflare Worker (api/worker.js) instead of the
+-- database directly. Two things change: the active base becomes the Worker,
+-- and the credential moves from "?auth=<database secret>" to a key. Everything
+-- else - nodes, shapes, polling, dedupe - is identical, because the Worker
+-- serves the same paths the Realtime Database REST API serves.
+--
+-- What the Worker buys:
+--   * the database secret never ships inside a public script
+--   * the database rules can be closed to the public; only the Worker has a key
+--   * one place to add auth, caching, rate limits and logging later
+-- What it does NOT buy: a key inside a Lua client is still extractable. See
+-- api/README.md - anything that must be trustworthy has to be authorized
+-- server-side, not by whatever key the client happens to carry.
+H.fbUseApi = function(url, key)
+	url = tostring(url or ""):gsub("/+$", "")
+	if url == "" then
+		return false
+	end
+	H.API_URL = url
+	H.API_KEY = tostring(key or "")
+	H.API_MODE = true
+	H.FIREBASE_URL = url -- every existing guard and URL builder keeps working
+	H.FIREBASE_AUTH = ""
+	return true
+end
+
+-- the direct database address, remembered separately so an unreachable API can
+-- fall back to it (only useful while the rules still allow anonymous access)
+H.fbSetDirect = function(url, auth)
+	url = tostring(url or ""):gsub("/+$", "")
+	if url == "" then
+		return
+	end
+	H.FB_DIRECT_URL = url
+	H.FB_DIRECT_AUTH = tostring(auth or "")
+	if not H.API_MODE then
+		H.FIREBASE_URL = url
+		H.FIREBASE_AUTH = H.FB_DIRECT_AUTH
+	end
+end
+
+local function fbActiveQuery()
+	if H.API_MODE then
+		-- ?key= works everywhere: game:HttpGet cannot set headers, so the key
+		-- has to be accepted in the query string as well
+		return H.API_KEY ~= "" and ("?key=" .. H.HS:UrlEncode(H.API_KEY)) or ""
+	end
+	return H.FIREBASE_AUTH ~= "" and ("?auth=" .. H.FIREBASE_AUTH) or ""
+end
+
+-- the ONE place that builds a node URL: "<base>/<path>.json<query>"
+H.fbUrl = function(path)
+	local base = tostring(H.FIREBASE_URL or ""):gsub("/+$", "")
+	if base == "" then
+		return ""
+	end
+	return base .. "/" .. path .. fbActiveQuery()
+end
+
+-- request headers for a node URL: the key rides in a header whenever the
+-- executor supports one, and in the query string otherwise. Both are always
+-- present because every URL is built by H.fbUrl.
+H.fbHeaders = function(url)
+	local headers = { ["Content-Type"] = "application/json" }
+	if H.API_MODE and H.API_KEY ~= "" and #tostring(H.API_URL or "") > 0 and type(url) == "string" and url:sub(1, #H.API_URL) == H.API_URL then
+		headers["x-api-key"] = H.API_KEY
+	end
+	return headers
+end
+
+-- The API is a single point of failure the database was not, so a few
+-- consecutive failures demote this client to the direct database address (when
+-- one is known). A success resets the counter, so a one-off blip does not send
+-- everybody back to the raw database.
+local fbApiFails = 0
+H.fbNoteResult = function(ok)
+	if not H.API_MODE then
+		return
+	end
+	if ok then
+		fbApiFails = 0
+		return
+	end
+	fbApiFails += 1
+	if fbApiFails >= 3 and H.FB_DIRECT_URL ~= "" then
+		H.API_MODE = false
+		H.FIREBASE_URL = H.FB_DIRECT_URL
+		H.FIREBASE_AUTH = H.FB_DIRECT_AUTH
+		warn("[Xyro] API unreachable - using the database directly")
+	end
+end
+
+-- GitHub's contents API wraps a file in JSON: pull the base64 payload out.
+-- JSON-DECODE the wrapper FIRST (never regex the raw payload): the API's
+-- newlines inside the content string are escaped as literal backslash-n runs,
+-- and 'n' is a legal base64 char - strip-then-decode silently corrupts the
+-- data. Decoding turns those into real newlines the cleaners then handle.
+local function fbApiUnwrap(body)
+	if type(body) ~= "string" or not body:find('"content"', 1, true) then
+		return body
+	end
+	local okA, parsed = pcall(H.HS.JSONDecode, H.HS, body)
+	if not (okA and type(parsed) == "table" and type(parsed.content) == "string" and #parsed.content > 8) then
+		return body
+	end
+	local b64 = parsed.content:gsub("%s", "")
+	local decoded = nil
+	pcall(function()
+		if syn and syn.crypt and syn.crypt.base64decode then
+			decoded = syn.crypt.base64decode(b64)
+		elseif type(crypt) == "table" and crypt.base64decode then
+			decoded = crypt.base64decode(b64)
+		else
+			decoded = H.HS:Base64Decode(b64)
+		end
+	end)
+	if type(decoded) == "string" and decoded ~= "" then
+		return decoded
+	end
+	return body
+end
+
 -- read firebase.json from the repo (GitHub API first - never cached - then
 -- raw with a cache-buster, then jsDelivr edge). Returns url + optional auth.
 local function fbLoadRepoConfig()
-	if H.FIREBASE_URL ~= "" then
-		return -- an explicit script-level URL always wins
+	-- an explicit script-level URL wins over the repo file, but API mode was
+	-- already decided by api.json and must not be overwritten here
+	if H.FIREBASE_URL ~= "" and not H.API_MODE then
+		return
 	end
 	local busters = "?t=" .. tostring(os.time())
 	local sources = {
@@ -860,49 +1003,18 @@ local function fbLoadRepoConfig()
 	for _, url in ipairs(sources) do
 		local body = fbHttpGet(url)
 		if type(body) == "string" and body ~= "" then
-			-- GitHub API wraps the file in JSON: pull out the base64 content.
-			-- JSON-DECODE the wrapper FIRST (never regex the raw payload): the
-			-- API's newlines inside the content string are escaped as literal
-			-- backslash-n runs, and 'n' is a legal base64 char - strip-then-decode
-			-- silently corrupts the data. Decoding turns those into real newlines
-			-- that the base64 cleaners then handle. Same lesson loadstring.lua
-			-- already learned.
-			local apiMeta = nil
-			if body:find('"content"', 1, true) then
-				local okA, parsed = pcall(H.HS.JSONDecode, H.HS, body)
-				if okA and type(parsed) == "table" and type(parsed.content) == "string" and #parsed.content > 8 then
-					apiMeta = parsed
-				end
-			end
-			if apiMeta then
-				local b64 = apiMeta.content:gsub("%s", "")
-				local decoded = nil
-				pcall(function()
-					if syn and syn.crypt and syn.crypt.base64decode then
-						decoded = syn.crypt.base64decode(b64)
-					elseif type(crypt) == "table" and crypt.base64decode then
-						decoded = crypt.base64decode(b64)
-					else
-						decoded = H.HS:Base64Decode(b64)
-					end
-				end)
-				if type(decoded) == "string" and decoded ~= "" then
-					body = decoded
-				end
-			end
+			-- GitHub API wraps the file in JSON: see fbApiUnwrap
+			body = fbApiUnwrap(body)
 			local okJ, data = pcall(H.HS.JSONDecode, H.HS, body)
 			if okJ and type(data) == "table" then
 				local fb = data.firebase or data -- accept both {"firebase":{...}} and flat
 				if type(fb) == "table" and type(fb.url) == "string" and fb.url ~= "" then
-					H.FIREBASE_URL = fb.url
-					if type(fb.auth) == "string" then
-						H.FIREBASE_AUTH = fb.auth
-					end
+					H.fbSetDirect(fb.url, type(fb.auth) == "string" and fb.auth or "")
 					return
 				end
 			elseif okJ == false and body:sub(1, 8) == "https://" then
 				-- bare URL body: the whole file is just the database URL
-				H.FIREBASE_URL = (body:gsub("%s+", ""))
+				H.fbSetDirect((body:gsub("%s+", "")), "")
 				return
 			end
 			-- a real firebase.json exists (we fetched a 200): stop after the
@@ -914,11 +1026,48 @@ local function fbLoadRepoConfig()
 end
 
 local function fbStaffUrl()
-	local base = tostring(H.FIREBASE_URL or ""):gsub("/+$", "")
-	if base == "" then
-		return nil
+	local url = H.fbUrl("staff.json")
+	return url ~= "" and url or nil
+end
+
+-- api.json in the repo root points clients at the Cloudflare Worker:
+--   { "api": { "url": "https://xyro-api.you.workers.dev", "key": "..." } }
+-- No file (or an empty url) keeps the direct-database behaviour, so rolling the
+-- API out - or rolling it back - is one repo commit and zero script edits.
+-- Same source order as firebase.json: the GitHub API is never CDN-cached, then
+-- raw with a cache-buster, then the jsDelivr edge.
+--
+-- The key ends up in a public repo file, on purpose: it gates reads and stops
+-- casual scraping, while the thing that actually matters - access to the
+-- database - stays in the Worker's environment. See api/README.md.
+local function apiLoadRepoConfig()
+	if H.API_URL ~= "" then
+		return
 	end
-	return base .. "/staff.json" .. (H.FIREBASE_AUTH ~= "" and ("?auth=" .. H.FIREBASE_AUTH) or "")
+	local busters = "?t=" .. tostring(os.time())
+	local sources = {
+		"https://api.github.com/repos/vertxxy-1/Xyro/contents/api.json",
+		"https://raw.githubusercontent.com/vertxxy-1/Xyro/main/api.json" .. busters,
+		"https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/api.json",
+	}
+	for _, url in ipairs(sources) do
+		local body = fbHttpGet(url)
+		if type(body) == "string" and body ~= "" then
+			body = fbApiUnwrap(body)
+			local okJ, data = pcall(H.HS.JSONDecode, H.HS, body)
+			if okJ and type(data) == "table" then
+				local api = data.api or data -- accept {"api":{...}} and flat
+				if type(api) == "table" and type(api.url) == "string" and api.url ~= "" then
+					H.fbUseApi(api.url, api.key)
+				end
+			elseif okJ == false and body:sub(1, 8) == "https://" then
+				H.fbUseApi(body, "")
+			end
+			-- stop after the first source that answers, even if unusable, so a
+			-- stale mirror can't be second-guessed by a fresher one
+			return
+		end
+	end
 end
 
 -- accepts {"ids":{"8579040069":true}, "usernames":{"x9ksa":true}}
@@ -1154,6 +1303,7 @@ function H.blacklistShutdown()
 	end)
 end
 
+pcall(apiLoadRepoConfig) -- repo api.json -> talk to the Cloudflare Worker
 pcall(fbLoadRepoConfig) -- repo firebase.json -> FIREBASE_URL (no script edits needed)
 pcall(fbFetchStaffOnce) -- boot-time sync fetch; failing just means offline defaults
 
@@ -1178,19 +1328,21 @@ end
 -- entries older than the window. No quotas, works on every executor with
 -- HttpGet (requests use PUT/POST through the same helper pool).
 if tostring(H.FIREBASE_URL or "") ~= "" then
-	local fbBase = tostring(H.FIREBASE_URL):gsub("/+$", "")
-	local fbAuth = H.FIREBASE_AUTH ~= "" and ("?auth=" .. H.FIREBASE_AUTH) or ""
-
+	-- every URL below is built by H.fbUrl, so each one carries the right base
+	-- AND the right credential for the mode we are in (API key vs db secret)
 	local function fbReq(method, url, body)
 		local req = (syn and syn.request) or http_request or request
 		if req then
-			local ok, resp = pcall(req, { Url = url, Method = method, Body = body, Headers = { ["Content-Type"] = "application/json" } })
+			local ok, resp = pcall(req, { Url = url, Method = method, Body = body, Headers = H.fbHeaders(url) })
 			if ok and resp then
 				local code = tonumber(resp.StatusCode or resp.status or resp.code)
 				-- no status field = can't verify; assume success (better than
 				-- false-negatives pushing everything onto the dead ntfy path)
-				return code == nil or (code >= 200 and code < 300)
+				local okStatus = code == nil or (code >= 200 and code < 300)
+				H.fbNoteResult(okStatus)
+				return okStatus
 			end
+			H.fbNoteResult(false)
 			return false
 		end
 		-- last resort: executor HttpPost (POST only; used for ntfy fallback)
@@ -1198,8 +1350,10 @@ if tostring(H.FIREBASE_URL or "") ~= "" then
 			local okP = pcall(function()
 				game:HttpPost(url, body or "")
 			end)
+			H.fbNoteResult(okP)
 			return okP
 		end
+		H.fbNoteResult(false)
 		return false
 	end
 
@@ -1228,12 +1382,10 @@ if tostring(H.FIREBASE_URL or "") ~= "" then
 
 	H.fbQueuePost = function(node, value)
 		local key = fbRandKey()
-		local url = fbBase .. "/" .. node .. "/" .. key .. ".json" .. fbAuth
-		local ok = fbReq("PUT", url, '"' .. tostring(value) .. '"')
+		local ok = fbReq("PUT", H.fbUrl(node .. "/" .. key .. ".json"), '"' .. tostring(value) .. '"')
 		if not ok then
 			task.wait(0.5)
-			url = fbBase .. "/" .. node .. "/" .. fbRandKey() .. ".json" .. fbAuth
-			ok = fbReq("PUT", url, '"' .. tostring(value) .. '"')
+			ok = fbReq("PUT", H.fbUrl(node .. "/" .. fbRandKey() .. ".json"), '"' .. tostring(value) .. '"')
 		end
 		return ok
 	end
@@ -1243,7 +1395,7 @@ if tostring(H.FIREBASE_URL or "") ~= "" then
 	-- as fresh when now - value <= window. Roblox usernames are [A-Za-z0-9_]
 	-- so they're safe as Firebase keys unescaped.
 	H.fbStatePut = function(node, key, sec)
-		local url = fbBase .. "/" .. node .. "/" .. key .. ".json" .. fbAuth
+		local url = H.fbUrl(node .. "/" .. key .. ".json")
 		local ok = fbReq("PUT", url, tostring(tonumber(sec) or 0))
 		if not ok then
 			task.wait(0.5)
@@ -1261,7 +1413,7 @@ if tostring(H.FIREBASE_URL or "") ~= "" then
 		olderThan = tonumber(olderThan) or 600
 		local now = os.time()
 		-- cmd: append-style keys "<sec>-<rand>" -> the key carries the age
-		local body = fbHttpGet(fbBase .. "/cmd.json" .. fbAuth)
+		local body = fbHttpGet(H.fbUrl("cmd.json"))
 		if body and body ~= "null" and #body > 2 then
 			local okD, data = pcall(H.HS.JSONDecode, H.HS, body)
 			if okD and type(data) == "table" then
@@ -1270,20 +1422,20 @@ if tostring(H.FIREBASE_URL or "") ~= "" then
 					-- also drop keys timestamped far in the FUTURE: (now - sec) is negative
 					-- for those, so they never aged out and sat in the queue forever
 					if sec and ((now - sec) > olderThan or (sec - now) > 600) then
-						fbReq("DELETE", fbBase .. "/cmd/" .. key .. ".json" .. fbAuth)
+						fbReq("DELETE", H.fbUrl("cmd/" .. key .. ".json"))
 					end
 				end
 			end
 		end
 		-- here: values ARE the timestamps
-		local hb = fbHttpGet(fbBase .. "/here.json" .. fbAuth)
+		local hb = fbHttpGet(H.fbUrl("here.json"))
 		if hb and hb ~= "null" and #hb > 2 then
 			local okD2, data2 = pcall(H.HS.JSONDecode, H.HS, hb)
 			if okD2 and type(data2) == "table" then
 				for key, value in pairs(data2) do
 					local sec = tonumber(value)
 					if sec and (now - sec) > olderThan then
-						fbReq("DELETE", fbBase .. "/here/" .. key .. ".json" .. fbAuth)
+						fbReq("DELETE", H.fbUrl("here/" .. key .. ".json"))
 					end
 				end
 			end
@@ -10388,9 +10540,7 @@ local function ntBeatsFromFirebase()
 	if not (H.fbQueuePost and H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "") then
 		return nil
 	end
-	local fbBase = tostring(H.FIREBASE_URL):gsub("/+$", "")
-	local fbAuth = H.FIREBASE_AUTH ~= "" and ("?auth=" .. H.FIREBASE_AUTH) or ""
-	local body = ntHttpGet(fbBase .. "/here.json" .. fbAuth)
+	local body = H.fbGet(H.fbUrl("here.json"))
 	if body == nil or body == "" then
 		return nil -- read genuinely failed: caller falls back to ntfy
 	end
@@ -14486,7 +14636,7 @@ do
 	-- unfalsifiable before this: staff/ntfy quota exhaustion, an unpublished
 	-- Firebase rule and a url typo all looked like a silent no-op.
 	local transport = {
-		mode = (H.fbQueuePost and H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "") and "firebase" or "ntfy",
+		mode = (H.fbQueuePost and H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "") and (H.API_MODE and "api" or "firebase") or "ntfy",
 		lastPollOk = false,
 		lastPoll = 0,
 		-- why the last read failed, when Firebase tells us ("Permission denied")
@@ -14831,10 +14981,8 @@ do
 	local startedAt = os.time() - 5
 	local fbReadCmd = nil
 	if H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "" then
-		local fbBase = tostring(H.FIREBASE_URL):gsub("/+$", "")
-		local fbAuth = H.FIREBASE_AUTH ~= "" and ("?auth=" .. H.FIREBASE_AUTH) or ""
 		fbReadCmd = function()
-			local body = ntHttpGet(fbBase .. "/cmd.json" .. fbAuth)
+			local body = H.fbGet(H.fbUrl("cmd.json"))
 			if body == nil or body == "" then
 				transport.lastPollOk = false -- read failed: footer will say so
 				transport.lastPollErr = nil

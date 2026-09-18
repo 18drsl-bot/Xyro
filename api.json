@@ -1,0 +1,7 @@
+{
+	"api": {
+		"_comment": "Xyro API - the Cloudflare Worker in api/ (see api/README.md). Paste your Worker URL here to route the staff list, the command queue and presence through it, so the database secret stays server-side and the database rules can be closed to the public. An empty url keeps the direct Firebase behaviour. The key is sent by clients and is public by design - it gates reads; the database credential never leaves the Worker.",
+		"url": "",
+		"key": ""
+	}
+}

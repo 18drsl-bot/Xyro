@@ -609,9 +609,31 @@ const RAW = "https://raw.githubusercontent.com/" + REPO + "/main/" + PATH;
 /* live players now come from Firebase (here/<username> = unix seconds), the
    ntfy presence topic is only a fallback - mirrors NT_BEAT_WINDOW in xyro.lua */
 const FB_BASE = "https://xyro-fcaf8-default-rtdb.firebaseio.com";
-const FB_HERE = FB_BASE + "/here.json";
-const FB_STAFF = FB_BASE + "/staff.json";
+/* The Xyro API (the Cloudflare Worker in api/ - see api/README.md) can front the
+   database instead of talking to it directly: api.json in the repo points
+   clients at it. Read once at startup; missing/empty leaves these on Firebase,
+   so the editor works with or without the API deployed. Its key is public on
+   purpose - it gates reads, and the database credential stays server-side. */
+let FB_HERE = FB_BASE + "/here.json";
+let FB_STAFF = FB_BASE + "/staff.json";
 const PRESENCE_WINDOW = 75;
+/* cache-buster that works whether or not the URL already carries ?key=... */
+const stamp = u => u + (u.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
+
+(async function followApi() {
+	try {
+		const res = await fetch("https://raw.githubusercontent.com/" + REPO + "/main/api.json?t=" + Date.now(), { cache: "no-store" });
+		if (!res.ok) return;
+		const parsed = await res.json();
+		const api = parsed && typeof parsed === "object" ? (parsed.api || parsed) : null;
+		if (!api || typeof api.url !== "string" || !api.url.trim()) return;
+		const base = api.url.trim().replace(/\/+$/, "");
+		const key = typeof api.key === "string" && api.key ? "?key=" + encodeURIComponent(api.key) : "";
+		FB_HERE = base + "/here.json" + key;
+		FB_STAFF = base + "/staff.json" + key;
+		console.info("[xyro] live users + staff via the Xyro API:", base);
+	} catch {}
+})();
 
 const $ = id => document.getElementById(id);
 let live = null;          // last published state from GitHub {options, tags}
@@ -1234,7 +1256,7 @@ let blacklistAt = 0;
 async function refreshBlacklist() {
 	if (blacklistAt && Date.now() - blacklistAt < 300000) return;
 	try {
-		const res = await fetch(FB_STAFF + "?t=" + Date.now(), { cache: "no-store" });
+		const res = await fetch(stamp(FB_STAFF), { cache: "no-store" });
 		if (!res.ok) return;
 		const data = await res.json();
 		const bl = data && (data.blacklist || data.blocked);
@@ -1259,7 +1281,7 @@ async function pollUsers() {
 		   list while players were in fact online. ntfy stays as a fallback so
 		   the card never goes dark if the database is unreachable. */
 		try {
-			const res = await fetch(FB_HERE + "?t=" + Date.now(), { cache: "no-store" });
+			const res = await fetch(stamp(FB_HERE), { cache: "no-store" });
 			if (res.ok) {
 				const data = await res.json();
 				const nowSec = Math.floor(Date.now() / 1000);

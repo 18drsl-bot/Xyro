@@ -206,8 +206,26 @@ a password — the open-read rules avoid the issue entirely.
 - A blacklisted account is refused before any feature mounts, so it never even
   reaches the point of showing a window.
 
+## Hardening it later: the Xyro API (optional)
+
+The rules above let anonymous clients read the staff node and write the `cmd` /
+`here` nodes. That is what makes the script work with no setup, but it also means
+anyone holding the database URL — it is in `firebase.json`, in a public repo —
+can read your admin list and blacklist.
+
+The repo includes a Cloudflare Worker (`api/`) that sits in front of the
+database: clients talk to the Worker, the Worker holds the database credential,
+and the rules can then be closed to the public. Point clients at it by filling in
+`api.json` in the repo root; nothing about the nodes or their shapes changes,
+and an empty `api.json` url keeps today's direct behaviour.
+
+→ **[api/README.md](api/README.md)** — deploy, secrets, routes, and the
+database-lockdown steps (including what to do if your project has no legacy
+database secret).
+
 ## What the script sends
-- `GET https://<your-db>/staff.json` at launch (and on `!staffrefresh`).
+- `GET https://<your-db>/staff.json` at launch (and on `!staffrefresh`) — or
+  `GET https://<your-worker>/staff.json` when `api.json` points at the API.
 - **Staff commands + presence beats** write to `cmd/` and `here/` (see the
   rules in step 2). `here` stores only `username = last-seen` and old entries
   are pruned automatically; `cmd` entries self-expire after 10 minutes.

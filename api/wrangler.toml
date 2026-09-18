@@ -1,0 +1,20 @@
+name = "xyro-api"
+main = "worker.js"
+compatibility_date = "2026-09-17"
+workers_dev = true
+
+# Public configuration. Nothing secret belongs in this file - the database URL
+# is already public in the repo's firebase.json, so it is safe here.
+[vars]
+FB_URL     = "https://xyro-fcaf8-default-rtdb.firebaseio.com"
+RAW_REPO   = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main"
+ALLOW_ORIGIN = "*"
+
+# Secrets - set these with the CLI, they are stored encrypted in Cloudflare and
+# are never written to this file or to the repo:
+#
+#   npx wrangler secret put XYRO_KEY     # the key clients and the bot send
+#   npx wrangler secret put FB_SECRET    # only if your database rules need it
+#
+# Watch requests and errors live while testing:
+#   npx wrangler tail

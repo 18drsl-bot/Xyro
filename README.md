@@ -149,6 +149,28 @@ on purpose (otherwise anyone could blacklist a rival), so it is managed in the
 Firebase console; `!staffrefresh` picks changes up instantly, and `!blocked`
 prints the current list in game.
 
+### Optional: put it behind your own API (Cloudflare Worker)
+
+Firebase works fine on its own, but every client then talks to the database
+directly — so the database URL ships inside a public script and the rules have to
+stay open enough for anonymous clients to read *and write*. The repo also
+contains a small Cloudflare Worker (`api/`) that can front the repo and the
+database:
+
+* the database credential lives in a Cloudflare secret, never in a client;
+* reads, caching and queue pruning happen in one place you control;
+* writes are validated, rate-limited and correctly status-coded (the raw
+  Realtime Database answers a *refused* write with HTTP 200 and an error body);
+* the script falls back to the direct database on its own if the Worker is
+  unreachable, and the staff panel footer shows which path is live.
+
+Deploy it, set two secrets, paste the URL into **`api.json`** in the repo root —
+no Lua edits, and setting `"url": ""` again rolls the whole thing back.
+
+→ **Full walkthrough: [api/README.md](api/README.md)** — five-minute deploy, the
+complete route list, and an honest section on what a client-side key does and
+does not protect.
+
 ---
 
 ## Controlling nametags from a Discord bot
