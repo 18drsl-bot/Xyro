@@ -80,6 +80,47 @@ function repoFile(pathname) {
 /* the nametag system: the rules the API hosts, plus the repo-side token path */
 let nametagsFixture = JSON.stringify({ options: { collapseFar: true }, tags: [{ label: "FOUNDER" }] });
 let githubSha = "sha-1";
+
+/* A stand-in for the D1 binding, reproducing the ONE statement the Worker
+ * issues: insert when the row is absent, update only when `rev` still matches.
+ * A mock that ignored the WHERE would pass while the real thing clobbered a
+ * newer revision - which is the entire point of the guard. */
+function newDb(opts = {}) {
+	const state = { body: null, rev: 0 };
+	const statements = [];
+	return {
+		statements,
+		body: () => state.body,
+		rev: () => state.rev,
+		set(body, rev) { state.body = body; state.rev = rev; },
+		binding: {
+			prepare(sql) {
+				statements.push(sql);
+				/* D1 puts first()/run() on the statement AND on the bound statement
+				   (prepare(sql).first() is how a parameterless read is written), so
+				   both shapes answer here */
+				const statement = {
+					async first() {
+						if (opts.failRead) throw new Error("D1_ERROR: no such table: rules");
+						return state.body == null ? null : { body: state.body, rev: state.rev };
+					},
+					async run() {
+						if (opts.failRead) throw new Error("D1_ERROR: no such table: rules");
+						const body = args[0];
+						const expected = Number(args[args.length - 1]);
+						if (state.body == null) { state.body = body; state.rev = 1; return { meta: { changes: 1 } }; }
+						if (state.rev === expected) { state.body = body; state.rev += 1; return { meta: { changes: 1 } }; }
+						return { meta: { changes: 0 } };
+					},
+				};
+				let args = [];
+				return Object.assign(Object.create(null), statement, {
+					bind(...vals) { args = vals; return statement; },
+				});
+			},
+		},
+	};
+}
 let githubConflict = false; // simulate GitHub refusing a stale publish (409)
 const githubPuts = [];
 
@@ -604,7 +645,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("and fails closed with no publish key configured", res.status === 503, "got " + res.status);
 	res = await call("/nametags/check", { method: "POST", env: WITH_KEYS, headers: { "x-api-key": "owner" } });
 	json = await body(res);
-	ok("it names the missing repo token instead of a generic failure", res.status === 503 && json.reason === "no_gh_token" && /GH_TOKEN/.test(json.error || ""), res.status + " " + JSON.stringify(json));
+	ok("it names what is missing instead of failing generically", res.status === 503 && json.reason === "no_store" && /GH_TOKEN/.test(json.error || "") && /database/.test(json.error || ""), res.status + " " + JSON.stringify(json));
 	res = await call("/nametags/check", { method: "POST", env: OWNER, headers: { "x-api-key": "owner" } });
 	json = await body(res);
 	ok("with everything in place it reports the current file sha", res.status === 200 && json.ok === true && json.sha === githubSha, res.status + " " + JSON.stringify(json));
@@ -635,6 +676,94 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("and it cannot trip the kill switch", res.status === 403, "got " + res.status);
 	json = await body(await call("/health", { env: PUBLISHER }));
 	ok("health mentions the publish-only key", /publish-only key/.test(json.nametags.publish || ""), json.nametags.publish);
+
+	/* ------------------------------------------------- the rules database
+	 *
+	 *  The point of the table is that publishing needs NO repo token, so what
+	 *  matters here is that the guard survives the move. It is a compare-and-set
+	 *  instead of a git blob sha: the mock below reproduces the SQL semantics
+	 *  (insert when absent, update only when the revision still matches) because
+	 *  a mock that ignores the WHERE would pass while the real thing clobbered
+	 *  a newer revision.
+	 */
+	const NO_TOKEN = { ...WITH_KEYS }; // deliberately NO GH_TOKEN anywhere
+	const db = newDb();
+	const DB = { ...NO_TOKEN, xyro_tags: db.binding };
+	res = await call("/health", { env: DB });
+	json = await body(res);
+	ok("health names the rules database as the store", /database/.test(json.nametags.store || ""), json.nametags.store);
+	ok("...and says publishing needs no repo token", /no repo token needed/.test(json.nametags.publish || ""), json.nametags.publish);
+	res = await call("/health", { env: NO_TOKEN });
+	json = await body(res);
+	ok("with neither a database nor a token, health says publishing is unavailable", /unavailable/.test(json.nametags.publish || ""), json.nametags.publish);
+	// an empty table means "use the repo file", so nothing changes until a publish
+	res = await call("/nametags?fresh=1", { env: DB });
+	const seed = await res.text();
+	ok("an empty rules table falls back to the repo file", res.status === 200 && seed === nametagsFixture && res.headers.get("x-xyro-sha") !== "d1-0", "sha " + res.headers.get("x-xyro-sha"));
+
+	// the whole point: publish with the owner key and NO token at all
+	githubPuts.length = 0;
+	db.statements.length = 0;
+	const published = JSON.stringify({ options: { size: 33 }, tags: [{ match: "dbuser", label: "FROM THE DATABASE" }] });
+	res = await call("/nametags", { method: "PUT", body: published, env: DB, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("publishing with NO GH_TOKEN is accepted - the database is the store", res.status === 200 && json.ok === true, res.status + " " + JSON.stringify(json));
+	ok("...and it reports the database, not a commit", json.store === "database" && /skipped/.test(json.repo_mirror || ""), JSON.stringify(json));
+	ok("...having touched GitHub not once", githubPuts.length === 0, "github calls: " + githubPuts.length);
+	ok("...and it hands back the new revision as the guard", json.sha === "d1-1", String(json.sha));
+	const writes = db.statements.filter(s => /INSERT/.test(s));
+	ok("the guard is a single compare-and-set, not a read then a write", writes.length === 1 && /WHERE rules\.rev = \?/.test(writes[0]), JSON.stringify(db.statements));
+
+	res = await call("/nametags?fresh=1", { env: DB });
+	ok("the next read serves the stored rules, not the repo file", (await res.text()) === published, "");
+	ok("...carrying the revision", res.headers.get("x-xyro-sha") === "d1-1", res.headers.get("x-xyro-sha"));
+	res = await call("/nametags", { env: DB });
+	ok("the aliases agree", (await res.text()) === published, "");
+
+	// a tab that still holds a GIT sha (it read before the table was used) has no
+	// revision to send, so the Worker takes the current one - that must work,
+	// otherwise the first publish from an old tab would be a false conflict
+	db.set(published, 2);
+	res = await call("/nametags", { method: "PUT", body: '{"options":{},"tags":[{"label":"OLD TAB"}]}', env: DB, headers: { "x-api-key": "owner" } });
+	ok("a publish whose guard is a git sha still lands, taking the current revision", res.status === 200, "got " + res.status);
+
+	// now the guard, explicitly: read the revision, publish, then try the old one
+	const revNow = db.rev();
+	const good = await call("/nametags?sha=d1-" + revNow, { method: "PUT", body: '{"options":{},"tags":[{"label":"CURRENT"}]}', env: DB, headers: { "x-api-key": "owner" } });
+	ok("a publish carrying the current revision lands", good.status === 200, "got " + good.status);
+	const behind = await call("/nametags?sha=d1-" + revNow, { method: "PUT", body: '{"options":{},"tags":[{"label":"BEHIND"}]}', env: DB, headers: { "x-api-key": "owner" } });
+	json = await body(behind);
+	ok("a publish carrying a revision that has moved on is refused (409)", behind.status === 409, "got " + behind.status + " " + JSON.stringify(json));
+	ok("...and the rules the newer publish wrote are untouched", JSON.parse(db.body()).tags[0].label === "CURRENT", db.body());
+
+	// the editor's "Save & test", with no token anywhere in sight
+	res = await call("/nametags/check", { method: "POST", env: DB, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("Save & test says it can publish, with no repo token", res.status === 200 && json.ok === true && json.store === "database", res.status + " " + JSON.stringify(json));
+	ok("...and reports the token kind as none rather than unknown", json.token && json.token.kind === "none", JSON.stringify(json.token));
+
+	// a binding that is not applied yet must not look healthy, and must not
+	// take the tags down
+	const broken = newDb({ failRead: true });
+	res = await call("/nametags/check", { method: "POST", env: { ...NO_TOKEN, xyro_tags: broken.binding }, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("a database that does not answer is reported, with the table command", res.status === 502 && /schema\.sql/.test(json.error || ""), res.status + " " + JSON.stringify(json));
+	res = await call("/nametags?fresh=1", { env: { ...NO_TOKEN, xyro_tags: broken.binding } });
+	ok("...while reads still serve the repo copy", res.status === 200 && (await res.text()) === nametagsFixture, "got " + res.status);
+
+	// validation happens before a single row is touched
+	db.statements.length = 0;
+	res = await call("/nametags", { method: "PUT", body: '{"tags":"nope"}', env: DB, headers: { "x-api-key": "owner" } });
+	ok("a malformed publish never reaches the database", res.status === 400 && db.statements.length === 0, res.status + " " + db.statements.length);
+
+	// an optional mirror keeps the repo copy current when a token happens to exist
+	const withMirror = { ...DB, GH_TOKEN: "gh-write-token" };
+	githubPuts.length = 0;
+	res = await call("/nametags", { method: "PUT", body: '{"options":{},"tags":[{"label":"MIRRORED"}]}', env: withMirror, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("with a token set the repo is mirrored too", res.status === 200 && /committed/.test(json.repo_mirror || "") && githubPuts.length === 1, JSON.stringify(json.repo_mirror));
+	json = await body(await call("/health", { env: withMirror }));
+	ok("health says the mirror is on", /committed as well/.test(json.nametags.repo_mirror || ""), json.nametags.repo_mirror);
 
 	/* --- failure modes -------------------------------------------------- */
 	dbDenied = true;

@@ -39,5 +39,14 @@ LOADER_FILE = "custom-loader.lua"
 #                                             # back to cache-busted raw and
 #                                             # publishing stays unavailable.
 #
+# The tag rules live here once anything is published through the API. This is a
+# BINDING, not a credential: there is no token anywhere in it, which is what lets
+# publishing work with nothing but the owner key. The repo file stays the seed
+# and the fallback, so an empty table behaves exactly like today.
+[[d1_databases]]
+binding = "xyro_tags"
+database_name = "xyro-tags"
+database_id = "7eda197b-8301-4303-b37f-7a1fedaa94df"
+
 # Watch requests and errors live while testing:
 #   npx wrangler tail

@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r9</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r10</span>
 		<span class="chip" id="tokenChip" title="token status">no token</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules now (through the API when one is configured, otherwise straight from GitHub)">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -401,8 +401,8 @@
 			With a key saved, <b>Publish</b> writes through your Cloudflare Worker instead of GitHub: no GitHub
 			login in the browser, no API rate limit, and the Worker drops its own cache as part of the write, so the
 			change is live at once. It also refuses a stale publish (someone else editing meanwhile) instead of
-			overwriting them. The Worker needs one deploy-time secret for this: <b>GH_TOKEN</b>, a fine-grained repo
-			token with <b>Contents: Read and write</b> &mdash; see <b>api/README.md</b> section 7.<br>
+			overwriting them. The Worker stores the rules itself, so <b>no GitHub token is involved</b> at all &mdash;
+			if it also has a <b>GH_TOKEN</b>, your publishes are committed to the repo as well for history.<br>
 			The admin key can also trip the kill switch and edit the blacklist, and this one lives in your browser.
 			If you would rather it could do nothing but publish, set a separate <b>XYRO_PUBLISH_KEY</b> on the Worker
 			and paste that here instead. Either way it is a password: use it on your own machine.
@@ -1617,6 +1617,12 @@ $("saveOwner").onclick = async () => {
 			toast("Warning: the Worker's GH_TOKEN is a classic token" +
 				(tok.wide && tok.wide.length ? ", carrying " + tok.wide.slice(0, 5).join(", ") : "") +
 				". It cannot be limited to this repo: a leak could delete your other repositories or add an SSH key that survives rotation, not just edit tags. " + (out.warning || ""), "err", 20);
+		} else if (tok.kind === "none") {
+			/* the rules live in the API's own database, so there is no repo token
+			   to judge and nothing to warn about - say it plainly, because someone
+			   who set GH_TOKEN earlier deserves to know it is no longer needed */
+			status("owner key accepted - Publish stores the rules in the API's database, with no repo token involved", "ok");
+			toast("Ready - Publish goes through your API, and it needs no GitHub token", "ok", 6);
 		} else {
 			status("owner key accepted - Publish now writes through the API" + (out.sha ? " (file " + String(out.sha).slice(0, 7) + ")" : "") + (tok.kind === "fine-grained" ? " and the repo token is fine-grained" : ""), "ok");
 			toast("Ready - Publish goes through your API from now on", "ok");

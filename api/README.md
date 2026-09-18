@@ -396,7 +396,7 @@ So the Worker hosts all of it now, on your own domain:
 |---|---|---|
 | the rules | `GET /nametags` | 30s edge cache, `?fresh=1` for a guaranteed read |
 | the seals and badge | `GET /media/seal_founder.png`, `/media/verified_seal_blue.png` | 300s (the files are immutable once named), `?fresh=1` to override |
-| publishing | `PUT /nametags` | commits to `nametags.json` and drops the cache immediately |
+| publishing | `PUT /nametags` | writes the rules and drops the cache immediately |
 | **the tag editor** | `GET /editor` | 60s, `?fresh=1` to override; `/api.json` points a page here at itself |
 
 The editor has two homes. GitHub Pages still serves it at
@@ -420,13 +420,12 @@ editor is a public page, and a key would only stop *you* from seeing what is
 actually published. The kill switch does not cut this off either — during
 maintenance everyone should still be able to read the rules.
 
-### Publishing through the API (optional)
+### Publishing through the API (no GitHub token needed)
 
-Set `GH_TOKEN` (fine-grained token, **Contents: Read and write** on this repo)
-and the tag editor can publish without a GitHub login in the browser. In the
-editor, open the **Publish through the Xyro API** card, paste your owner key and
-press **Save & test** — from then on **Publish** goes through the Worker and the
-header chip reads `publish: API`. The same thing by hand:
+The rules live in this Worker's own database, so a publish needs nothing but the
+owner key. In the editor, open the **Publish through the Xyro API** card, paste
+your owner key and press **Save & test** — from then on **Publish** goes through
+the Worker and the header chip reads `publish: API`. The same thing by hand:
 
 ```bash
 curl -X PUT https://xyro-api.<you>.workers.dev/nametags \
@@ -437,23 +436,52 @@ curl -X PUT https://xyro-api.<you>.workers.dev/nametags \
 How the editor uses it:
 
 * **Save & test** calls `POST /nametags/check`. That route changes nothing and
-  answers the two things that actually block a publish: whether the key is
-  accepted, and whether the Worker holds a usable `GH_TOKEN`. A `503` there
-  means the key is fine but the deploy-time secret is missing, and the editor
-  keeps the key and tells you exactly that.
+  answers what actually blocks a publish: whether the key is accepted, and where
+  a publish would go. With the database bound it reports `token: none` — there
+  is no repo credential to judge — and the editor says so plainly.
 * Publishing reads `GET /nametags?fresh=1` first, which returns the rules *and*
-  the blob sha as `x-xyro-sha` (exposed for the browser). It sends that sha back
+  their revision as `x-xyro-sha` (exposed for the browser). It sends that back
   as `?sha=`, so a tab that was open while someone else published is refused
-  with `409` and merges instead of silently overwriting the newer revision.
-* It needs `XYRO_ADMIN_KEY` **or** `XYRO_PUBLISH_KEY` — the key proves it is
-  you, `GH_TOKEN` is what makes the commit possible. With no `GH_TOKEN` the
-  route answers `503` and says so rather than pretending.
-* A successful publish commits to `nametags.json` and deletes this Worker's
-  cached copies of the rules, so the next reader gets the new revision rather
-  than up to 30 seconds of the old one. The editor then reads the file back and
-  tells you whether it landed, exactly like the GitHub path.
-* `GH_TOKEN` can write to your repo, so it belongs in the secret store and
-  nowhere else — never in `wrangler.toml`, never in `api.json`.
+  with `409` and merges instead of silently overwriting the newer revision. The
+  guard is one statement — `ON CONFLICT … WHERE rules.rev = ?` — so two people
+  publishing in the same second cannot both win.
+* It needs `XYRO_ADMIN_KEY` **or** `XYRO_PUBLISH_KEY`. That is the only
+  credential involved: the database is a binding, not a secret.
+* A successful publish deletes this Worker's cached copies of the rules, so the
+  next reader gets the new revision rather than up to 30 seconds of the old one.
+
+#### Where the rules are kept
+
+The database is seeded by the repo file, not migrated from it: an empty table
+means "serve `nametags.json`", so a fresh deploy behaves exactly as before and
+the first publish through the API switches the live source. `GET /nametags`
+says which one answered, and so does `/health`:
+
+```json
+"store": "the rules database (D1; the repo file seeds it)",
+"publish": "PUT /nametags (owner key; no repo token needed)",
+"repo_mirror": "committed as well, when it works"
+```
+
+Two consequences worth knowing before you rely on it:
+
+* **Once the table has a row, the repo file no longer drives reads.** Editing
+  `nametags.json` by hand (or publishing from a copy of the editor configured
+  with a GitHub token) will not change what players see. Publish through the
+  editor, or run the `PUT` above.
+* **The repo mirror is optional.** With a `GH_TOKEN` set, every publish is also
+  committed to `nametags.json`, which is what keeps git history — the mirror
+  failing never fails the publish, because the rules are already live by then.
+  With no token there is no commit and no history, which is the trade for not
+  holding a repo credential at all.
+
+To set the database up from scratch (a fork, or a deleted binding):
+
+```bash
+npx wrangler d1 create xyro-tags        # prints the database_id for wrangler.toml
+npx wrangler d1 execute xyro-tags --remote --file schema.sql
+npx wrangler deploy
+```
 * The owner key *is* stored in your browser (that is what makes publishing
   painless). Use it on your own machine; a publish-only `XYRO_PUBLISH_KEY`
   limits what a leak of it could do.
@@ -473,8 +501,10 @@ How the editor uses it:
 | `/version` | GET | if gated | `version.txt` from the repo (edge-cached 60s) |
 | `/nametags` | GET | no | the published tag rules (edge-cached 30s; `?fresh=1` bypasses) |
 | `/nametags.json` `/config` | GET | no | the same bytes under the older names |
-| `/nametags` | PUT/POST | **owner** + `GH_TOKEN` | publish the rules: commits `nametags.json`, drops the cache, returns the new sha |
-| `/nametags/check` | POST | **owner** | "can this Worker publish?" — proves the key and the repo token, changes nothing |
+| `/nametags` | PUT/POST | **owner** | publish the rules: stores them, drops the cache, returns the new revision (commits the repo too when `GH_TOKEN` is set) |
+| `/nametags/check` | POST | **owner** | "can this Worker publish?" — proves the key and reports where a publish goes, changes nothing |
+| `/api.json` | GET | no | this origin, for a page served here to configure itself with |
+| `/editor` | GET | no | the tag editor itself (edge-cached 60s) |
 | `/media/<file>` | GET | no | seals, the verified badge and any other tag artwork (edge-cached 300s; `?fresh=1` bypasses) |
 | `/online` | GET | if gated | presence: `{count, online[], beats{}, window}` |
 | `/staff` | GET | if gated | the whole `staff` node |

@@ -733,20 +733,95 @@ async function repoBytes(env, name, bust) {
  *  Edge-cached briefly (30s) so a polling client costs almost nothing, with
  *  `?fresh=1` for the two callers who must not see a cache: opening the editor
  *  and the script's manual refresh. */
+/* ------------------------------------------------------------------- rules
+ *
+ * Where the published tag rules live, in order: this Worker's own database
+ * (D1), then the repo file.
+ *
+ * The database is what makes publishing possible WITHOUT a repo token. A git
+ * blob sha and a token exist because the rules used to be a file in a git
+ * repo; once the rules are a row in a database this Worker owns, the only
+ * credential a publish needs is the owner key the editor already has. The
+ * table starts empty, and an empty table means "use the repo file", so this is
+ * a seed-and-fallback rather than a migration: the repo copy keeps working as
+ * the origin of the rules until the first publish through the API.
+ */
+
+/** Validate a rules document before it is served OR stored. A half-valid
+ *  document is the one failure that reaches every player, so it is refused at
+ *  both ends rather than stored and served later. */
+function parseRules(text, where) {
+	let parsed = null;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		parsed = null;
+	}
+	if (!parsed || !Array.isArray(parsed.tags) || !parsed.options || typeof parsed.options !== "object") {
+		throw new ApiError(502, where + " is not {options, tags[]} (served " + text.length + " bytes)");
+	}
+	return parsed;
+}
+
+/** The rules from the database, or null when there are none yet. `rev` is the
+ *  concurrency guard: it is handed out as x-xyro-sha and sent back on a
+ *  publish, exactly like the git blob sha used to be. */
+/** The largest rules document a publish may send. See publishNametags: this is
+ *  the store's ceiling, not a preference, and exceeding it is reported with the
+ *  cause rather than an opaque failure. */
+const MAX_RULES_BYTES = 4 * 1024 * 1024;
+
+async function storedRules(env) {
+	if (!env.xyro_tags || typeof env.xyro_tags.prepare !== "function") return null;
+	const row = await env.xyro_tags.prepare("SELECT body, rev FROM rules WHERE id = 1").first();
+	if (!row || typeof row.body !== "string" || row.body === "") return null;
+	return { body: row.body, rev: Number(row.rev) || 1 };
+}
+
+/** Store the rules, but only if the row has not moved since the caller read
+ *  it. One statement, so it either lands or it does not - a stale tab cannot
+ *  overwrite a newer revision, which is the whole reason this is a single
+ *  compare-and-set instead of a read followed by a write. */
+async function storeRules(env, body, expectedRev) {
+	if (!env.xyro_tags || typeof env.xyro_tags.prepare !== "function") {
+		throw new ApiError(503, "no rules database is bound to this Worker");
+	}
+	const res = await env.xyro_tags
+		.prepare(
+			"INSERT INTO rules (id, body, rev, updated_at) VALUES (1, ?, 1, ?) " +
+			"ON CONFLICT(id) DO UPDATE SET body = excluded.body, rev = rules.rev + 1, updated_at = excluded.updated_at " +
+			"WHERE rules.rev = ?"
+		)
+		.bind(body, Math.floor(Date.now() / 1000), expectedRev)
+		.run();
+	const changed = res && res.meta ? Number(res.meta.changes) || 0 : 0;
+	return changed > 0;
+}
+
 async function serveNametags(env, ctx, url) {
 	const fresh = url.searchParams.has("fresh");
 	return cached(env, ctx, url, fresh ? 0 : 30, "application/json; charset=utf-8", async () => {
+		let stored = null;
+		try {
+			stored = await storedRules(env);
+		} catch (err) {
+			// a database problem must not take the tags down: the repo copy still
+			// answers, and the status page says which one is being served
+			console.error("[rules] database read failed:", err && err.message ? err.message : err);
+		}
+		if (stored) {
+			parseRules(stored.body, "the stored rules");
+			// `d1-<rev>` rather than a bare number: it cannot be mistaken for a git
+			// blob sha, so a publish knows which guard it is holding
+			return {
+				body: stored.body,
+				contentType: "application/json; charset=utf-8",
+				headers: { "x-xyro-sha": "d1-" + stored.rev },
+			};
+		}
 		const file = await repoBytes(env, NAMETAGS_FILE, fresh);
 		const body = new TextDecoder("utf-8").decode(file.bytes);
-		let parsed = null;
-		try {
-			parsed = JSON.parse(body);
-		} catch {
-			parsed = null;
-		}
-		if (!parsed || !Array.isArray(parsed.tags) || !parsed.options || typeof parsed.options !== "object") {
-			throw new ApiError(502, NAMETAGS_FILE + " is not {options, tags[]} (served " + body.length + " bytes)");
-		}
+		parseRules(body, NAMETAGS_FILE);
 		// The blob sha, when the read went through the GitHub API: the editor
 		// sends it back on a publish so a stale tab cannot clobber a newer
 		// revision. Absent on the raw path, which is why `PUT` falls back to
@@ -841,11 +916,35 @@ function publishKeyResponse(req, url, env) {
  *  GH_TOKEN. A fine-grained token that is read-only passes the read below and
  *  fails at publish time - the message says so rather than pretending. */
 async function checkPublishReady(env) {
+	/* With the rules database bound, publishing needs NO repo token: the rules are
+	   a row this Worker owns, and the guard is the row's revision. So the answer
+	   to "can this publish?" is yes, and the useful thing to report is whether
+	   the database actually answers - a binding that is not applied yet would
+	   otherwise look identical to a healthy one. */
+	if (env.xyro_tags && typeof env.xyro_tags.prepare === "function") {
+		try {
+			const stored = await storedRules(env);
+			return json(env, {
+				ok: true,
+				store: "database",
+				sha: stored ? "d1-" + stored.rev : "d1-0",
+				rules: stored ? "published (" + stored.body.length + " bytes)" : "empty - the repo file seeds it",
+				token: { kind: "none", scopes: [], wide: [] },
+				note: "no repo token is involved: the rules live in this Worker's own database" + (env.GH_TOKEN ? " (a GH_TOKEN is also set, so publishes are mirrored to the repo)" : ""),
+			});
+		} catch (err) {
+			return json(env, {
+				ok: false,
+				reason: "database",
+				error: "the rules database is bound but did not answer: " + (err && err.message ? err.message : String(err)) + " - if the table is missing, run: npx wrangler d1 execute xyro-tags --remote --file schema.sql",
+			}, 502);
+		}
+	}
 	if (!env.GH_TOKEN) {
 		return json(env, {
 			ok: false,
-			reason: "no_gh_token",
-			error: "the Worker has no GH_TOKEN, so it cannot publish - run: npx wrangler secret put GH_TOKEN (a secret needs no redeploy; see api/README.md section 7)",
+			reason: "no_store",
+			error: "this Worker can neither store the rules itself nor commit them: bind the rules database (wrangler.toml) or set GH_TOKEN - see api/README.md section 7",
 		}, 503);
 	}
 	const ref = repoRef(env);
@@ -905,13 +1004,24 @@ async function checkPublishReady(env) {
  *  Finally the cached copy is dropped, or the next reader would be handed the
  *  revision we just replaced - the exact "it will not keep my changes" bug. */
 async function publishNametags(env, req, url) {
-	if (!env.GH_TOKEN) {
+	const hasDb = !!(env.xyro_tags && typeof env.xyro_tags.prepare === "function");
+	if (!hasDb && !env.GH_TOKEN) {
 		return json(env, {
-			error: "publishing through the API needs GH_TOKEN (a repo token with Contents: Read and write) - see api/README.md",
+			error: "publishing needs either the rules database (bind it in wrangler.toml and run schema.sql) or GH_TOKEN (a repo token with Contents: Read and write) - see api/README.md",
 		}, 503);
 	}
 	const bodyText = await req.text();
-	if (bodyText.length > 262144) return json(env, { error: "rules too large (max 256 KB)" }, 413);
+	/* The ceiling is the store's, not a preference. A bound parameter can carry
+	   more than an inline SQL statement can ("statement too long: SQLITE_TOOBIG"
+	   is about the SQL text, which is why this is measured on the value), and a
+	   rules file that embeds an image is legitimately megabytes. What matters is
+	   that the limit is one the store accepts, and that exceeding it says WHY. */
+	if (bodyText.length > MAX_RULES_BYTES) {
+		return json(env, {
+			error: "the rules are " + bodyText.length + " bytes, over the " + MAX_RULES_BYTES + " byte limit for this store",
+			hint: "embedded images are what make a rules file this big - move them into media/ and reference them by URL, which also makes every client's poll much smaller",
+		}, 413);
+	}
 	let parsed = null;
 	try {
 		parsed = JSON.parse(bodyText);
@@ -922,6 +1032,88 @@ async function publishNametags(env, req, url) {
 		return json(env, { error: 'rules must be {"options":{...},"tags":[...]}' }, 400);
 	}
 
+	/* The database is the live copy, so that is where a publish goes. It needs
+	   no token: the compare-and-set below is the guard, and the owner key is the
+	   only credential involved. The repo commit that follows is an OPTIONAL
+	   mirror - it keeps nametags.json (and therefore git history) current when a
+	   token happens to exist, and its failure never fails the publish, because
+	   by then the rules are already live. */
+	if (hasDb) {
+		const sent = url.searchParams.get("sha") || "";
+		const fromClient = /^d1-(\d+)$/.exec(sent);
+		let expected = fromClient ? Number(fromClient[1]) : 0;
+		if (!fromClient) {
+			// the editor read the rules from the repo (or sent a git sha), so its
+			// guard is not ours to use: take the current revision instead. The
+			// window between this read and the write is milliseconds, and the
+			// statement itself still refuses a row that moved underneath it.
+			const current = await storedRules(env).catch(() => null);
+			expected = current ? current.rev : 0;
+		}
+		let ok = false;
+		try {
+			ok = await storeRules(env, bodyText, expected);
+		} catch (err) {
+			const msg = err && err.message ? err.message : String(err);
+			/* A body the store refuses for its SIZE is not a server fault, and the
+			   difference matters: it is the one failure a publisher can fix. */
+			if (/TOOBIG|too large|statement too long/i.test(msg)) {
+				return json(env, {
+					error: "the rules database refused a " + bodyText.length + " byte document: " + msg,
+					size: bodyText.length,
+					hint: "embedded images make a rules file this big - move them into media/ and reference them by URL; the repo-served path (GH_TOKEN) has no such limit",
+				}, 413);
+			}
+			return json(env, { error: msg }, err && err.status ? err.status : 502);
+		}
+		if (!ok) {
+			return json(env, {
+				error: "the rules moved on before this publish landed (revision " + expected + " is no longer current)",
+			}, 409);
+		}
+		await clearRulesCache(url.origin);
+		let mirror = "skipped (no GH_TOKEN)";
+		if (env.GH_TOKEN) {
+			mirror = await mirrorToRepo(env, bodyText).catch(err => "failed: " + (err && err.message ? err.message : err));
+		}
+		const stored = await storedRules(env).catch(() => null);
+		return json(env, {
+			ok: true,
+			sha: stored ? "d1-" + stored.rev : "d1-" + (expected + 1),
+			bytes: bodyText.length,
+			store: "database",
+			repo_mirror: mirror,
+		});
+	}
+
+	/* No database bound: the repo file IS the store, so this is the git path
+	   exactly as it was - and it still needs GH_TOKEN, because committing to a
+	   repo needs a repo credential however you slice it. */
+	const out = await commitRepo(env, bodyText, url.searchParams.get("sha") || "");
+	if (!out.ok) {
+		return json(env, { error: "github " + out.status + (out.detail || "") }, out.status === 409 ? 409 : 502);
+	}
+	await clearRulesCache(url.origin);
+	return json(env, { ok: true, sha: out.sha, bytes: bodyText.length, store: "repo" });
+}
+
+/** Drop the cached copies of the rules, so the next reader anywhere gets the
+ *  revision that was just written rather than the one from up to 30s ago. */
+async function clearRulesCache(origin) {
+	if (typeof caches === "undefined" || !caches.default) return;
+	for (const alias of ["/nametags", "/nametags.json", "/config"]) {
+		await caches.default.delete(new Request(origin + alias)).catch(() => {});
+	}
+}
+
+/** Commit the rules to nametags.json in the repo.
+ *
+ *  Used for the git-only store, and as the OPTIONAL mirror when the database is
+ *  the live copy. `sha` empty means "find the current blob sha first": GitHub
+ *  refuses a write with no sha to a file that already exists, and a mirror has
+ *  no sha to hand because it did not read the file. */
+async function commitRepo(env, bodyText, sha) {
+	if (!env.GH_TOKEN) return { ok: false, status: 503, detail: " (no GH_TOKEN)" };
 	const ref = repoRef(env);
 	const base = "https://api.github.com/repos/" + ref.owner + "/" + ref.repo + "/contents/" + NAMETAGS_FILE;
 	const headers = {
@@ -929,7 +1121,6 @@ async function publishNametags(env, req, url) {
 		accept: "application/vnd.github+json",
 		"user-agent": "xyro-api",
 	};
-	let sha = url.searchParams.get("sha") || "";
 	if (!sha) {
 		try {
 			const cur = await fetch(base + "?ref=" + ref.branch + "&t=" + Date.now(), { headers });
@@ -953,16 +1144,18 @@ async function publishNametags(env, req, url) {
 	});
 	const out = await put.json().catch(() => ({}));
 	if (!put.ok) {
-		const detail = out && out.message ? ": " + out.message : "";
-		return json(env, { error: "github " + put.status + detail }, put.status === 409 ? 409 : 502);
+		return { ok: false, status: put.status, detail: out && out.message ? ": " + out.message : "" };
 	}
-	const newSha = out && out.content && out.content.sha ? out.content.sha : "";
-	if (typeof caches !== "undefined" && caches.default) {
-		for (const alias of ["/nametags", "/nametags.json", "/config"]) {
-			await caches.default.delete(new Request(url.origin + alias)).catch(() => {});
-		}
-	}
-	return json(env, { ok: true, sha: newSha, bytes: bodyText.length });
+	return { ok: true, status: put.status, sha: out && out.content ? (out.content.sha || "") : "" };
+}
+
+/** Keep the repo copy current when a token exists. Its failure must never fail
+ *  the publish: by the time this runs the rules are already live in the
+ *  database, so a stale file is a cosmetic problem, not an outage. */
+async function mirrorToRepo(env, bodyText) {
+	const out = await commitRepo(env, bodyText, "");
+	if (!out.ok) throw new Error("github " + out.status + (out.detail || ""));
+	return "committed " + (out.sha ? String(out.sha).slice(0, 7) : "ok");
 }
 
 /** Edge-cached GET. Cloudflare's cache is keyed on the URL, and `?fresh=1`
@@ -1030,10 +1223,11 @@ async function health(env, url) {
 			rules: "GET /nametags (aliases /nametags.json, /config)",
 			media: "GET /media/<file>",
 			editor: "GET /editor (self-configuring; /api.json points at it)",
-			read_source: env.GH_TOKEN ? "github api (never cached)" : "raw, cache-busted",
-			publish: env.GH_TOKEN
+			store: env.xyro_tags ? "the rules database (D1; the repo file seeds it)" : "the repo file only",
+			publish: (env.xyro_tags ? "PUT /nametags (owner key; no repo token needed)" : env.GH_TOKEN
 				? (env.XYRO_PUBLISH_KEY ? "PUT /nametags (owner key or publish-only key)" : "PUT /nametags (owner key)")
-				: "unavailable (set GH_TOKEN)",
+				: "unavailable (bind the rules database, or set GH_TOKEN)"),
+			repo_mirror: env.xyro_tags && env.GH_TOKEN ? "committed as well, when it works" : "off",
 			check: "POST /nametags/check (owner key)",
 		},
 	});

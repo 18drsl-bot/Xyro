@@ -138,6 +138,7 @@ let apiJson = '{"api":{"url":"","key":""}}';
 let apiDown = false;
 let apiNoToken = false; // a Worker deployed without GH_TOKEN: reads fine, writes 503
 let apiClassicToken = false; // the Worker holds a CLASSIC token (account-wide), not fine-grained
+let apiStoresRules = false; // the Worker stores the rules itself: no repo token exists to judge
 let apiPuts = 0; // publishes that went through the API (not GitHub)
 const OWNER_KEY = "owner-secret";
 
@@ -180,7 +181,16 @@ global.fetch = async (url, init) => {
 		const apiKey = (init && init.headers && init.headers["x-api-key"]) || "";
 		if (u.pathname === "/nametags/check") {
 			if (apiKey !== OWNER_KEY) return new Response('{"error":"forbidden: this route needs the owner key"}', { status: 403 });
-			if (apiNoToken) return new Response('{"ok":false,"reason":"no_gh_token","error":"the Worker has no GH_TOKEN"}', { status: 503 });
+			if (apiNoToken && !apiStoresRules) return new Response('{"ok":false,"reason":"no_store","error":"this Worker can neither store the rules itself nor commit them: bind the rules database or set GH_TOKEN"}', { status: 503 });
+			if (apiStoresRules) {
+				return new Response(JSON.stringify({
+					ok: true,
+					store: "database",
+					sha: "d1-4",
+					token: { kind: "none", scopes: [], wide: [] },
+					note: "no repo token is involved",
+				}), { status: 200 });
+			}
 			const token = apiClassicToken
 				? { kind: "classic", scopes: ["repo", "delete_repo", "workflow"], wide: ["delete_repo", "workflow"] }
 				: { kind: "fine-grained", scopes: [], wide: [] };
@@ -431,6 +441,20 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("...explaining that it is not limited to this repo", /cannot be limited to this repo/.test(toastsAdded), toastsAdded.slice(0, 200));
 	ok("...while the owner key is still accepted - they are separate credentials", localStorage.getItem("xyro_owner_key") === OWNER_KEY, "");
 	apiClassicToken = false;
+
+	/* A Worker that stores the rules itself: there is no repo token to judge, so
+	   Save & test must say so instead of implying one is missing or pretending a
+	   nonexistent token is healthy. */
+	apiStoresRules = true;
+	toastsBefore = toastCount();
+	el("ownerKey").value = OWNER_KEY;
+	await el("saveOwner").onclick();
+	toastsAdded = newToasts(toastsBefore);
+	ok("a Worker that stores the rules itself reports no repo token, not a warning",
+		!/classic/i.test(toastsAdded) && /no GitHub token/i.test(toastsAdded), toastsAdded.slice(0, 160));
+	ok("...and says where a publish goes", /database/.test(el("status").textContent) && /no repo token/i.test(el("status").textContent), el("status").textContent);
+	ok("...while the owner key is still what unlocks it", localStorage.getItem("xyro_owner_key") === OWNER_KEY, "");
+	apiStoresRules = false;
 
 	// a Worker that cannot publish should say so rather than fail silently
 	apiNoToken = true;

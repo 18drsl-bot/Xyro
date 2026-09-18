@@ -217,7 +217,16 @@ ok("the API returns the blob sha as x-xyro-sha", worker.includes('"x-xyro-sha": 
 ok("...and exposes it to the browser", worker.includes('"access-control-expose-headers": "x-xyro-sha'), "");
 ok("the editor reads the same header name", html.includes('res.headers.get("x-xyro-sha")'), "");
 ok("the editor sends it back as ?sha=", html.includes('"?sha=" + encodeURIComponent(shaToSend)'), "");
-ok("the Worker honours that sha (GitHub 409s a stale write)", worker.includes('url.searchParams.get("sha")') && /put\.status === 409 \? 409 : 502/.test(worker), "");
+ok("the Worker honours that sha (GitHub 409s a stale write)", worker.includes('url.searchParams.get("sha")') && /out\.status === 409 \? 409 : 502/.test(worker), "");
+/* The same guard, in the store that needs no token. Both have to refuse a stale
+   write, or "publishing without a token" would quietly mean "publishing can
+   clobber a newer revision" - the exact bug the sha was introduced to stop. */
+ok("the rules database refuses a stale write with the same single compare-and-set",
+	/ON CONFLICT\(id\) DO UPDATE[\s\S]{0,200}WHERE rules\.rev = \?/.test(worker) && /meta\.changes/.test(worker), "");
+ok("...and hands its revision out in the same header the editor already sends back",
+	worker.includes('"x-xyro-sha": "d1-" + stored.rev') && /\^d1-\(\\d\+\)\$/.test(worker), "");
+ok("publishing needs no repo token once the database is bound",
+	worker.includes("const hasDb = !!(env.xyro_tags") && !worker.includes("publishing through the API needs GH_TOKEN"), "");
 ok("the editor asks /nametags/check before trusting a key", html.includes('"/nametags/check"') && worker.includes('path === "/nametags/check"'), "");
 ok("the Worker's check route changes nothing", /async function checkPublishReady\(env\)/.test(worker) && !/fb\(env/.test(block(worker, "async function checkPublishReady", "\n}\n\n/** PUT /nametags")), "");
 ok("a publish key is accepted besides the owner key", /function publishKeyResponse\(req, url, env\)/.test(worker) && worker.includes("env.XYRO_PUBLISH_KEY"), "");
