@@ -585,7 +585,7 @@ H.chrome = function(frame, opts)
 	return minBtn, closeBtn
 end
 
-local titleBar = make("Frame", { Size = UDim2.new(1, -50, 0, 40), BackgroundTransparency = 1 }, main) -- full-width drag handle (clears the search button)
+local titleBar = make("Frame", { Size = UDim2.new(1, -14, 0, 40), BackgroundTransparency = 1 }, main) -- full-width drag handle (nothing else lives up here now)
 
 round(make("Frame", {
 	Size = UDim2.new(0, 7, 0, 7),
@@ -605,26 +605,9 @@ make("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, titleBar)
 
--- circular search button, top-right of the shell like the reference UI:
--- opens the command list (the built-in "cmds"-style help window)
--- paintbrush = Themes: opens Settings scrolled to the Themes section
-local searchBtn = make("TextButton", {
-	Size = UDim2.new(0, 34, 0, 34),
-	Position = UDim2.new(1, -44, 0, 3),
-	BackgroundTransparency = 1, -- no box behind the brush
-	Text = "🎨",
-	TextSize = 20,
-	Font = Enum.Font.GothamBold,
-	TextColor3 = COL.text,
-	AutoButtonColor = false,
-	BorderSizePixel = 0,
-}, main)
-connect(searchBtn.MouseButton1Click, function()
-	click()
-	if H.openThemes then
-		H.openThemes()
-	end
-end)
+-- the paintbrush that used to sit here is gone: Themes lives in the Settings
+-- panel, which the gear on the user card opens (H.openThemes still scrolls
+-- straight to it for anything that wants the shortcut programmatically).
 
 local keyChip = make("TextButton", {
 	Size = UDim2.new(0, 28, 0, 20),
@@ -5257,7 +5240,8 @@ make("UIPadding", {
 	PaddingRight = UDim.new(0, 4),
 }, setScroll)
 
--- the paintbrush (top-right) lands here: open Settings, scroll to Themes
+-- scrolls the Settings panel to its Themes section (kept even though the
+-- top-right paintbrush that used it is gone - the section is still there)
 H.openThemes = function()
 	if not setFrame.Visible then
 		setFrame.Visible = true
@@ -5895,7 +5879,7 @@ do
 		Size = UDim2.new(1, 0, 1, 0),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.GothamBold,
-		Name = "ThemesHeader", -- paintbrush scrolls here
+		Name = "ThemesHeader", -- H.openThemes scrolls here
 		TextSize = 11,
 		TextColor3 = COL.sub,
 		Text = "THEMES  -  paste JSON, or save the current colours",
