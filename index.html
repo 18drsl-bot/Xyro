@@ -604,6 +604,11 @@ const PATH = "nametags.json";
 const API = "https://api.github.com/repos/" + REPO + "/contents/" + PATH;
 const LS_TOKEN = "xyro_token";
 const LS_DRAFT = "xyro_draft_v2";
+const RAW = "https://raw.githubusercontent.com/" + REPO + "/main/" + PATH;
+/* live players now come from Firebase (here/<username> = unix seconds), the
+   ntfy presence topic is only a fallback - mirrors NT_BEAT_WINDOW in xyro.lua */
+const FB_HERE = "https://xyro-fcaf8-default-rtdb.firebaseio.com/here.json";
+const PRESENCE_WINDOW = 75;
 
 const $ = id => document.getElementById(id);
 let live = null;          // last published state from GitHub {options, tags}
@@ -1171,20 +1176,42 @@ function renderUsers() {
 
 async function pollUsers() {
 	try {
-		const res = await fetch("https://ntfy.sh/xyro-presence-k2m9x7q/json?poll=1&since=75s");
-		if (!res.ok) throw new Error(res.status);
-		const text = await res.text();
-		const now = Date.now();
-		// ntfy's /json endpoint is one JSON object per line (NDJSON)
-		for (const line of text.split(/\r?\n/)) {
-			if (!line.trim()) continue;
-			try {
-				const m = JSON.parse(line);
-				const n = String(m.message || "").trim().toLowerCase();
-				if (n && n.length < 40) seenUsers[n] = now;
-			} catch (_) { /* partial line */ }
+		let sawSource = false;
+		/* presence comes from Firebase (here/<username> = unix seconds) - the
+		   ntfy topic alone is quota-dead, so reading only that showed an empty
+		   list while players were in fact online. ntfy stays as a fallback so
+		   the card never goes dark if the database is unreachable. */
+		try {
+			const res = await fetch(FB_HERE + "?t=" + Date.now(), { cache: "no-store" });
+			if (res.ok) {
+				const data = await res.json();
+				const nowSec = Math.floor(Date.now() / 1000);
+				if (data && typeof data === "object") {
+					for (const key of Object.keys(data)) {
+						const n = String(key).trim().toLowerCase();
+						const sec = Number(data[key]);
+						if (n && n.length < 40 && sec && nowSec - sec <= PRESENCE_WINDOW) seenUsers[n] = Date.now();
+					}
+				}
+				sawSource = true;
+			}
+		} catch (_) { /* fall through to ntfy */ }
+		if (!sawSource) {
+			const res = await fetch("https://ntfy.sh/xyro-presence-k2m9x7q/json?poll=1&since=" + PRESENCE_WINDOW + "s");
+			if (!res.ok) throw new Error(res.status);
+			const text = await res.text();
+			const now = Date.now();
+			// ntfy's /json endpoint is one JSON object per line (NDJSON)
+			for (const line of text.split(/\r?\n/)) {
+				if (!line.trim()) continue;
+				try {
+					const m = JSON.parse(line);
+					const n = String(m.message || "").trim().toLowerCase();
+					if (n && n.length < 40) seenUsers[n] = now;
+				} catch (_) { /* partial line */ }
+			}
 		}
-		const cutoff = now - 75000;
+		const cutoff = Date.now() - PRESENCE_WINDOW * 1000;
 		for (const n of Object.keys(seenUsers)) if (seenUsers[n] < cutoff) delete seenUsers[n];
 		renderUsers();
 		$("usersLive").textContent = "live";
@@ -1250,26 +1277,77 @@ $("forgetToken").onclick = () => {
 $("tokenChip").onclick = () => $("tokenCard").scrollIntoView({ behavior: "smooth" });
 
 /* ---------- load / publish ---------- */
-/* the contents API returns an envelope {sha, content:"<base64>"} - decode
-   it to the real nametags.json. Falls back to raw.githubusercontent (plain
-   text, no sha) when the API is rate-limited or unreachable. */
-/* raw FIRST (fresh within seconds of a push), contents API second (never
-   cached anywhere; also the only source that gives the sha a safe
-   merge-on-publish needs). The old order (API -> raw) starved the editor
-   whenever the unauthenticated API was rate-limited. */
-async function fetchConfig() {
-	try {
-		const res = await fetch("https://raw.githubusercontent.com/" + REPO + "/main/" + PATH + "?t=" + Date.now());
-		if (res.ok) return { config: await res.json(), sha: null };
-	} catch (_) { /* fall through to API */ }
-	const res = await fetch(API + "?t=" + Date.now());
-	if (!res.ok) throw new Error("github " + res.status);
-	const env = await res.json();
+/* READING is raw-first: raw.githubusercontent carries no sha, but it is fresh
+   within seconds of a push and never rate-limits, so the 2-minute refresh
+   loop costs no API budget.
+   PUBLISHING must use the contents API - it is the only source that returns
+   the blob sha a safe merge-on-publish needs (and it is never cached).
+   Two rules keep that API usable:
+     1. every call sends the token when one is connected: 5,000 requests/hour
+        instead of 60/hour PER IP, and the anonymous bucket is shared by every
+        tab, device and neighbour behind the same address;
+     2. when the bucket is empty anyway, ask WHEN it refills (GitHub exposes
+        x-ratelimit-reset over CORS) and wait it out instead of telling you to
+        come back and click Publish again later. */
+function apiHeaders() {
+	const h = { Accept: "application/vnd.github+json" };
+	const token = getToken();
+	if (token) h.Authorization = "Bearer " + token;
+	return h;
+}
+/* the contents API returns an envelope {sha, content:"<base64>"} - decode it */
+function decodeContents(env) {
 	if (typeof env.content !== "string") throw new Error("unexpected API response");
 	const bin = atob(env.content.replace(/\s/g, ""));
 	const bytes = new Uint8Array(bin.length);
 	for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 	return { config: JSON.parse(new TextDecoder("utf-8").decode(bytes)), sha: env.sha };
+}
+/* 429, or 403 with the bucket at zero, means rate limiting. Any OTHER 403 (a
+   token without Contents: Read and write, a blocked repo) must not be treated
+   as a limit, or we would retry a request that can never succeed. */
+function rateLimitError(res) {
+	const remaining = res.headers.get("x-ratelimit-remaining");
+	if (res.status !== 429 && !(res.status === 403 && (remaining === "0" || remaining === null))) return null;
+	const resetAt = Number(res.headers.get("x-ratelimit-reset") || 0) * 1000;
+	const e = new Error("rate limited");
+	e.rateLimited = true;
+	e.resetAt = resetAt > Date.now() ? resetAt : 0;
+	e.authenticated = !!getToken();
+	return e;
+}
+async function rawConfig() {
+	const res = await fetch(RAW + "?t=" + Date.now(), { cache: "no-store" });
+	if (!res.ok) throw new Error("raw " + res.status);
+	return { config: await res.json(), sha: null };
+}
+async function apiConfig() {
+	const res = await fetch(API + "?t=" + Date.now(), { headers: apiHeaders(), cache: "no-store" });
+	const limited = rateLimitError(res);
+	if (limited) throw limited;
+	if (!res.ok) throw new Error("github " + res.status);
+	return decodeContents(await res.json());
+}
+/* waits out a SHORT reset and returns the sha-bearing config. A long reset is
+   thrown instead - stalling the tab for minutes is worse than asking you to
+   retry. */
+async function apiConfigWhenReady(onWait) {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await apiConfig();
+		} catch (e) {
+			if (!e.rateLimited || attempt >= 2) throw e;
+			const delay = e.resetAt ? e.resetAt - Date.now() + 2000 : 6000;
+			if (e.resetAt && delay > 90000) throw e;
+			if (onWait) onWait(Math.max(1, Math.ceil(delay / 1000)));
+			await new Promise(r => setTimeout(r, delay));
+		}
+	}
+}
+async function fetchConfig(opts) {
+	if (opts && opts.needSha) return apiConfigWhenReady(opts.onWait);
+	try { return await rawConfig(); } catch (_) { /* API fallback */ }
+	return apiConfig();
 }
 
 async function load() {
@@ -1389,8 +1467,30 @@ $("publishBtn").onclick = async () => {
 		   how rules got eaten. */
 		let meta = null;
 		if (live) {
-			const remote = await fetchConfig();
-			if (!remote.sha) { status("GitHub API rate-limited - cannot merge safely. Wait ~1 min, then Publish again.", "err"); return; }
+			/* the merge needs the sha, so this read MUST be the API (raw cannot
+			   give one). It is authenticated and waits out a short rate-limit
+			   reset, instead of leaving you to retry Publish by hand. */
+			let remote = null;
+			try {
+				remote = await fetchConfig({
+					needSha: true,
+					onWait: s => status("GitHub API rate limit - resetting in " + s + "s, publishing automatically...", "info"),
+				});
+			} catch (e) {
+				if (e && e.rateLimited) {
+					const msg = e.authenticated
+						? "GitHub API rate limit is still active - wait a minute, then Publish again. Your draft is safe."
+						: "GitHub's anonymous API budget (60/hour per IP, shared by every tab and device on your connection) is used up. Connect a token above for 5,000/hour and Publish works right away.";
+					status(msg, "err");
+					toast(msg, "err", 14);
+					if (!e.authenticated) $("tokenCard").scrollIntoView({ behavior: "smooth" });
+				} else {
+					status("cannot read the current file from GitHub (" + (e && e.message ? e.message : e) + ") - refusing to publish blind, that is how rules get lost", "err");
+					toast("Publish blocked: could not read the current file from GitHub", "err", 10);
+				}
+				return;
+			}
+			if (!remote.sha) { status("GitHub did not return a file sha - Publish again in a moment.", "err"); return; }
 			if (!sameJSON(remote.config, live)) {
 				cfg = mergeRemote(live, cfg, remote.config);
 				renderOptions();
@@ -1428,7 +1528,12 @@ $("publishBtn").onclick = async () => {
 		});
 		if (!res.ok) {
 			const err = await res.json().catch(() => ({}));
+			const limited = rateLimitError(res);
 			status("GitHub said " + res.status + ": " + (err.message || "unknown"), "err");
+			if (limited) {
+				toast("Publish blocked by GitHub's API rate limit - your draft is safe. Connecting a token raises the limit from 60 to 5,000 requests/hour.", "err", 14);
+				return;
+			}
 			if (res.status === 403 || res.status === 404) {
 				toast("Publish blocked: your token has Contents: Read only. Fix it at github.com/settings/personal-access-tokens \u2192 click your token \u2192 Repository permissions \u2192 Contents \u2192 Read and write \u2192 Update (no new token needed), then Publish again. Your draft is safe.", "err", 14);
 			} else {
