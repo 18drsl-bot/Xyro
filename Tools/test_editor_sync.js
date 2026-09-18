@@ -169,6 +169,8 @@ const factory = new Function(
 	"  get live(){return live;}, get cfg(){return cfg;}, set cfg(v){cfg=v;}," +
 	"  get publishGuard(){return publishGuard;}, get liveSha(){return liveSha;}," +
 	"  refreshLive: refreshLive, publish: () => $(\"publishBtn\").onclick(), canonJSON: canonJSON, asConfig: asConfig," +
+	"  renderPreview: renderPreview, renderEditorPreview: renderEditorPreview, editorTag: editorTag," +
+	"  openEditor: openEditor, closeEditor: closeEditor," +
 	"  toasts: () => $(\"toasts\").children.map(t => t.textContent)," +
 	"};"
 );
@@ -223,7 +225,47 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	await api.refreshLive(true, {});
 	ok("a genuine remote change is still accepted", api.cfg.options.size === 15 && api.live.options.size === 15, "cfg " + api.cfg.options.size);
 
-	/* --- 4. structural invariants --------------------------------------- */
+	/* --- 4. text colours: rule override, else the global option -------- */
+
+	/* the real page's option inputs carry real defaults; the fake DOM starts
+	   every input blank, so give these two the values the page has */
+	el("optTextColor").value = "#123456";
+	el("optUserColor").value = "#654321";
+	const colorOf = id => el(id).style.color;
+
+	delete api.cfg.tags[0].textColor;
+	delete api.cfg.tags[0].userColor;
+	api.renderPreview();
+	ok("with no rule override the global name colour is previewed", colorOf("pvLabel") === "#123456", colorOf("pvLabel"));
+	ok("...and the global @username colour", colorOf("pvUser") === "#654321", colorOf("pvUser"));
+
+	api.cfg.tags[0].textColor = "#FF0000";
+	api.cfg.tags[0].userColor = "#00FF00";
+	api.renderPreview();
+	ok("a rule's own name colour beats the global one", colorOf("pvLabel") === "#ff0000", colorOf("pvLabel"));
+	ok("a rule's own @username colour beats the global one", colorOf("pvUser") === "#00ff00", colorOf("pvUser"));
+
+	// the rule editor must agree with the big preview, or the setting lies twice
+	api.openEditor(0);
+	ok("the rule form loads that rule's colours", el("fTextColorHex").value === "#FF0000" && el("fUserColorHex").value === "#00FF00",
+		el("fTextColorHex").value + "/" + el("fUserColorHex").value);
+	api.renderEditorPreview();
+	ok("the mini preview matches the big one", colorOf("edLabel") === "#ff0000" && colorOf("edUser") === "#00ff00",
+		colorOf("edLabel") + "/" + colorOf("edUser"));
+
+	api.closeEditor();
+	api.openEditor(1); // a rule with no colours of its own
+	ok("a rule with no colours leaves both hex boxes blank (= global)",
+		el("fTextColorHex").value === "" && el("fUserColorHex").value === "",
+		el("fTextColorHex").value + "/" + el("fUserColorHex").value);
+	ok("...while the swatches show the global value",
+		el("fTextColor").value === "#123456" && el("fUserColor").value === "#654321",
+		el("fTextColor").value + "/" + el("fUserColor").value);
+	api.renderEditorPreview();
+	ok("...and the mini preview shows the global colour", colorOf("edLabel") === "#123456", colorOf("edLabel"));
+	api.closeEditor();
+
+	/* --- 5. structural invariants --------------------------------------- */
 
 	ok("the publish verifies itself against the API", script.includes("const landed = check ? canonJSON(asConfig(check.config)) === canonJSON(wanted) : null;") && script.includes('status("published, but GitHub'), "");
 	ok("a verified publish says so", script.includes('status("published and checked against the file"'), "");

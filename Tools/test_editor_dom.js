@@ -88,6 +88,7 @@ ok("every inline handler calls a function the page defines", undeclared.length =
    save a rule or show the live list. Naming them means a refactor has to mean it. */
 const CRITICAL = [
 	"edSave", "edCancel", "fMatch", "fLabel", "fRank", "fColor", "userList", "userCount",
+	"fTextColor", "fTextColorHex", "fUserColor", "fUserColorHex",
 	"usersLive", "ruleList", "ruleCount", "status", "draftBtn", "publishBtn", "refreshBtn",
 	"token", "tokenChip", "tokenState", "saveToken", "dirtyChip",
 	"optSize", "optImgSize", "optUserSize", "optHeight",

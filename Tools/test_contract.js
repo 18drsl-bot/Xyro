@@ -66,6 +66,42 @@ const identity = ["match", "label", "color"];
 const rulesMissingFromScript = [...editorRuleFields].filter(f => !scriptRuleFields.has(f) && !identity.includes(f));
 ok("every rule field the site writes is read by the script", rulesMissingFromScript.length === 0, rulesMissingFromScript.join(","));
 
+/* The other direction is the one that hides features: the script honours a
+   per-rule field, the form has no input for it, so it is unreachable from the
+   site and looks like the site "not having" a setting the game supports. Each
+   entry below is a deliberate omission - a NEW script field not listed here
+   fails this check, which is the point. */
+const RULE_FIELDS_WITHOUT_UI = [
+	"font", "height", "imageSize", "userSize",
+	"userBoxColor", "userBoxRadius", "userBoxStroke", "userBoxTransparency",
+];
+const unreachable = [...scriptRuleFields].filter(f =>
+	!editorRuleFields.has(f) && !identity.includes(f) && !RULE_FIELDS_WITHOUT_UI.includes(f));
+ok("no per-rule setting is honoured by the script but unreachable from the site",
+	unreachable.length === 0, unreachable.join(","));
+
+/* the two text colours are per-rule AND global, like the game resolves them */
+ok("the rule editor can set the name text colour", editorRuleFields.has("textColor"), "no textColor input");
+ok("the rule editor can set the @username colour", editorRuleFields.has("userColor"), "no userColor input");
+ok("...and a blank rule value falls back to the global option, as the game does",
+	/function nameColorOf\(t\)/.test(html) && /function userColorOf\(t\)/.test(html)
+	&& /hex6\(t && t\.textColor\) \|\| \$\("optTextColor"\)\.value/.test(html)
+	&& /hex6\(t && t\.userColor\) \|\| \$\("optUserColor"\)\.value/.test(html),
+	"the resolvers are missing or no longer fall back to the option");
+ok("both previews use that one resolver, so they cannot disagree",
+	(html.match(/nameColorOf\(t\)/g) || []).length >= 2 && (html.match(/userColorOf\(t\)/g) || []).length >= 2,
+	"a preview stopped using the shared resolver");
+ok("the global name colour is really shown in the preview",
+	/\$\("pvLabel"\)\.style\.color = nameColorOf\(t\)/.test(html) && /\$\("pvUser"\)\.style\.color = userColorOf\(t\)/.test(html),
+	"the options are published but never previewed");
+ok("a blank hex box survives a save as the global default",
+	/if \(t\.textColor\) clean\.textColor = t\.textColor; else delete clean\.textColor;/.test(html)
+	&& /if \(t\.userColor\) clean\.userColor = t\.userColor; else delete clean\.userColor;/.test(html),
+	"edSave drops or keeps the field wrongly");
+ok("changing a rule colour forces a rebuild in game",
+	/tostring\(rule\.textColor or ""\)/.test(lua) && /tostring\(rule\.userColor or ""\)/.test(lua),
+	"the rebuild signature does not carry the text colours");
+
 // per-rule overrides the script supports but the site keeps only from the loaded
 // file: they must survive an edit (Object.assign over prev), which is asserted
 // below by reading the code rather than by listing them here.

@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r4</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r5</span>
 		<span class="chip" id="tokenChip" title="token status">no token</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules from GitHub now">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -493,6 +493,14 @@
 					<div>
 						<label>Border color</label>
 						<div class="row"><input id="fColor" type="color" value="#ffd700"><input id="fColorHex" value="#FFD700"></div>
+					</div>
+					<div>
+						<label>Name text color (blank = global)</label>
+						<div class="row"><input id="fTextColor" type="color" value="#ffffff"><input id="fTextColorHex" placeholder="global default"></div>
+					</div>
+					<div>
+						<label>@username color (blank = global)</label>
+						<div class="row"><input id="fUserColor" type="color" value="#8b92a5"><input id="fUserColorHex" placeholder="global default"></div>
 					</div>
 					<div>
 						<label>Text size (blank = default)</label>
@@ -709,10 +717,26 @@ function userBoxOn(t) {
 	return $("optUBox").checked;
 }
 
+/* "the colour the game will actually draw". ntBadgeRankColor-style priority:
+   the rule's own value, else the global option, else the script's default. This
+   is the ONLY place that decides it, so the big preview and the rule editor's
+   mini preview cannot drift from the game or from each other. */
+function nameColorOf(t) {
+	return (hex6(t && t.textColor) || $("optTextColor").value || "#ffffff").toLowerCase();
+}
+function userColorOf(t) {
+	return (hex6(t && t.userColor) || $("optUserColor").value || "#8b92a5").toLowerCase();
+}
+
 function renderPreview() {
 	const t = (editing >= 0 ? editorTag() : null) || cfg.tags[0] || { label: "x9k_alt", color: "#ffd700" };
 	const badge = $("pvBadge");
 	badge.style.setProperty("--c", hex6(t.color) || "#6c80ff");
+	/* name and @username colours. The options were collected and published but
+	   never shown, so changing "Name color" did nothing visible until you got in
+	   game - the preview is the whole point of the setting. */
+	$("pvLabel").style.color = nameColorOf(t);
+	$("pvUser").style.color = userColorOf(t);
 	/* @username box mirrors the global options (plus rule override);
 	   with the box off the @line still shows, just unboxed like in game */
 	const ubOn = userBoxOn(t);
@@ -984,6 +1008,8 @@ function editorTag() {
 		match: $("fMatch").value.trim(),
 		label: $("fLabel").value.trim() || "?",
 		color: $("fColorHex").value,
+		textColor: hex6($("fTextColorHex").value) ? $("fTextColorHex").value : undefined,
+		userColor: hex6($("fUserColorHex").value) ? $("fUserColorHex").value : undefined,
 		size: $("fSize").value ? parseInt($("fSize").value) : undefined,
 		image: $("fImage").value.trim(),
 		bgImage: $("fBgImage").value.trim(),
@@ -1003,6 +1029,9 @@ function renderEditorPreview() {
 	const badge = $("edBadge");
 	badge.style.setProperty("--c", hex6(t.color) || "#6c80ff");
 	badge.style.setProperty("--pill", hex6(t.bg) || "#0c0c10");
+	/* same resolver as the big preview, so both show what the game will draw */
+	$("edLabel").style.color = nameColorOf(t);
+	$("edUser").style.color = userColorOf(t);
 	$("edLabel").textContent = t.label;
 	$("edUser").textContent = t.userText ? (t.userText.indexOf("@") === 0 ? t.userText : "@" + t.userText) : "@" + myName;
 	const radius = t.shape === "Square" ? "4px" : t.shape === "Rounded" ? "14px" : t.shape === "Circle" ? "999px" : "18px";
@@ -1053,6 +1082,12 @@ function openEditor(i) {
 	$("fLabel").value = t.label || "";
 	$("fColor").value = (hex6(t.color) || "#6c80ff").toLowerCase();
 	$("fColorHex").value = (t.color || "#6C80FF").toUpperCase();
+	/* per-rule text colours: the swatch always shows something usable, the hex box
+	   is what carries "unset" (blank = fall back to the global option) */
+	$("fTextColor").value = nameColorOf(t);
+	$("fTextColorHex").value = hex6(t.textColor) ? t.textColor.toUpperCase() : "";
+	$("fUserColor").value = userColorOf(t);
+	$("fUserColorHex").value = hex6(t.userColor) ? t.userColor.toUpperCase() : "";
 	$("fSize").value = t.size || "";
 	$("fImage").value = t.image || "";
 	$("fBgImage").value = t.bgImage || "";
@@ -1082,7 +1117,7 @@ function closeEditor() {
 	renderPreview();
 }
 
-["fMatch", "fLabel", "fColorHex", "fSize", "fImage", "fBgImage", "fBgHex", "fBgTrans", "fUserBox", "fUserText", "fShape", "fType"].forEach(id => {
+["fMatch", "fLabel", "fColorHex", "fTextColorHex", "fUserColorHex", "fSize", "fImage", "fBgImage", "fBgHex", "fBgTrans", "fUserBox", "fUserText", "fShape", "fType"].forEach(id => {
 	$(id).addEventListener("input", renderEditorPreview);
 });
 $("fBadge").addEventListener("change", renderEditorPreview);
@@ -1091,6 +1126,10 @@ $("fColor").addEventListener("input", () => { $("fColorHex").value = $("fColor")
 $("fColorHex").addEventListener("input", () => { if (hex6($("fColorHex").value)) $("fColor").value = $("fColorHex").value; });
 $("fBg").addEventListener("input", () => { $("fBgHex").value = $("fBg").value.toUpperCase(); renderEditorPreview(); });
 $("fBgHex").addEventListener("input", () => { if (hex6($("fBgHex").value)) $("fBg").value = $("fBgHex").value; renderEditorPreview(); });
+$("fTextColor").addEventListener("input", () => { $("fTextColorHex").value = $("fTextColor").value.toUpperCase(); renderEditorPreview(); });
+$("fTextColorHex").addEventListener("input", () => { if (hex6($("fTextColorHex").value)) $("fTextColor").value = $("fTextColorHex").value; renderEditorPreview(); });
+$("fUserColor").addEventListener("input", () => { $("fUserColorHex").value = $("fUserColor").value.toUpperCase(); renderEditorPreview(); });
+$("fUserColorHex").addEventListener("input", () => { if (hex6($("fUserColorHex").value)) $("fUserColor").value = $("fUserColorHex").value; renderEditorPreview(); });
 
 $("edSave").onclick = () => {
 	const t = editorTag();
@@ -1104,6 +1143,8 @@ $("edSave").onclick = () => {
 	if (t.image) clean.image = t.image; else delete clean.image;
 	if (t.bgImage) clean.bgImage = t.bgImage; else delete clean.bgImage;
 	if (t.bg) clean.bg = t.bg; else delete clean.bg;
+	if (t.textColor) clean.textColor = t.textColor; else delete clean.textColor;
+	if (t.userColor) clean.userColor = t.userColor; else delete clean.userColor;
 	if (t.bgTransparency != null && !isNaN(t.bgTransparency)) clean.bgTransparency = t.bgTransparency; else delete clean.bgTransparency;
 	if (t.badge) clean.badge = true; else delete clean.badge;
 	if (t.rank) clean.rank = t.rank; else delete clean.rank;
