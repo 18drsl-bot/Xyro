@@ -62,6 +62,15 @@ the secret store. If your database URL ever changes, edit `[vars]` in
 
 ## 2. Check it
 
+Open the Worker URL in a browser and you get a **status page** — one line
+answering "is it down?": `LIVE`, `DISABLED` (the kill switch is on) or
+`DEGRADED` (the API cannot reach the database), plus the gate message, who set
+it, how many players are running the script right now and the version being
+served. It refreshes itself every 30 seconds, so it is also the link to hand
+someone who asks during maintenance.
+
+`/health` is the same information as JSON, for scripts and uptime checkers:
+
 ```bash
 curl https://xyro-api.<you>.workers.dev/health
 ```
@@ -243,7 +252,8 @@ That is the property the direct-to-database setup can never have.
 
 | Route | Method | Key | Purpose |
 |---|---|---|---|
-| `/health` | GET | no | self-report: database, keys, and the current gate |
+| `/` `/status` | GET | no | status page for humans (auto-refreshes every 30s) |
+| `/health` | GET | no | the same as JSON: database, keys, and the current gate |
 | `/gate` | GET | if gated | the kill switch: `{enabled, message, warn, by, source}` |
 | `/staff/gate.json` | GET | if gated | the same thing database-shaped (this is what the script polls) |
 | `/gate` | POST | **admin** | patch `{enabled, message, warn}`; partial patches merge |

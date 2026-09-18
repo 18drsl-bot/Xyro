@@ -31,7 +31,8 @@
  *    generic database proxy: anything else in the database stays unreachable.
  *
  * 2. FRIENDLY routes for the site, the Discord bot and humans:
- *      GET    /health                        -> config self-report
+ *      GET    /                               -> status page for humans
+ *      GET    /health                        -> config self-report (JSON)
  *      GET    /version                       -> version.txt from the repo
  *      GET    /config                        -> nametags.json from the repo
  *      GET    /staff                         -> the staff object
@@ -331,6 +332,104 @@ async function readGate(env) {
 	}
 }
 
+/* ----------------------------------------------------------- status page */
+
+/** Everything interpolated into the page goes through this: the gate message is
+ *  written by whoever holds the admin key, and an unescaped admin input is
+ *  still an injection. */
+function esc(s) {
+	return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function ago(sec) {
+	const s = Math.max(0, Math.floor(Date.now() / 1000) - Number(sec || 0));
+	if (!s) return "just now";
+	if (s < 60) return s + "s ago";
+	if (s < 3600) return Math.floor(s / 60) + "m ago";
+	if (s < 86400) return Math.floor(s / 3600) + "h ago";
+	return Math.floor(s / 86400) + "d ago";
+}
+
+/**
+ * A page for humans. `/health` stays JSON for machines; this is what you send
+ * someone who asks "is it down?". It never throws: an unreachable database is
+ * shown as DEGRADED, which is exactly the state worth seeing.
+ */
+async function statusPage(env) {
+	const gate = await readGate(env);
+	let dbOk = true;
+	let dbError = "";
+	let online = 0;
+	try {
+		const data = parseNode(await fb(env, "here"));
+		online = Object.keys(freshOnly("here", data, PRESENCE_WINDOW)).length;
+	} catch (err) {
+		dbOk = false;
+		dbError = err && err.message ? err.message : String(err);
+	}
+	let version = "";
+	try {
+		version = (await repoFile(env, "version.txt", false)).trim().slice(0, 24);
+	} catch {
+		version = "";
+	}
+
+	const state = !gate.enabled
+		? { label: "DISABLED", color: "#e2aa3c", note: "The script is switched off for everyone." }
+		: dbOk
+			? { label: "LIVE", color: "#34d399", note: "The script is up and talking to the database." }
+			: { label: "DEGRADED", color: "#e85050", note: "The API cannot reach the database. Clients keep running on what they already have." };
+
+	const row = (k, v) => `<div class="row"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>`;
+	const dot = ok => `<span class="dot" style="background:${ok ? "#34d399" : "#e85050"}"></span>`;
+
+	const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="30">
+<title>Xyro status - ${esc(state.label)}</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0b0e;color:#e8e8ec;
+font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.card{width:min(520px,92vw);background:#14141a;border:1px solid #26262e;border-radius:14px;padding:22px 24px}
+h1{margin:0 0 4px;font-size:15px;font-weight:600;letter-spacing:.02em;color:#9a9aa6}
+.state{display:flex;align-items:center;gap:10px;font-size:26px;font-weight:700;letter-spacing:.01em}
+.big{width:12px;height:12px;border-radius:50%}
+.note{margin:8px 0 18px;color:#8a8a96;font-size:14px}
+.msg{margin:0 0 18px;padding:12px 14px;border-radius:10px;background:#191713;border:1px solid #3a3020;color:#e6d5ae}
+.msg b{display:block;color:#e2aa3c;font-weight:600;margin-bottom:4px}
+.row{display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-top:1px solid #22222a;font-size:14px}
+.k{color:#8a8a96}
+.v{color:#dcdce4;text-align:right;font-variant-numeric:tabular-nums}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
+footer{margin-top:18px;padding-top:14px;border-top:1px solid #22222a;color:#6e6e7a;font-size:12.5px}
+code{background:#1c1c22;padding:1px 5px;border-radius:5px;color:#b9b9c6;font-size:12.5px}
+a{color:#7f93ff;text-decoration:none}
+a:hover{text-decoration:underline}
+</style></head><body><div class="card">
+<h1>XYRO API</h1>
+<div class="state"><span class="big" style="background:${state.color}"></span>${esc(state.label)}</div>
+<p class="note">${esc(state.note)}</p>
+${gate.message ? `<div class="msg"><b>Message</b>${esc(gate.message)}</div>` : ""}
+${gate.warn ? `<div class="msg"><b>Heads up</b>${esc(gate.warn)}</div>` : ""}
+${row("Gate", `${dot(gate.enabled)}${gate.enabled ? "open" : "switched off"} <span style=\"color:#6e6e7a\">(${esc(gate.source)})</span>`)}
+${gate.updated ? row("Set", `${esc(ago(gate.updated))}${gate.by ? " by " + esc(gate.by) : ""}`) : ""}
+${row("Database", `${dot(dbOk)}${dbOk ? "connected" : esc(dbError || "unreachable")}`)}
+${row("Players running now", String(online))}
+${version ? row("Script version", esc(version)) : ""}
+${row("Reads", env.XYRO_KEY ? "key required" : "open")}
+<footer>
+Machine-readable: <a href="/health">/health</a> \u00b7 script source: <code>/script</code> \u00b7 this page refreshes every 30s
+</footer>
+</div></body></html>`;
+
+	return new Response(html, {
+		headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...corsHeaders(env) },
+	});
+}
+
 /* ------------------------------------------------------------- repo files */
 
 async function repoFile(env, name, bust) {
@@ -446,7 +545,9 @@ async function handle(req, env, ctx) {
 	if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(env) });
 
 	/* --- open metadata (no key: this is how you check a deploy) ------------ */
-	if (path === "/" || path === "/health") return health(env, url);
+	/* a page for humans at / and /status, JSON at /health for everything else */
+	if (path === "/" || path === "/status") return statusPage(env);
+	if (path === "/health") return health(env, url);
 
 	if (path === "/version") {
 		return cached(env, ctx, url, 60, "text/plain; charset=utf-8", () => repoFile(env, "version.txt", url.searchParams.has("fresh")));

@@ -300,6 +300,35 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	res = await call("/staff.json", { env: { FB_URL: "" } });
 	ok("no FB_URL is a 500 with an explanation", res.status === 500, "got " + res.status);
 
+	/* --- the status page ------------------------------------------------- */
+	store = { here: { Alive: now() } };
+	res = await call("/");
+	const page = await res.text();
+	ok("GET / serves a human page, not JSON", res.status === 200 && /text\/html/.test(res.headers.get("content-type") || ""), res.headers.get("content-type"));
+	ok("the status page says LIVE when everything is up", page.includes("LIVE") && page.includes("connected"), page.slice(0, 80));
+	ok("it counts who is running the script", page.includes("Players running now") && page.includes(">1<"), "");
+	ok("it shows the script version from the repo", page.includes("0.8.11"), "");
+	ok("it refreshes itself", page.includes('http-equiv="refresh"'));
+	res = await call("/status");
+	ok("/status is the same page", /text\/html/.test(res.headers.get("content-type") || ""));
+
+	// the gate message is admin input: it must never become live markup
+	store = { staff: { gate: { enabled: false, message: '<img src=x onerror=alert(1)>down', by: "probe" } } };
+	res = await call("/");
+	const offPage = await res.text();
+	ok("a tripped gate shows DISABLED on the page", offPage.includes("DISABLED") && offPage.includes("switched off"), "");
+	ok("the gate message is escaped, not rendered", offPage.includes("&lt;img src=x") && !offPage.includes("<img src=x"), "");
+	ok("the page still answers 200 while disabled", res.status === 200, "got " + res.status);
+
+	dbDown = true;
+	res = await call("/");
+	const degPage = await res.text();
+	ok("an unreachable database reads DEGRADED, not a crash", res.status === 200 && degPage.includes("DEGRADED"), "got " + res.status);
+	dbDown = false;
+	store = {};
+	res = await call("/health");
+	ok("/health is still JSON for machines", /application\/json/.test(res.headers.get("content-type") || ""), res.headers.get("content-type"));
+
 	/* --- CORS + routing -------------------------------------------------- */
 	res = await call("/staff.json", { method: "OPTIONS" });
 	ok("preflight is 204 with CORS", res.status === 204 && res.headers.get("access-control-allow-origin") === "*", "got " + res.status);
