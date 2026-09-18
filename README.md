@@ -249,7 +249,21 @@ does not protect.
 
 ## Controlling nametags from a Discord bot
 
-The tag editor is just a browser calling the GitHub Contents API — a Discord bot
-can do the exact same thing (Create / View / Edit / Delete / Transfer / Search
-rules, upload images) with a fine-grained GitHub token. Every publish lands
-in-game within seconds. Full copy-paste guide: **[DISCORD-BOT.md](DISCORD-BOT.md)**.
+A bot edits the same rules through **your own Worker**, with **one credential**:
+`XYRO_ADMIN_KEY`. No GitHub token, no CDN purge, no database secret.
+
+```js
+const xyro = require("./api/nametags-client.js");
+await xyro.edit(r => xyro.set(r, { match: "newbie", label: "New", color: "#6C80FF" }));
+```
+
+`api/nametags-client.js` is dependency-free and reads, edits, blocks and
+unblocks. `xyro.edit()` retries on a 409 by re-reading, so a bot can never
+trample an edit made in the web editor at the same moment.
+
+**Do not commit `nametags.json` from the bot.** The rules live in the Worker's
+database and `GET /nametags` serves that first, so a repo commit changes git
+history and nothing a player sees — it looks like it worked and does nothing.
+
+Full copy-paste guide, including a complete `/nametag` slash command:
+**[DISCORD-BOT.md](DISCORD-BOT.md)**.

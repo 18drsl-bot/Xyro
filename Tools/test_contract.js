@@ -291,6 +291,26 @@ ok("both sides accept the same key shapes",
 ok("the script refuses a blacklisted account instead of only hiding its tag",
 	/function fbIsBlacklisted/.test(lua) && /H\.blacklistShutdown/.test(lua) && /is on the Xyro blacklist, so the script will not run here/.test(lua), "");
 
+/* --- a bot edits the same route pair the editor does -------------------- */
+
+/* A Discord bot is the third writer. It has to name the same routes, the same
+   methods and the same header as the Worker, and it must NOT go through GitHub:
+   the Worker serves its database first, so a repo commit from a bot changes what
+   git history says and nothing about what players see. */
+const bot = fs.readFileSync(path.join(ROOT, "api", "nametags-client.js"), "utf8");
+ok("the bot client reads and writes through the Worker, not the GitHub API",
+	!/api\.github\.com/.test(bot) && /"\/nametags\?fresh=1"/.test(bot) && /method/.test(bot), "");
+ok("it sends the owner key in x-api-key, the header the Worker reads",
+	/"x-api-key": key/.test(bot) && worker.includes('req.headers.get("x-api-key")'), "");
+ok("it guards its write with ?sha=, like the editor",
+	/\/nametags" \+ \(rev \? "\?sha=" \+ encodeURIComponent\(rev\)/.test(bot) && worker.includes('url.searchParams.get("sha")'), "");
+ok("and treats a 409 as a race to re-read, not a failure to report",
+	/err\.code = "conflict"/.test(bot) && /err\.code === "conflict"/.test(bot), "");
+ok("the bot's blacklist calls match the Worker's routes and methods",
+	bot.includes('call("POST", "/blacklist/"') && bot.includes('call("DELETE", "/blacklist/"') && worker.includes('req.method === "POST" || req.method === "DELETE"'), "");
+ok("and it documents the trap it exists to avoid (a repo commit reaching nobody)",
+	/WHAT NOT TO DO/.test(bot) && /nametags\.json/.test(bot) && /mirror/.test(bot), "");
+
 /* --- tag artwork: three sides, one route ------------------------------- */
 
 /* The editor asks HEAD /media/<file> to decide whether a picture is already

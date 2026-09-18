@@ -568,12 +568,33 @@ the rest of your database.
 ## 9. Day-to-day
 
 ```bash
-node api/test.js              # 155 route tests against a mocked database and repo, no network
-node Tools/test_live_api.js   # check the DEPLOYED API with real requests (read-only)
+node api/test.js                     # route tests against a mocked database and repo, no network
+node Tools/test_live_api.js          # check the DEPLOYED API with real requests (read-only)
+node Tools/test_nametags_client.js   # the bot client: no network, no key needed
 npx wrangler tail             # live request log while you test in game
 npx wrangler dev              # run the Worker locally on http://localhost:8787
 npx wrangler deploy           # ship a change
 ```
+
+### A bot edits the same routes
+
+`api/nametags-client.js` is a dependency-free client for the two routes this
+section describes: `GET /nametags?fresh=1` and `PUT /nametags?sha=<rev>`. It
+needs the owner key and nothing else - no repo token, no database secret.
+
+```js
+const xyro = require("./api/nametags-client.js");
+await xyro.edit(r => xyro.set(r, { match: "newbie", label: "New", color: "#6C80FF" }));
+```
+
+`edit()` re-reads and re-applies on a 409, so a bot and the web editor can be
+used at the same time without either silently reverting the other. See
+**[../DISCORD-BOT.md](../DISCORD-BOT.md)** for the full guide.
+
+One thing not to do: a bot that commits `nametags.json` through the GitHub API
+changes the MIRROR, not the rules. `GET /nametags` serves the database first, so
+that commit reaches nobody - the commit succeeds, which is what makes it a
+trap.
 
 Free plan limits: **100,000 requests/day**, and this Worker makes one database
 call per node read (never more). Presence polling every 2s per player is the
