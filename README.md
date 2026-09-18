@@ -36,6 +36,7 @@ if nothing passes cleanly the best candidate still runs, with a warning saying w
 | `!nametagsfetch` | `!tagsfetch` | Re-fetch nametags.json from this repo immediately |
 | `!staffrefresh` | | Re-fetch the staff list from Firebase (new staff, no script update needed) |
 | `!blocked` | `!blacklist` | List the accounts blacklisted in Firebase (staff only) |
+| `!gate` | | Show whether the remote kill switch has this script enabled (staff only) |
 
 ## Nametags
 
@@ -162,7 +163,10 @@ database:
 * writes are validated, rate-limited and correctly status-coded (the raw
   Realtime Database answers a *refused* write with HTTP 200 and an error body);
 * the script falls back to the direct database on its own if the Worker is
-  unreachable, and the staff panel footer shows which path is live.
+  unreachable, and the staff panel footer shows which path is live;
+* a remote **kill switch** (`staff/gate`) that stops everyone — the loader before
+  it downloads, and clients already running within ~20 seconds — with no repo
+  push and no redeploy.
 
 Deploy it, set two secrets, paste the URL into **`api.json`** in the repo root —
 no Lua edits, and setting `"url": ""` again rolls the whole thing back.

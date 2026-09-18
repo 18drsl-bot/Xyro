@@ -16,6 +16,19 @@
 	Every download is size-checked, marker-checked and tail-checked
 	before running; a truncated or stale-looking file is never executed.
 
+	REMOTE GATE (kill switch)
+	This loader checks the database's staff/gate node before it downloads
+	anything, so you can stop everyone with one edit - no repo push, no
+	redeploy, no script update:
+
+		staff/gate = { "enabled": false, "message": "back in 10 minutes" }
+
+	With the gate off, this loader refuses to run, /script on the Xyro API
+	answers 403, and clients already running shut themselves down on their
+	next check. A gate that cannot be READ is treated as open, so a database
+	hiccup can never take the script away from everyone at once.
+	See api/README.md -> "The kill switch".
+
 	Usage:
 		loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/loadstring.lua"))()
 
@@ -33,6 +46,9 @@ local SOURCES = {
 }
 local MIN_SIZE = 100000 -- xyro.lua is ~420KB; anything smaller is truncated
 local MARKERS = { "Xyro", "H.Nametags", "RenderStepped" } -- must all appear in a real build
+local REPO_RAW = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main/"
+local REPO_CDN = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/"
+local HttpService = game:GetService("HttpService")
 
 local function warnAll(msg)
 	warn("[Xyro] " .. tostring(msg))
@@ -59,6 +75,39 @@ local function fetch(url)
 		end
 	end
 	return nil
+end
+
+local function notify(title, text)
+	pcall(function()
+		game:GetService("StarterGui"):SetCore("SendNotification", {
+			Title = tostring(title),
+			Text = tostring(text),
+			Duration = 8,
+		})
+	end)
+end
+
+-- decode any JSON value (a table, or a bare `false` from the gate node).
+-- Returns value, ok - ok is true even when the value is false, which the
+-- table-only check below could never express.
+local function decodeAny(text)
+	if type(text) ~= "string" or text == "" then
+		return nil, false
+	end
+	local ok, data = pcall(function()
+		return HttpService:JSONDecode(text)
+	end)
+	if not ok then
+		return nil, false
+	end
+	return data, true
+end
+
+-- a repo config file (api.json / firebase.json). Raw first with a cache-buster,
+-- then the jsDelivr edge; these are tiny and only consulted once per load.
+local function repoFile(name)
+	return fetch(REPO_RAW .. name .. "?t=" .. tostring(os.time()))
+		or fetch(REPO_CDN .. name)
 end
 
 -- pure-Lua base64 decoder (fallback when the executor has no crypt lib)
@@ -173,6 +222,54 @@ local function looksReal(src, sizeHint)
 	return true
 end
 
+-- --------------------------------------------------------------- the gate
+-- Where is the gate? api.json when the Xyro API is deployed (one small fetch),
+-- otherwise firebase.json so the gate still works without the Worker. No
+-- config at all (or no gate node) means there is nothing to obey, and the
+-- loader behaves exactly as it always has.
+local gateUrl, scriptUrl
+local gateState
+pcall(function()
+	local cfg = decodeAny(repoFile("api.json") or "")
+	local api = type(cfg) == "table" and (cfg.api or cfg) or nil
+	if type(api) == "table" and type(api.url) == "string" and api.url ~= "" then
+		local base = api.url:gsub("/+$", "")
+		local key = type(api.key) == "string" and api.key or ""
+		local q = key ~= "" and ("?key=" .. HttpService:UrlEncode(key)) or ""
+		gateUrl, scriptUrl = base .. "/gate" .. q, base .. "/script" .. q
+	else
+		local fc = decodeAny(repoFile("firebase.json") or "")
+		local fb = type(fc) == "table" and (fc.firebase or fc) or nil
+		if type(fb) == "table" and type(fb.url) == "string" and fb.url ~= "" then
+			gateUrl = fb.url:gsub("/+$", "") .. "/staff/gate.json"
+		end
+	end
+end)
+
+if gateUrl then
+	local parsed, got = decodeAny(fetch(gateUrl) or "")
+	if scriptUrl then
+		table.insert(SOURCES, scriptUrl) -- nil when only the database is configured
+	end
+	if got then
+		if parsed == false then
+			gateState = { enabled = false }
+		elseif type(parsed) == "table" then
+			gateState = parsed
+		end
+	end
+	if type(gateState) == "table" and gateState.enabled == false then
+		local why = type(gateState.message) == "string" and gateState.message or ""
+		notify("Xyro is disabled", why ~= "" and why or "Try again later.")
+		warnAll("the remote gate has this script switched off" .. (why ~= "" and (": " .. why) or ""))
+		return
+	end
+	if type(gateState) == "table" and type(gateState.warn) == "string" and gateState.warn ~= "" then
+		warnAll(gateState.warn)
+		notify("Xyro", gateState.warn)
+	end
+end
+
 -- one probe fetch up front so "no working HTTP" is reported before we start
 -- walking mirrors. The API body is kept: it is the primary source below and
 -- re-fetching it would burn a second anonymous API call (60/hour, shared by
@@ -196,8 +293,23 @@ local function record(good, why, soft, body, label)
 	return false
 end
 
+-- 0) the Xyro API, when api.json points at it: it serves the repo copy with a
+-- truncation guard of its own, and it REFUSES while the kill switch is off
+if scriptUrl then
+	local body = fetch(scriptUrl)
+	if body then
+		local good, why, soft = looksReal(body, nil)
+		if record(good, why, soft, body, "xyro api") then
+			src, how = body, "xyro api"
+		end
+	else
+		warnAll("the Xyro API did not serve the script (disabled, or down) - falling back to the mirrors")
+	end
+end
+
 -- 1) GitHub API first: never CDN-cached, always the newest commit
-do
+-- (skipped when the Xyro API already delivered the file above)
+if not src then
 	for attempt = 1, 2 do
 		local body = (attempt == 1 and probeApi) or fetch(API_URL)
 		if body then

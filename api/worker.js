@@ -40,19 +40,46 @@
  *      DELETE /blacklist/<who>               (key required)
  *      GET    /online                        -> { count, online[], beats{} }
  *
- * Auth
- * ----
- * One key: send it as the `x-api-key` header, or `?key=` when the caller can
- * only do a plain GET (executors' game:HttpGet cannot set headers).
- *   - reads  are gated only when XYRO_KEY is set (the data is public anyway;
- *            gating it costs nothing and stops casual scraping of the DB)
- *   - writes FAIL CLOSED: with no XYRO_KEY configured they return 503 rather
- *            than silently accepting anonymous writes
- * A key shipped inside a Lua client is not a secret - it is a speed bump. What
- * it buys you is that the *database credential* never leaves this Worker, so a
- * leaked key gets rotated in one command and the rules stay shut. Anything that
- * must be trustworthy (staff-only writes) has to be authorized server-side -
- * see "Real staff auth" in api/README.md.
+ * Auth - TWO keys, deliberately
+ * ----------------------------
+ * Send a key as the `x-api-key` header, or `?key=` when the caller can only do
+ * a plain GET (executors' game:HttpGet cannot set headers).
+ *
+ *   XYRO_KEY        the CLIENT key. Ships to every script user (it is in
+ *                   api.json in a public repo, so treat it as public). It may
+ *                   read, heartbeat, and enqueue commands - nothing else.
+ *   XYRO_ADMIN_KEY  the OWNER key. Held only by you and your Discord bot. It is
+ *                   required to write the blacklist and to trip the kill switch.
+ *
+ * The split matters: with a single key, the key inside the Lua client would also
+ * authorize blacklisting a rival. Two keys mean the thing every player can
+ * extract cannot do anything dangerous.
+ *
+ *   - reads are gated only when XYRO_KEY is set (the data is public anyway;
+ *           gating it costs nothing and stops casual scraping of the DB)
+ *   - admin writes FAIL CLOSED: with no XYRO_ADMIN_KEY configured they return
+ *           503 rather than silently accepting anonymous writes
+ *
+ * A client key is not a secret - it is a speed bump. What it buys is that the
+ * *database credential* never leaves this Worker, so a leaked key gets rotated
+ * in one command and the rules stay shut.
+ *
+ * The kill switch
+ * ---------------
+ * `staff/gate` in the database is a remote control read by the loader and by
+ * every running client:
+ *
+ *   { "enabled": false, "message": "down for maintenance" }
+ *
+ *   GET  /gate             -> the current gate (defaults to enabled)
+ *   GET  /staff/gate.json  -> same thing, database-shaped, for the script
+ *   POST /gate             -> admin key; body {enabled, message, warn}
+ *   POST /gate/off         -> admin key; body is the message shown on screen
+ *   POST /gate/on          -> admin key
+ *   GET  /script           -> the script itself; 403 while the gate is off
+ *
+ * A gate that cannot be read fails OPEN (enabled), because a database hiccup
+ * must never take the script away from everyone at once.
  */
 
 const NODES = new Set(["staff", "cmd", "here"]);
@@ -72,6 +99,9 @@ const NAME_KEY_RE = /^[A-Za-z0-9_]{1,32}$/;
 const ANY_KEY_RE = /^[A-Za-z0-9_]{1,32}$/;
 
 const MAX_CMD_BYTES = 512;
+
+/** The gate, as it reads when nothing is configured (or nothing is readable). */
+const GATE_DEFAULT = { enabled: true, message: "", warn: "", by: "", updated: 0 };
 
 /* ---------------------------------------------------------------- plumbing */
 
@@ -125,6 +155,18 @@ function writeKeyResponse(req, url, env) {
 	}
 	if (!safeEqual(keyOf(req, url), env.XYRO_KEY)) {
 		return json(env, { error: "forbidden: bad or missing key" }, 403);
+	}
+	return null;
+}
+
+/** Owner-only routes: the blacklist and the kill switch. Separate from the
+ *  client key on purpose - see the auth note at the top of this file. */
+function adminKeyResponse(req, url, env) {
+	if (!env.XYRO_ADMIN_KEY) {
+		return json(env, { error: "XYRO_ADMIN_KEY is not set - admin routes are disabled until you run: npx wrangler secret put XYRO_ADMIN_KEY" }, 503);
+	}
+	if (!safeEqual(keyOf(req, url), env.XYRO_ADMIN_KEY)) {
+		return json(env, { error: "forbidden: this route needs the admin key" }, 403);
 	}
 	return null;
 }
@@ -251,6 +293,44 @@ function freshOnly(node, data, window) {
 	return out;
 }
 
+/* ------------------------------------------------------------------- gate */
+
+/** Accepts {enabled, message, warn, by, updated}, or a bare boolean for the
+ *  people who just type `false` into the Firebase console. */
+function normalizeGate(raw) {
+	if (raw === false) return { ...GATE_DEFAULT, enabled: false };
+	if (raw === true) return { ...GATE_DEFAULT };
+	const g = raw && typeof raw === "object" ? raw : {};
+	return {
+		enabled: g.enabled === false ? false : true, // anything unclear = live
+		message: typeof g.message === "string" ? g.message.slice(0, 300) : "",
+		warn: typeof g.warn === "string" ? g.warn.slice(0, 200) : "",
+		by: typeof g.by === "string" ? g.by.slice(0, 60) : "",
+		updated: Number(g.updated) || 0,
+	};
+}
+
+/**
+ * Read the kill switch. Never throws: a database that is down, denied or simply
+ * has no gate node answers "enabled", so a broken database can never lock every
+ * player out of the script. `source` says which of the three happened.
+ */
+async function readGate(env) {
+	try {
+		const body = await fb(env, "staff/gate");
+		if (body === "null" || body === "") return { ...GATE_DEFAULT, source: "default" };
+		let parsed;
+		try {
+			parsed = JSON.parse(body);
+		} catch {
+			return { ...GATE_DEFAULT, source: "unreadable" };
+		}
+		return { ...normalizeGate(parsed), source: "database" };
+	} catch {
+		return { ...GATE_DEFAULT, source: "unreachable" };
+	}
+}
+
 /* ------------------------------------------------------------- repo files */
 
 async function repoFile(env, name, bust) {
@@ -291,7 +371,8 @@ async function cached(env, ctx, url, ttl, contentType, produce) {
 
 /* ----------------------------------------------------------------- routes */
 
-function health(env, url) {
+async function health(env, url) {
+	const gate = await readGate(env);
 	return json(env, {
 		ok: true,
 		service: "xyro-api",
@@ -300,9 +381,38 @@ function health(env, url) {
 		database_secret: env.FB_SECRET ? "set" : "not set (fine while rules allow anonymous access)",
 		reads: env.XYRO_KEY ? "key required" : "open",
 		writes: env.XYRO_KEY ? "key required" : "DISABLED (no XYRO_KEY)",
+		admin_writes: env.XYRO_ADMIN_KEY ? "admin key required" : "DISABLED (no XYRO_ADMIN_KEY)",
+		gate: { enabled: gate.enabled, message: gate.message, source: gate.source },
 		nodes: [...NODES],
 		presence_window: PRESENCE_WINDOW,
 		queue_ttl: QUEUE_TTL,
+	});
+}
+
+/** Serve the script, refusing anything that looks truncated on the way through -
+ *  every client then gets the same guard the loader applies locally. */
+async function serveScript(env, url) {
+	const raw = (env.RAW_REPO || "https://raw.githubusercontent.com/vertxxy-1/Xyro/main").replace(/\/+$/, "");
+	let res;
+	try {
+		res = await fetch(raw + "/xyro.lua" + (url.searchParams.has("fresh") ? "?t=" + Date.now() : ""), {
+			cf: { cacheTtl: 0 }, // never hand out an edge-cached older revision
+		});
+	} catch (err) {
+		throw new ApiError(502, "repo unreachable: " + (err && err.message ? err.message : String(err)));
+	}
+	if (!res.ok) throw new ApiError(502, "repo script returned " + res.status);
+	const src = await res.text();
+	if (src.length < 100000 || !src.includes("H.Nametags") || !src.includes("RenderStepped")) {
+		throw new ApiError(502, "repo script looks wrong or truncated (" + src.length + " bytes)");
+	}
+	return new Response(src, {
+		headers: {
+			"content-type": "text/plain; charset=utf-8",
+			...corsHeaders(env),
+			"cache-control": "no-store",
+			"x-xyro-bytes": String(src.length),
+		},
 	});
 }
 
@@ -343,6 +453,16 @@ async function handle(req, env, ctx) {
 	}
 	if (path === "/config") {
 		return cached(env, ctx, url, 60, "application/json; charset=utf-8", () => repoFile(env, "nametags.json", url.searchParams.has("fresh")));
+	}
+	/* the script itself, served from here when a client prefers it: this is what
+	   makes the kill switch able to cut a loader off at the source */
+	if (path === "/script" && req.method === "GET") {
+		if (!readKeyOk(req, url, env)) return json(env, { error: "forbidden: bad or missing key" }, 403);
+		const gate = await readGate(env);
+		if (!gate.enabled) {
+			return text(env, "Xyro is disabled" + (gate.message ? ": " + gate.message : "") + "\n", 403);
+		}
+		return serveScript(env, url);
 	}
 
 	/* --- database-shaped routes (what xyro.lua speaks) --------------------- */
@@ -399,6 +519,44 @@ async function handle(req, env, ctx) {
 		return json(env, { ok: true });
 	}
 
+	/* --- the kill switch ---------------------------------------------------- */
+	if ((path === "/gate" || path === "/staff/gate.json") && req.method === "GET") {
+		if (!readKeyOk(req, url, env)) return json(env, { error: "forbidden: bad or missing key" }, 403);
+		return json(env, await readGate(env), 200, { "cache-control": "no-store" });
+	}
+	if ((path === "/gate" || path === "/gate/off" || path === "/gate/on") && req.method === "POST") {
+		const denied = adminKeyResponse(req, url, env);
+		if (denied) return denied;
+		if (writeThrottled(req)) return json(env, { error: "too many writes, slow down" }, 429);
+		const patch = {};
+		if (path === "/gate/off" || path === "/gate/on") {
+			patch.enabled = path === "/gate/on";
+			patch.message = (await req.text()).slice(0, 300);
+		} else {
+			const raw = await req.text();
+			let body;
+			try {
+				body = raw ? JSON.parse(raw) : {};
+			} catch {
+				body = { message: raw }; // a bare body is read as the message
+			}
+			if (!body || typeof body !== "object") body = {};
+			if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
+			if (typeof body.message === "string") patch.message = body.message.slice(0, 300);
+			if (typeof body.warn === "string") patch.warn = body.warn.slice(0, 200);
+		}
+		if (patch.enabled === undefined && patch.message === undefined && patch.warn === undefined) {
+			return json(env, { error: "send {enabled, message, warn} as JSON, or use /gate/off and /gate/on" }, 400);
+		}
+		// merge over the current gate so a partial patch keeps the other fields
+		const current = await readGate(env);
+		const next = { ...current, ...patch, by: String(req.headers.get("x-xyro-by") || "api").slice(0, 60), updated: Math.floor(Date.now() / 1000) };
+		delete next.source;
+		if (patch.enabled === true && patch.message === undefined) next.message = "";
+		await fb(env, "staff/gate", { method: "PUT", body: JSON.stringify(next) });
+		return json(env, { ok: true, gate: next });
+	}
+
 	/* --- friendly routes --------------------------------------------------- */
 	if (path === "/online" && req.method === "GET") {
 		if (!readKeyOk(req, url, env)) return json(env, { error: "forbidden: bad or missing key" }, 403);
@@ -415,7 +573,9 @@ async function handle(req, env, ctx) {
 	}
 	const bl = path.match(/^\/blacklist\/([^/]+)$/);
 	if (bl && (req.method === "POST" || req.method === "DELETE")) {
-		const denied = writeKeyResponse(req, url, env);
+		// the OWNER key, not the client key: a client key is public, and gating
+		// the blacklist behind it would let any player block a rival
+		const denied = adminKeyResponse(req, url, env);
 		if (denied) return denied;
 		if (writeThrottled(req)) return json(env, { error: "too many writes, slow down" }, 429);
 		const who = decodeURIComponent(bl[1]);

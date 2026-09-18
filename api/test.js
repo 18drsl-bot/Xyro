@@ -45,10 +45,18 @@ function dbDelete(p) {
 	if (node && typeof node === "object") delete node[parts[parts.length - 1]];
 }
 
+// a synthetic stand-in for xyro.lua: long enough to clear the Worker's size guard,
+// carrying the markers it looks for
+const FAKE_SCRIPT = "-- xyro\n" + "H.Nametags = {}\nRenderStepped\n" + "x".repeat(120000) + "\nreturn\n";
+let scriptTruncated = false;
 const REPO_FILES = {
 	"/vertxxy-1/Xyro/main/version.txt": "0.8.11\n",
 	"/vertxxy-1/Xyro/main/nametags.json": JSON.stringify({ options: { collapseFar: true }, tags: [{ label: "FOUNDER" }] }),
 };
+function repoFile(pathname) {
+	if (pathname === "/vertxxy-1/Xyro/main/xyro.lua") return scriptTruncated ? "-- cut off\nreturn" : FAKE_SCRIPT;
+	return REPO_FILES[pathname];
+}
 
 global.fetch = async (url, init) => {
 	const u = new URL(url);
@@ -70,7 +78,7 @@ global.fetch = async (url, init) => {
 		return new Response(value === null ? "null" : JSON.stringify(value), { status: 200 });
 	}
 	if (u.hostname === "raw.githubusercontent.com") {
-		const body = REPO_FILES[u.pathname];
+		const body = repoFile(u.pathname);
 		if (body === undefined) return new Response("Not Found", { status: 404 });
 		return new Response(body, { status: 200 });
 	}
@@ -122,6 +130,8 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("health 200", res.status === 200);
 	ok("health reports reads open without a key", json.reads === "open", JSON.stringify(json.reads));
 	ok("health fails writes closed without a key", /DISABLED/.test(json.writes), json.writes);
+	ok("health fails admin writes closed without an admin key", /DISABLED/.test(json.admin_writes), json.admin_writes);
+	ok("health reports the gate", json.gate && json.gate.enabled === true && json.gate.source === "default", JSON.stringify(json.gate));
 
 	/* --- database-shaped reads ------------------------------------------ */
 	store = { staff: { admins: ["8579040069"], ranks: { founder: ["8579040069"] } } };
@@ -185,17 +195,71 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	res = await call("/staff.json", { env: { XYRO_KEY: "sekret" }, headers: { "x-api-key": "sekret" } });
 	ok("GET /staff.json works with the x-api-key header", res.status === 200, "got " + res.status);
 
+	/* --- the kill switch ------------------------------------------------ */
+	store = {};
+	res = await call("/gate");
+	json = await body(res);
+	ok("gate is enabled by default (missing node)", res.status === 200 && json.enabled === true && json.source === "default", JSON.stringify(json));
+
+	store = { staff: { gate: { enabled: false, message: "maintenance, back in 5" } } };
+	res = await call("/gate");
+	json = await body(res);
+	ok("gate reads a disabled state", json.enabled === false && json.message === "maintenance, back in 5", JSON.stringify(json));
+	res = await call("/staff/gate.json");
+	json = await body(res);
+	ok("the script's database-shaped gate route agrees", json.enabled === false, JSON.stringify(json));
+	res = await call("/health");
+	json = await body(res);
+	ok("health surfaces a disabled gate", json.gate.enabled === false, JSON.stringify(json.gate));
+
+	// the gate is a write, so the CLIENT key must not be able to trip it
+	store = {};
+	const WITH_KEYS = { XYRO_KEY: "sekret", XYRO_ADMIN_KEY: "owner" };
+	res = await call("/gate/off", { method: "POST", body: "nope", env: WITH_KEYS, headers: { "x-api-key": "sekret" } });
+	ok("a client key cannot trip the kill switch", res.status === 403, "got " + res.status);
+	res = await call("/gate/off", { method: "POST", body: "down for five minutes", env: WITH_KEYS, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("the admin key trips it", res.status === 200 && json.gate.enabled === false && dbGet("staff/gate").enabled === false, JSON.stringify(json));
+	ok("the trip stores its message and who did it", dbGet("staff/gate").message === "down for five minutes" && dbGet("staff/gate").updated > 0, JSON.stringify(dbGet("staff/gate")));
+
+	res = await call("/script", { env: WITH_KEYS, headers: { "x-api-key": "sekret" } });
+	const offText = await res.text();
+	ok("/script refuses while the gate is off", res.status === 403 && /down for five minutes/.test(offText), res.status + " " + offText.slice(0, 60));
+
+	res = await call("/gate", { method: "POST", body: JSON.stringify({ warn: "restarting in 10 minutes" }), env: WITH_KEYS, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("a partial patch keeps the other gate fields", json.gate.enabled === false && json.gate.warn === "restarting in 10 minutes", JSON.stringify(json.gate));
+	ok("the patch records who sent it", json.gate.by === "api", json.gate.by);
+
+	res = await call("/gate", { method: "POST", body: JSON.stringify({ enabled: true }), env: WITH_KEYS, headers: { "x-api-key": "owner", "x-xyro-by": "discord:vert" } });
+	json = await body(res);
+	ok("/gate can re-enable and clear the message", json.gate.enabled === true && json.gate.message === "", JSON.stringify(json.gate));
+	ok("the caller can be named", json.gate.by === "discord:vert", json.gate.by);
+
+	res = await call("/script", { env: WITH_KEYS, headers: { "x-api-key": "sekret" } });
+	const onText = await res.text();
+	ok("/script serves the source once enabled", res.status === 200 && onText.length > 100000 && onText.includes("H.Nametags"), res.status + " " + onText.length);
+	ok("/script reports its byte length", res.headers.get("x-xyro-bytes") === String(onText.length), res.headers.get("x-xyro-bytes"));
+	scriptTruncated = true;
+	res = await call("/script", { env: WITH_KEYS, headers: { "x-api-key": "sekret" } });
+	json = await body(res);
+	ok("/script refuses a truncated repo copy", res.status === 502 && /truncated/.test(json.error || ""), JSON.stringify(json));
+	scriptTruncated = false;
+
 	/* --- friendly routes ------------------------------------------------ */
 	store = { staff: { admins: ["1"], blacklist: { 12345: "ban evasion" } } };
 	res = await call("/blacklist");
 	json = await body(res);
 	ok("GET /blacklist returns just the map", json.count === 1 && json.blacklist["12345"] === "ban evasion", JSON.stringify(json));
 
-	res = await call("/blacklist/12345", { method: "POST", body: "ban evasion", headers: { "x-api-key": "sekret" }, env: { XYRO_KEY: "sekret" } });
-	json = await body(res);
-	ok("POST /blacklist writes the reason", res.status === 200 && json.action === "blocked" && dbGet("staff/blacklist/12345") === "ban evasion", JSON.stringify(dbGet("staff/blacklist")));
+	res = await call("/blacklist/12345", { method: "POST", body: "ban evasion", headers: { "x-api-key": "sekret" }, env: WITH_KEYS });
+	ok("POST /blacklist refuses the public client key", res.status === 403, "got " + res.status);
 
-	res = await call("/blacklist/12345", { method: "DELETE", headers: { "x-api-key": "sekret" }, env: { XYRO_KEY: "sekret" } });
+	res = await call("/blacklist/12345", { method: "POST", body: "ban evasion", headers: { "x-api-key": "owner" }, env: WITH_KEYS });
+	json = await body(res);
+	ok("POST /blacklist writes the reason with the admin key", res.status === 200 && json.action === "blocked" && dbGet("staff/blacklist/12345") === "ban evasion", JSON.stringify(dbGet("staff/blacklist")));
+
+	res = await call("/blacklist/12345", { method: "DELETE", headers: { "x-api-key": "owner" }, env: WITH_KEYS });
 	ok("DELETE /blacklist unblocks", res.status === 200 && dbGet("staff/blacklist/12345") === null, JSON.stringify(dbGet("staff/blacklist")));
 
 	store = { here: { Alive: now(), Old: now() - 300 } };

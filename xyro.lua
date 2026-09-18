@@ -1089,6 +1089,32 @@ local function fbAddIdentity(raw)
 	end
 end
 
+-- ------------------------------------------------------------ remote gate --
+-- staff/gate is the kill switch:
+--   { "enabled": false, "message": "back in 10 minutes" }
+-- Read at boot (it rides along with staff.json), re-read on !staffrefresh, and
+-- polled in the background while the script runs - so one edit to the database
+-- stops every client, with no repo push, no redeploy and no script update.
+-- A missing, empty or unreadable gate means ENABLED: a database problem must
+-- never be able to take the script away from everyone at once.
+local function fbParseGate(raw)
+	if raw == false then
+		return { enabled = false, message = "", warn = "", by = "" }
+	end
+	if type(raw) ~= "table" then
+		return nil -- no gate configured
+	end
+	return {
+		enabled = raw.enabled ~= false,
+		message = type(raw.message) == "string" and raw.message or "",
+		warn = type(raw.warn) == "string" and raw.warn or "",
+		by = type(raw.by) == "string" and raw.by or "",
+	}
+end
+-- exported: the poll below lives far enough down the file that the bare local
+-- would not reliably be in scope (the old nil-call trap)
+H.fbParseGate = fbParseGate
+
 local function fbApplyStaff(body)
 	local ok, data = pcall(H.HS.JSONDecode, H.HS, body)
 	if not ok or type(data) ~= "table" then
@@ -1173,6 +1199,11 @@ local function fbApplyStaff(body)
 				addMember(key, value) -- map form with a reason
 			end
 		end
+	end
+	-- remote gate (kill switch) - rides along with every staff fetch, so
+	-- !staffrefresh applies a shutdown the moment you publish one
+	if data.gate ~= nil then
+		H.GATE = fbParseGate(data.gate)
 	end
 	-- revision counter: the nametag render caches (rule lookup + rebuild
 	-- signature) key off this, so a !staffrefresh is picked up immediately
@@ -1303,6 +1334,85 @@ function H.blacklistShutdown()
 	end)
 end
 
+-- the kill switch's notice: the same hand-rolled card as the blacklist one
+-- (this can run before any theme helper exists), in amber, naming who set it
+local function fbGateNotice(message, by)
+	local host = (gethui and gethui()) or game:GetService("CoreGui")
+	if not host then
+		return
+	end
+	local old = host:FindFirstChild("XyroGate")
+	if old then
+		old:Destroy()
+	end
+	local sg = Instance.new("ScreenGui")
+	sg.Name = "XyroGate"
+	sg.IgnoreGuiInset = true
+	sg.ResetOnSpawn = false
+	sg.DisplayOrder = 2147483647
+	sg.Parent = host
+	local card = Instance.new("Frame")
+	card.AnchorPoint = Vector2.new(0.5, 0.5)
+	card.Position = UDim2.fromScale(0.5, 0.5)
+	card.Size = UDim2.fromOffset(370, 132)
+	card.BackgroundColor3 = Color3.fromRGB(18, 16, 12)
+	card.BorderSizePixel = 0
+	card.Parent = sg
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = card
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(226, 170, 60)
+	stroke.Thickness = 1
+	stroke.Transparency = 0.35
+	stroke.Parent = card
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1, -28, 0, 26)
+	title.Position = UDim2.new(0, 14, 0, 14)
+	title.BackgroundTransparency = 1
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 15
+	title.TextColor3 = Color3.fromRGB(240, 240, 245)
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Text = "Xyro - temporarily disabled"
+	title.Parent = card
+	local bodyText = Instance.new("TextLabel")
+	bodyText.Size = UDim2.new(1, -28, 1, -58)
+	bodyText.Position = UDim2.new(0, 14, 0, 46)
+	bodyText.BackgroundTransparency = 1
+	bodyText.Font = Enum.Font.Gotham
+	bodyText.TextSize = 13
+	bodyText.TextWrapped = true
+	bodyText.TextColor3 = Color3.fromRGB(150, 152, 160)
+	bodyText.TextXAlignment = Enum.TextXAlignment.Left
+	bodyText.TextYAlignment = Enum.TextYAlignment.Top
+	bodyText.Text = "The script was switched off from the Xyro API."
+		.. ((message ~= nil and message ~= "") and ("\n\n" .. message) or "")
+		.. ((by ~= nil and by ~= "") and ("\n\nSet by: " .. by) or "")
+	bodyText.Parent = card
+end
+
+-- enforce the kill switch: tear everything down once, then say why. Safe to
+-- call as often as you like - a no-op unless the gate is actually off.
+H.gateEnforce = function()
+	local gate = H.GATE
+	if type(gate) ~= "table" or gate.enabled ~= false then
+		return false
+	end
+	if H.GATED then
+		return true
+	end
+	H.GATED = true
+	pcall(H.blacklistShutdown) -- the UI and staff panel go first
+	pcall(function()
+		if _G.ScriptHubCleanup then
+			_G.ScriptHubCleanup()
+		end
+	end)
+	pcall(fbGateNotice, gate.message, gate.by) -- then the reason stays on screen
+	return true
+end
+
 pcall(apiLoadRepoConfig) -- repo api.json -> talk to the Cloudflare Worker
 pcall(fbLoadRepoConfig) -- repo firebase.json -> FIREBASE_URL (no script edits needed)
 pcall(fbFetchStaffOnce) -- boot-time sync fetch; failing just means offline defaults
@@ -1322,6 +1432,15 @@ do
 		H.blacklistNotice(reason)
 	end
 end
+
+-- the kill switch is checked before any feature mounts. The end of the file
+-- checks it again (by then everything has mounted) and the transport loop keeps
+-- checking while the script runs, so a shutdown lands on live clients too.
+pcall(function()
+	if H.gateEnforce then
+		H.gateEnforce()
+	end
+end)
 
 -- Firebase-backed queue for staff commands + presence (ntfy alternative).
 -- Writes are fire-and-forget with a retry; reads poll the node and prune
@@ -1442,6 +1561,41 @@ if tostring(H.FIREBASE_URL or "") ~= "" then
 		end
 	end
 
+	-- Remote gate poll: one small read every ~20s (the node is two fields).
+	-- Deliberately independent of the command queue, so a queue problem can never
+	-- hide a shutdown. An unreadable gate leaves the current state alone.
+	H.fbGatePoll = function()
+		if not (H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "") then
+			return H.GATE
+		end
+		local body = H.fbGet(H.fbUrl("staff/gate.json"))
+		if type(body) ~= "string" or body == "" then
+			return H.GATE -- unreadable: keep whatever we already know
+		end
+		if body == "null" then
+			H.GATE = nil -- no gate configured at all
+			return nil
+		end
+		local okD, raw = pcall(H.HS.JSONDecode, H.HS, body)
+		if not okD then
+			return H.GATE
+		end
+		local gate = H.fbParseGate(raw)
+		H.GATE = gate
+		if type(gate) == "table" then
+			if gate.enabled == false then
+				H.gateEnforce()
+			elseif gate.warn ~= "" and gate.warn ~= H.GATE_WARNED then
+				-- an announcement the script keeps running through
+				H.GATE_WARNED = gate.warn
+				if H.notify then
+					pcall(H.notify, { title = "Xyro", text = gate.warn, kind = "info", duration = 8 })
+				end
+			end
+		end
+		return gate
+	end
+
 	task.spawn(function()
 		pcall(H.fbQueuePrune, 600)
 	end)
@@ -1461,6 +1615,9 @@ H.fbRefreshStaff = function()
 			pcall(H.blacklistNotice, reason)
 			pcall(H.blacklistShutdown)
 			return "Firebase staff list applied - this account is blacklisted, script disabled"
+		end
+		if H.gateEnforce and H.gateEnforce() then
+			return "staff list applied - the remote gate has the script disabled"
 		end
 		return "Firebase staff list applied"
 	end
@@ -13090,6 +13247,42 @@ add{
 		return "staff system unavailable"
 	end,
 }
+add{
+	name = "gate",
+	group = "Server",
+	help = "Show whether the remote kill switch has this script enabled (staff only)",
+	run = function()
+		if not (H.staffIsAdmin and H.staffIsAdmin(player.UserId, player.Name)) then
+			return "staff only"
+		end
+		if H.fbGatePoll then
+			pcall(H.fbGatePoll) -- re-read now instead of waiting for the poll
+		end
+		local gate = H.GATE
+		if type(gate) ~= "table" then
+			return "gate: enabled (nothing configured)"
+		end
+		local lines = { "gate: " .. (gate.enabled and "enabled" or "DISABLED") }
+		if gate.message ~= "" then
+			lines[#lines + 1] = "message: " .. gate.message
+		end
+		if gate.warn ~= "" then
+			lines[#lines + 1] = "warning: " .. gate.warn
+		end
+		if gate.by ~= "" then
+			lines[#lines + 1] = "set by: " .. gate.by
+		end
+		if H.notify then
+			pcall(H.notify, {
+				title = "Xyro gate",
+				text = table.concat(lines, "\n"),
+				kind = gate.enabled and "info" or "error",
+				duration = 8,
+			})
+		end
+		return table.concat(lines, " | ")
+	end,
+}
 
 if isAdmin then
 	local Stats = game:GetService("Stats")
@@ -15090,6 +15283,11 @@ do
 				pcall(staffPoll)
 			end
 			ticks += 1
+			-- kill switch check (every ~20s): cheap, and it is what makes a
+			-- shutdown land on clients that are already running
+			if H.fbGatePoll and ticks % 10 == 0 then
+				task.spawn(pcall, H.fbGatePoll)
+			end
 			if H.fbQueuePrune and ticks % 80 == 0 then
 				task.spawn(pcall, H.fbQueuePrune, 300)
 			end
@@ -15745,3 +15943,15 @@ if H.BLACKLISTED then
 	end)
 	pcall(H.blacklistShutdown)
 end
+
+-- ============================================================================
+-- REMOTE GATE (kill switch) - also last, for the same reason: everything has
+-- mounted by now, so tripping the gate here leaves nothing on screen except the
+-- card explaining why. The transport loop re-checks it every ~20s, which is
+-- what shuts down clients that were already running when you tripped it.
+-- ============================================================================
+pcall(function()
+	if H.gateEnforce then
+		H.gateEnforce()
+	end
+end)

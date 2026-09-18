@@ -1253,12 +1253,28 @@ function renderUsers() {
    cached for five minutes, and a failure simply means no filtering. */
 let blacklistNames = new Set();
 let blacklistAt = 0;
+let gateMessage = null; // the kill switch's last message we warned about
 async function refreshBlacklist() {
 	if (blacklistAt && Date.now() - blacklistAt < 300000) return;
 	try {
 		const res = await fetch(stamp(FB_STAFF), { cache: "no-store" });
 		if (!res.ok) return;
 		const data = await res.json();
+		/* the remote kill switch (see api/README.md -> The kill switch). staff.json
+		   carries it as `gate`, so the editor learns about a shutdown from the same
+		   request it already makes - worth saying out loud here rather than leaving
+		   you wondering why nobody is running the script. */
+		const gate = data && (data.gate === false ? { enabled: false, message: "" } : data.gate);
+		if (gate && typeof gate === "object" && gate.enabled === false) {
+			const msg = String(gate.message || "");
+			if (gateMessage !== msg) {
+				gateMessage = msg;
+				toast("Script disabled by the gate" + (msg ? ": " + msg : ""), "err", 14);
+			}
+		} else if (gateMessage !== null) {
+			gateMessage = null;
+			toast("The gate is open again - players can run the script", "ok", 8);
+		}
 		const bl = data && (data.blacklist || data.blocked);
 		const set = new Set();
 		const add = v => { const s = String(v == null ? "" : v).trim().toLowerCase(); if (s) set.add(s); };

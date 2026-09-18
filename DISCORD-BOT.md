@@ -140,9 +140,45 @@ async function unblacklist(who) {
 ```
 
 Players pick the change up on their next launch, or immediately with
-`!staffrefresh`; in game `!blocked` prints the list. A blacklisted account gets
+`!staffrefresh`; in game `!blocked` prints the list. (If you have the Xyro API
+deployed, `POST /blacklist/<who>` with the owner key does the same thing without
+handing your bot a database secret — see the kill switch section below.) A blacklisted account gets
 no UI, tags, presence or command transport, and every other client stops
 drawing their tag — see **FIREBASE.md → 3c. Blacklist**.
+
+## Kill switch from the bot (optional)
+
+With the Xyro API deployed (`api/README.md`), stopping and resuming everyone is
+two lines — and the owner key never touches a client:
+
+```js
+const API = "https://xyro-api.you.workers.dev";
+const ADMIN = process.env.XYRO_ADMIN_KEY; // server-side only, never in api.json
+
+// /shutdown reason:down for maintenance  -> stop every loader AND every running client
+// /resume                                -> let them back in
+async function setGate(enabled, message) {
+	await fetch(API + "/gate/" + (enabled ? "on" : "off"), {
+		method: "POST",
+		headers: { "x-api-key": ADMIN, "x-xyro-by": "discord" },
+		body: message || "",
+	});
+}
+
+// /announce reason:restarting in 10 minutes -> a notice they see, and keep playing
+async function announce(text) {
+	await fetch(API + "/gate", {
+		method: "POST",
+		headers: { "x-api-key": ADMIN, "content-type": "application/json", "x-xyro-by": "discord" },
+		body: JSON.stringify({ warn: text }),
+	});
+}
+```
+
+The same idea works for the blacklist: `POST /blacklist/<id or name>` with the
+body set to the reason, and `DELETE /blacklist/<id or name>` to unblock — no
+database secret and no rules to edit. `GET /gate` and `GET /blacklist` read the
+current state back for your command replies.
 
 ## Verified badge
 

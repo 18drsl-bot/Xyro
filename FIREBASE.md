@@ -156,6 +156,30 @@ blacklist a rival. Changes apply on the next launch, or immediately with
 
 In game, staff can print the current list with **`!blocked`**.
 
+## 3d. Kill switch
+
+The same `staff` node takes a **`gate`** — a remote switch that stops the script
+everywhere without a repo push, a redeploy or a script update:
+
+```json
+{ "staff": { "gate": { "enabled": false, "message": "back in 10 minutes" } } }
+```
+
+* the **loader** checks it before downloading anything, so it never even runs;
+* clients **already in game** tear their UI down within ~20 seconds and show the
+  message on an amber card — no window, no tags, no presence, no commands;
+* `!staffrefresh` applies a change on one client instantly, and `!gate` (staff
+  only) prints the current state in game.
+
+Use `"warn": "restarting in 10 minutes"` instead of `"enabled": false` for an
+announcement that does **not** stop anyone. Clear it by setting `"enabled": true`
+or by deleting the node.
+
+An unreadable gate counts as **enabled** on purpose: if the database is down,
+nobody gets kicked out of a running session. With the Xyro API deployed the same
+switch is controllable over HTTP with an owner-only key — see
+**[api/README.md](api/README.md) → The kill switch**.
+
 ## 4. Point the script at it (no script edits!)
 
 Add a **`firebase.json`** file to the **repo root** with your database URL:
