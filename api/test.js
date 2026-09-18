@@ -56,13 +56,16 @@ function dbDelete(p) {
 // carrying the markers it looks for
 const FAKE_SCRIPT = "-- xyro\n" + "H.Nametags = {}\nRenderStepped\n" + "x".repeat(120000) + "\nreturn\n";
 let scriptTruncated = false;
-const REPO_FILES = {
+// the loader template, with the two constants /loader rewrites
+const REPO_FILES_BASE = {
+	"/vertxxy-1/Xyro/main/custom-loader.lua": '-- Xyro loader\nlocal API = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main"\nlocal KEY = "stale-in-repo"\nprint("body")\n',
+	"/vertxxy-1/Xyro/main/loadstring.lua": '-- the other loader\nlocal API = "whatever"\nlocal KEY = "whatever"\n',
 	"/vertxxy-1/Xyro/main/version.txt": "0.8.11\n",
 	"/vertxxy-1/Xyro/main/nametags.json": JSON.stringify({ options: { collapseFar: true }, tags: [{ label: "FOUNDER" }] }),
 };
 function repoFile(pathname) {
 	if (pathname === "/vertxxy-1/Xyro/main/xyro.lua") return scriptTruncated ? "-- cut off\nreturn" : FAKE_SCRIPT;
-	return REPO_FILES[pathname];
+	return REPO_FILES_BASE[pathname];
 }
 
 global.fetch = async (url, init) => {
@@ -263,6 +266,30 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	json = await body(res);
 	ok("/script refuses a truncated repo copy", res.status === 502 && /truncated/.test(json.error || ""), JSON.stringify(json));
 	scriptTruncated = false;
+
+	/* --- the loader your users are handed ------------------------------- */
+
+	// it must NOT need a key: this is the line someone pastes before they have
+	// anything, and a key in it is a secret you cannot rotate
+	res = await call("/loader", { env: WITH_KEYS });
+	let loaderSrc = await res.text();
+	ok("GET /loader needs no key", res.status === 200, "got " + res.status);
+	ok("/loader is served as text", /text\/plain/.test(res.headers.get("content-type") || ""), res.headers.get("content-type"));
+	ok("/loader rewrites the API line to the origin it was fetched from", loaderSrc.includes('local API = "https://api.test"'), JSON.stringify(loaderSrc.split("\n").slice(1, 3)));
+	ok("/loader injects the client key it is currently using", loaderSrc.includes('local KEY = "sekret"'), JSON.stringify(loaderSrc.split("\n").slice(1, 3)));
+	ok("/loader keeps the rest of the file", loaderSrc.includes('print("body")') && !loaderSrc.includes("stale-in-repo"), loaderSrc);
+
+	// a different file is one variable away, with no code change
+	res = await call("/loader", { env: { ...WITH_KEYS, LOADER_FILE: "loadstring.lua" } });
+	ok("LOADER_FILE picks which loader is handed out", (await res.text()).includes("the other loader"), "");
+
+	// the gate cuts it off at the source, which no client-side check can promise
+	res = await call("/gate/off", { method: "POST", body: "down for five minutes", env: WITH_KEYS, headers: { "x-api-key": "owner" } });
+	res = await call("/loader", { env: WITH_KEYS });
+	const loaderOff = await res.text();
+	ok("/loader is refused while the gate is off", res.status === 403 && /down for five minutes/.test(loaderOff), res.status + " " + loaderOff.slice(0, 40));
+	res = await call("/gate/on", { method: "POST", env: WITH_KEYS, headers: { "x-api-key": "owner" } });
+	ok("/loader comes back when the gate re-opens", (await call("/loader", { env: WITH_KEYS })).status === 200, "");
 
 	/* --- the gate's auto re-open window --------------------------------- */
 	store = { staff: { gate: { enabled: false, message: "maintenance", until: now() + 300 } } };

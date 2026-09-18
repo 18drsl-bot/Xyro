@@ -80,6 +80,7 @@
  *   POST /gate/off         -> admin key; body is the message shown on screen
  *   POST /gate/on          -> admin key
  *   GET  /script           -> the script itself; 403 while the gate is off
+ *   GET  /loader           -> the loader you hand out; 403 while the gate is off
  *
  * A gate that cannot be read fails OPEN (enabled), because a database hiccup
  * must never take the script away from everyone at once.
@@ -589,7 +590,7 @@ ${row("Players running now", String(online))}
 ${version ? row("Script version", esc(version)) : ""}
 ${row("Reads", env.XYRO_KEY ? "key required" : "open")}
 <footer>
-Machine-readable: <a href="/health">/health</a> \u00b7 script source: <code>/script</code> \u00b7 this page refreshes every 30s
+Machine-readable: <a href="/health">/health</a> \u00b7 script: <code>/script</code> \u00b7 loader to hand out: <code>/loader</code> \u00b7 this page refreshes every 30s
 </footer>
 </div></body></html>`;
 
@@ -685,6 +686,26 @@ async function serveScript(env, url) {
 	});
 }
 
+/** The gate's answer as a plain-text refusal, or null when everyone may load.
+ *  Shared by /script and /loader so the two can never disagree about the switch. */
+async function gateRefusal(env) {
+	const gate = await readGate(env);
+	if (gate.enabled) return null;
+	return text(env, "Xyro is disabled" + (gate.message ? ": " + gate.message : "") + "\n", 403);
+}
+
+/** Rewrite the loader's own two constants from the request it is served on: the
+ *  API URL becomes the origin it was fetched from (so a custom domain or a
+ *  local `wrangler dev` both work untouched), and the key becomes whatever this
+ *  Worker is currently using - which is what makes the hand-out line short and
+ *  a key rotation unable to break a loader anyone already has. */
+function injectLoaderConfig(src, env, origin) {
+	const key = env.XYRO_KEY || "";
+	return src
+		.replace(/^local API = ".*"$/m, 'local API = "' + origin + '"')
+		.replace(/^local KEY = ".*"$/m, 'local KEY = "' + key + '"');
+}
+
 /** GET /online -> the current presence list, old beats already filtered out. */
 async function online(env, url) {
 	const window = Math.min(Math.max(Number(url.searchParams.get("window")) || PRESENCE_WINDOW, 5), 600);
@@ -729,11 +750,24 @@ async function handle(req, env, ctx) {
 	   makes the kill switch able to cut a loader off at the source */
 	if (path === "/script" && req.method === "GET") {
 		if (!readKeyOk(req, url, env)) return json(env, { error: "forbidden: bad or missing key" }, 403);
-		const gate = await readGate(env);
-		if (!gate.enabled) {
-			return text(env, "Xyro is disabled" + (gate.message ? ": " + gate.message : "") + "\n", 403);
-		}
+		const refused = await gateRefusal(env);
+		if (refused) return refused;
 		return serveScript(env, url);
+	}
+
+	/* the loader, so the line you hand out points at this domain instead of at
+	   GitHub. Deliberately NOT key-gated: it is what someone pastes before they
+	   have anything - a key in a hand-out line would become a secret you cannot
+	   rotate without breaking every copy in circulation. The gate still cuts it
+	   off, which is the part that matters. */
+	if (path === "/loader" && req.method === "GET") {
+		const refused = await gateRefusal(env);
+		if (refused) return refused;
+		const file = env.LOADER_FILE || "custom-loader.lua";
+		const bust = url.searchParams.has("fresh");
+		return cached(env, ctx, url, 60, "text/plain; charset=utf-8", async () =>
+			injectLoaderConfig(await repoFile(env, file, bust), env, url.origin)
+		);
 	}
 
 	/* --- database-shaped routes (what xyro.lua speaks) --------------------- */

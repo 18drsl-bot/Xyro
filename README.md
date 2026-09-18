@@ -19,16 +19,24 @@ verification, for flaky executors):
 loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/loadstring.lua"))()
 ```
 
-### Your own loader
+### Your own loader (served by the API, not by GitHub)
 
 `custom-loader.lua` is a short, brandable loader you own — the same five jobs as
 `loadstring.lua` (ask the kill switch, download through the API, validate, run, report),
-written to be read in one sitting. Edit the four constants at the top (`BRAND`, `API`,
-`KEY`, `FALLBACK`) and hand it out however you like:
+written to be read in one sitting. Hand out this line instead of a GitHub URL:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/custom-loader.lua"))()
+loadstring(game:HttpGet("https://xyro-api.xyroapi.workers.dev/loader"))()
 ```
+
+The Worker serves it, so the client never touches GitHub: nothing to block,
+nothing to rate-limit, no CDN cache to wait on. `/loader` rewrites the file's own
+`API` and `KEY` lines as it serves it, which means the hand-out line carries no
+key at all — rotating `XYRO_KEY` cannot break a loader people already have — and
+the gate answers `403` to it, so a shutdown stops the loader **before it is even
+delivered**. Paste `custom-loader.lua` into an executor directly and it works too;
+you just set those two lines by hand from `api.json`. `LOADER_FILE` in
+`api/wrangler.toml` chooses which file `/loader` hands out.
 The console prints `Loaded Version: vX.Y.Z` — that is what's live in version.txt, so
 you can always confirm you're on the latest build.
 

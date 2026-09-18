@@ -127,6 +127,12 @@ That is the whole rollout. At launch:
   views go through the Worker (it logs `[xyro] live users + staff via the Xyro
   API` in the console when it does).
 
+Hand out the loader the same way, and no GitHub URL ever reaches a client:
+
+```lua
+loadstring(game:HttpGet("https://xyro-api.<you>.workers.dev/loader"))()
+```
+
 To roll back: set `"url": ""` and commit. Everything returns to Firebase on the
 next launch.
 
@@ -348,6 +354,7 @@ That is the property the direct-to-database setup can never have.
 | `/gate` | POST | **admin** | patch `{enabled, message, warn, until, for}`; partial patches merge |
 | `/gate/off` `/gate/on` | POST | **admin** | trip / clear the switch; the body is the on-screen message, `?for=` sets a window |
 | `/script` | GET | if gated | the script itself, `403` while the gate is off |
+| `/loader` | GET | no | the loader you hand out (`LOADER_FILE`, default `custom-loader.lua`), `403` while the gate is off |
 | `/version` | GET | if gated | `version.txt` from the repo (edge-cached 60s) |
 | `/config` | GET | if gated | `nametags.json` (edge-cached 60s; `?fresh=1` bypasses) |
 | `/online` | GET | if gated | presence: `{count, online[], beats{}, window}` |
@@ -363,6 +370,13 @@ That is the property the direct-to-database setup can never have.
 
 Every **admin** route above also needs the database credential from section 4 —
 the key proves *who* is asking, the credential is what the database accepts.
+
+`/loader` is the one source route with no key, on purpose: it is what someone
+fetches before they have anything, and a key in a hand-out line is a secret you
+cannot rotate without breaking every copy of it in circulation. It is still
+gate-aware, which is the property that matters — and it rewrites the file's own
+`API` and `KEY` lines as it serves it, so the hand-out line stays short and a
+rotation is invisible to everyone.
 
 The `/cmd.json` and `/here.json` families deliberately mirror the Realtime
 Database REST API. That is why the script needed no logic change: it builds

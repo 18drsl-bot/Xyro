@@ -139,15 +139,19 @@ const clines = custom.split("\n");
 const cidx = needle => clines.findIndex(l => l.includes(needle));
 
 const cGate = cidx('local gate = decode(get(query(API .. "/gate")) or "")');
-const cDownload = cidx('src = get(query(API .. "/script"))');
-const cFallback = cidx('src = get(FALLBACK');
+const cDownload = cidx('src = get(query(API .. "/script")');
 const cSize = cidx('if #src < MIN_BYTES then');
 const cMarkers = cidx('for _, marker in ipairs(MARKERS) do');
 const cCompile = cidx('local fn, err = chunk(src');
 const cRun = cidx('local ran, runtimeErr = pcall(fn)');
 
 check("custom loader: the gate is asked before any download", cGate > -1 && cDownload > -1 && cGate < cDownload, `gate ${cGate} vs download ${cDownload}`);
-check("custom loader: the API is tried before the mirror", cDownload > -1 && cFallback > -1 && cDownload < cFallback, `api ${cDownload} vs mirror ${cFallback}`);
+// it is the API-only loader on purpose: nothing to block, nothing to rate-limit
+check("custom loader: it never touches GitHub", !custom.includes("githubusercontent") && !custom.includes("github.com"), "a github URL survived");
+// /loader rewrites these two lines, so the regex in worker.js must keep matching
+check("custom loader: the API constant is rewritable", /^local API = ".*"$/m.test(custom), "injection regex would miss");
+check("custom loader: the KEY constant is rewritable", /^local KEY = ".*"$/m.test(custom), "injection regex would miss");
+check("custom loader: it retries rather than giving up on one bad call", custom.includes("while not src and attempts < RETRIES do"), "no retry loop");
 check("custom loader: size is checked before running", cSize > -1 && cSize < cRun, `size ${cSize} vs run ${cRun}`);
 check("custom loader: markers are checked before running", cMarkers > -1 && cMarkers < cRun, `markers ${cMarkers} vs run ${cRun}`);
 check("custom loader: it compiles before running", cCompile > -1 && cCompile < cRun, `compile ${cCompile} vs run ${cRun}`);
@@ -156,6 +160,7 @@ check("custom loader: the run itself is inside a pcall", cRun > -1 && custom.inc
 // body that will not decode) still lets the script through
 check("custom loader: only an explicit enabled=false stops it", custom.includes('if type(gate) == "table" and gate.enabled == false then') && !custom.includes("gate.enabled ~= true"));
 check("custom loader: a missing gate answer still downloads", custom.includes('decode(get(query(API .. "/gate")) or "")') && custom.includes('if type(gate) == "table" and gate.enabled == false then'));
+check("custom loader: an unreachable API tells the user instead of failing silently", custom.includes("Could not reach the script service"));
 
 console.log("\n" + (fails ? fails + " FAILED" : "all gate checks passed"));
 process.exit(fails ? 1 : 0);
