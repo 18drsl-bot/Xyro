@@ -19,6 +19,16 @@ verification, for flaky executors):
 loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/loadstring.lua"))()
 ```
 
+### Your own loader
+
+`custom-loader.lua` is a short, brandable loader you own — the same five jobs as
+`loadstring.lua` (ask the kill switch, download through the API, validate, run, report),
+written to be read in one sitting. Edit the four constants at the top (`BRAND`, `API`,
+`KEY`, `FALLBACK`) and hand it out however you like:
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/custom-loader.lua"))()
+```
 The console prints `Loaded Version: vX.Y.Z` — that is what's live in version.txt, so
 you can always confirm you're on the latest build.
 
@@ -168,7 +178,8 @@ database:
   it downloads, and clients already running within ~20 seconds — with no repo
   push and no redeploy.
 
-Deploy it, set two secrets, paste the URL into **`api.json`** in the repo root —
+Deploy it, set the two keys plus a database credential, then paste the URL into
+**`api.json`** in the repo root —
 no Lua edits, and setting `"url": ""` again rolls the whole thing back.
 
 Once it is up, one command stops or starts the script for everyone:
@@ -181,7 +192,9 @@ node api/gate.js status                               # what it looks like now
 
 The switch is owner-only, and `--for` means a maintenance window you forget
 about cannot lock everybody out — the loader and every running client re-open
-themselves when the window passes.
+themselves when the window passes. Writing the gate goes through the Worker, so it
+needs the one-time database credential from section 4 — reads never do, only
+writes to `staff`.
 
 → **Full walkthrough: [api/README.md](api/README.md)** — five-minute deploy, the
 complete route list, and an honest section on what a client-side key does and

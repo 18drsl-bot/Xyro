@@ -79,7 +79,8 @@ curl https://xyro-api.<you>.workers.dev/health
 {
   "ok": true,
   "database": "configured",
-  "database_secret": "not set (fine while rules allow anonymous access)",
+  "database_secret": "not set (fine while rules allow anonymous reads)",
+  "database_auth": "service account",
   "reads": "key required",
   "writes": "key required",
   "admin_writes": "admin key required",
@@ -147,6 +148,41 @@ What happens within ~20 seconds:
   at the API cannot fetch the script at all;
 * **`!gate`** in game prints the current state (staff only), and `!staffrefresh`
   applies a change on that client instantly.
+
+### The one-time credential the switch needs
+
+This database **allows anonymous reads but refuses anonymous writes to
+`staff`** — and the gate lives at `staff/gate`. So `POST /gate` needs the Worker
+to hold a credential of its own; without one it answers
+`403 ... this database refuses anonymous writes to it`, which is exactly how a
+broken CLI used to look like a broken deploy.
+
+One secret fixes it. In the Firebase console: **⚙ Project settings → Service
+accounts → Generate new private key**, which downloads a JSON file. Then:
+
+```bash
+npx --yes wrangler@latest secret put FB_SERVICE_ACCOUNT   # paste the WHOLE file
+npx --yes wrangler@latest deploy
+```
+
+Paste the whole `{ ... }` at the prompt (quotes and all), then confirm on
+`/health`:
+
+```json
+"database_auth": "service account",
+```
+
+`database_auth` reads `service account`, `service account (unusable)`,
+`legacy database secret` or `anonymous - reads only...`, and
+`database_auth_error` carries the reason when one is configured but broken.
+**Reads never need it**: with no credential, or a broken one, every read still
+works and only the writes the rules forbid report the problem.
+
+The Worker signs a JWT with that key, trades it for an access token and caches it
+until it expires — roughly one exchange an hour, not one per request — so a
+trip is still a single fast call. The equivalent split secrets
+(`FB_CLIENT_EMAIL` + `FB_PRIVATE_KEY`) work too, and a legacy secret can be set
+as `FB_SECRET` instead (it takes precedence and skips the exchange).
 
 **Easiest: the control command that lives next to this file.** It reads the URL
 from `api.json` and the owner key from `XYRO_ADMIN_KEY` (or `api/.xyro-admin-key`,
@@ -274,12 +310,27 @@ and the Worker is what makes part one possible:
 
 1. **Move every client onto the API** (step 3 above) so nothing anonymous needs
    the database any more.
-2. **Restrict the rules** so only an authenticated caller can read. Firebase's
-   classic *database secret* does this (`FB_SECRET` here), and older projects
-   still have one under **Realtime Database → Data → Rules**, but Firebase has
-   been deprecating them; on a project without a secret, the equivalent is a
-   service-account **ID token**, which the Worker can hold and refresh (a
-   `FB_TOKEN` variable plus a small token exchange in `worker.js`).
+2. **Restrict the rules** so only an authenticated caller can read. The
+   credential from section 4 is exactly this: set `FB_SERVICE_ACCOUNT` and every
+   Worker request is already an owner, whatever the rules say. (Firebase's
+   classic *database secret* also works as `FB_SECRET`, but it is deprecated.)
+   Once that secret is set, publish rules like these:
+
+   ```json
+   {
+     "rules": {
+       "staff": { ".read": false, ".write": false },
+       "cmd":   { ".read": false, ".write": false },
+       "here":  { ".read": false, ".write": false }
+     }
+   }
+   ```
+
+   The Worker keeps working because it authenticates as an owner; anyone else —
+   including a stranger who found the database URL — gets `Permission denied`.
+   Note that closing `cmd`/`here` also closes the **direct-database fallback** in
+   the script and the loader (section 3), so every client must be on the API
+   first.
 
 Once rules are locked, an attacker who extracts `XYRO_KEY` can still hit the
 Worker — but cannot reach the database, and rotating `XYRO_KEY`
@@ -310,6 +361,9 @@ That is the property the direct-to-database setup can never have.
 | `/cmd/<key>.json` | PUT/DELETE | yes | enqueue / consume a command |
 | `/here/<key>.json` | PUT/DELETE | yes | presence beat / clear |
 
+Every **admin** route above also needs the database credential from section 4 —
+the key proves *who* is asking, the credential is what the database accepts.
+
 The `/cmd.json` and `/here.json` families deliberately mirror the Realtime
 Database REST API. That is why the script needed no logic change: it builds
 `<base>/cmd.json` either way, and the Worker answers in the same shape.
@@ -321,7 +375,7 @@ the rest of your database.
 ## 8. Day-to-day
 
 ```bash
-node api/test.js              # 36 route tests against a mocked database, no network
+node api/test.js              # 106 route tests against a mocked database, no network
 npx wrangler tail             # live request log while you test in game
 npx wrangler dev              # run the Worker locally on http://localhost:8787
 npx wrangler deploy           # ship a change
@@ -342,7 +396,10 @@ bulk of the traffic — a full lobby for an evening is far inside the free tier.
 | `/script` answers `403 Xyro is disabled: ...` | The gate is off. That is the kill switch working, not a bug. |
 | Everyone stayed online while the gate says disabled | `/health` will say `"source":"unreachable"` — the Worker cannot read the database, and an unreadable gate fails open on purpose. |
 | One client ignores the gate | It is older than v0.8.12 (no gate polling), or its own reads failed and it fell back to the database directly. |
-| `502 ... Permission denied` | Your rules refuse the Worker. Set `FB_SECRET`, or publish rules that allow it. |
+| `403 Permission denied - this database refuses anonymous writes to it` | The rules keep `staff` read-only to the public, which is correct. Set `FB_SERVICE_ACCOUNT` (section 4) so the Worker has an owner credential of its own. |
+| `403 ... the service account this Worker holds was refused too: ...` | The credential exists but is unusable — the message names why (not JSON, an unreadable key, or Google refusing the exchange). `/health` repeats it under `database_auth_error`. |
+| Admin route is `403` but reads work fine | Same cause: reads are allowed anonymously, only writes need the credential. |
+| `502 ... Permission denied` | Rules refusing a *read* — publish rules that let an owner (the credential) through, or unset them. |
 | `502 database unreachable` | `FB_URL` in `wrangler.toml` is wrong, or the database is paused. |
 | Script footer says `mode firebase` while you expect `api` | Three API calls in a row failed and the client demoted itself to the direct path. The footer also names the reason (`transport.lastPollErr`). |
 | Editor still shows the old live-users behaviour | `index.html` is edge-cached by GitHub Pages for ~10 minutes — hard-refresh (Ctrl+Shift+R). |

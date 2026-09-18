@@ -50,7 +50,9 @@
  *                   api.json in a public repo, so treat it as public). It may
  *                   read, heartbeat, and enqueue commands - nothing else.
  *   XYRO_ADMIN_KEY  the OWNER key. Held only by you and your Discord bot. It is
- *                   required to write the blacklist and to trip the kill switch.
+ *                   required to write the blacklist and to trip the kill switch
+ *                   (and that switch also needs a database credential - see the
+ *                   bottom of this comment).
  *
  * The split matters: with a single key, the key inside the Lua client would also
  * authorize blacklisting a rival. Two keys mean the thing every player can
@@ -81,6 +83,13 @@
  *
  * A gate that cannot be read fails OPEN (enabled), because a database hiccup
  * must never take the script away from everyone at once.
+ *
+ * Writing the gate is the one thing this Worker cannot do anonymously: the
+ * database rules allow reads but refuse writes to `staff`. So POST /gate needs
+ * a database credential of its own - FB_SERVICE_ACCOUNT (preferred), the split
+ * FB_CLIENT_EMAIL + FB_PRIVATE_KEY, or the legacy FB_SECRET. Without one the
+ * route answers 403 and says exactly that, and `npx wrangler deploy` is not the
+ * fix - the credential is. See api/README.md section 5.
  */
 
 const NODES = new Set(["staff", "cmd", "here"]);
@@ -192,8 +201,146 @@ function fbBase(env) {
 	return String(env.FB_URL || "").replace(/\/+$/, "");
 }
 
-function fbAuthSuffix(env) {
-	return env.FB_SECRET ? "?auth=" + encodeURIComponent(env.FB_SECRET) : "";
+/* ------------------------------------------ database credentials (optional)
+ *
+ * READS work anonymously against this database (its rules allow them), but
+ * `staff` REFUSES anonymous writes - and the kill switch lives at staff/gate.
+ * So an API-driven shutdown needs the Worker to hold a credential:
+ *
+ *   FB_SERVICE_ACCOUNT   the whole service-account key file, as JSON   (best)
+ *   FB_CLIENT_EMAIL + FB_PRIVATE_KEY   the same two fields, split
+ *   FB_SECRET            a legacy database secret, ?auth=             (old)
+ *
+ * A service account token is minted here: sign a JWT with the account's private
+ * key (RS256 through WebCrypto), trade it for an OAuth access token, and send
+ * that as ?access_token= so the database treats the Worker as an owner. It is
+ * cached per isolate until shortly before it expires, so the exchange happens
+ * about once an hour rather than once a request.
+ *
+ * With no credential the Worker still serves every read; only the writes that
+ * the rules forbid fail - and they fail with the reason and the fix, not with
+ * an opaque 502 (see fbErrorHint).
+ */
+const SA_SCOPE = "https://www.googleapis.com/auth/firebase.database";
+const SA_TOKEN_URL = "https://oauth2.googleapis.com/token";
+let saToken = { fingerprint: "", value: "", expires: 0 };
+let saLastError = "";
+
+/** The service account, from either one JSON secret or the two halves. */
+function saCreds(env) {
+	const blob = typeof env.FB_SERVICE_ACCOUNT === "string" ? env.FB_SERVICE_ACCOUNT.trim() : "";
+	if (blob) {
+		try {
+			const data = JSON.parse(blob);
+			if (data && data.client_email && data.private_key) {
+				return { email: String(data.client_email), key: String(data.private_key) };
+			}
+			saLastError = "FB_SERVICE_ACCOUNT has no client_email/private_key - paste the whole key file";
+		} catch {
+			saLastError = "FB_SERVICE_ACCOUNT is not valid JSON - paste the whole key file, quotes and all";
+		}
+		return null;
+	}
+	if (env.FB_CLIENT_EMAIL && env.FB_PRIVATE_KEY) {
+		return { email: String(env.FB_CLIENT_EMAIL), key: String(env.FB_PRIVATE_KEY) };
+	}
+	return null;
+}
+
+function base64url(bytes) {
+	const bin = typeof bytes === "string" ? bytes : Array.from(bytes, (b) => String.fromCharCode(b)).join("");
+	return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** PEM -> DER. wrangler stores exactly what was pasted, so a literal "\\n" (the
+ *  shape you get from copying JSON) has to be accepted as well as a real one. */
+function pemToDer(pem) {
+	const body = String(pem)
+		.replace(/\\n/g, "\n")
+		.replace(/-----[^-]+-----/g, "")
+		.replace(/[^A-Za-z0-9+/=]/g, "");
+	const bin = atob(body);
+	const out = new Uint8Array(bin.length);
+	for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+	return out;
+}
+
+async function serviceAccountToken(creds) {
+	const fingerprint = creds.email + ":" + creds.key.length;
+	if (saToken.value && saToken.fingerprint === fingerprint && saToken.expires - 60000 > Date.now()) {
+		return saToken.value;
+	}
+	const now = Math.floor(Date.now() / 1000);
+	const signingInput =
+		base64url(JSON.stringify({ alg: "RS256", typ: "JWT" })) +
+		"." +
+		base64url(JSON.stringify({ iss: creds.email, scope: SA_SCOPE, aud: SA_TOKEN_URL, iat: now, exp: now + 3600 }));
+	let key;
+	try {
+		key = await crypto.subtle.importKey("pkcs8", pemToDer(creds.key), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+	} catch {
+		throw new Error("the service account private key could not be read - it must be the PKCS#8 PEM from the key file");
+	}
+	const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(signingInput));
+	const assertion = signingInput + "." + base64url(new Uint8Array(sig));
+	const res = await fetch(SA_TOKEN_URL, {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: "grant_type=" + encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer") + "&assertion=" + assertion,
+	});
+	const body = await res.text();
+	if (!res.ok) throw new Error("Google refused the service account (" + res.status + "): " + body.slice(0, 200));
+	let data;
+	try {
+		data = JSON.parse(body);
+	} catch {
+		throw new Error("the token exchange did not answer with JSON");
+	}
+	if (!data || !data.access_token) throw new Error("the token exchange returned no access_token");
+	saToken = { fingerprint, value: String(data.access_token), expires: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
+	return saToken.value;
+}
+
+/** Which credential this Worker actually holds - for /health, so "my worker has
+ *  the key but the kill switch still refuses" is answerable at a glance. */
+function databaseCredential(env) {
+	if (env.FB_SECRET) return "legacy database secret";
+	if (saCreds(env)) return "service account";
+	// set but unusable: report it as a service account, with the reason alongside
+	if (env.FB_SERVICE_ACCOUNT || env.FB_CLIENT_EMAIL) return "service account (unusable)";
+	return "anonymous - reads only; the kill switch needs a credential (api/README.md section 5)";
+}
+
+async function fbAuthSuffix(env) {
+	if (env.FB_SECRET) return "?auth=" + encodeURIComponent(env.FB_SECRET);
+	const creds = saCreds(env);
+	if (!creds) return "";
+	try {
+		const token = await serviceAccountToken(creds);
+		saLastError = "";
+		return "?access_token=" + encodeURIComponent(token);
+	} catch (err) {
+		// fail soft: every read still works anonymously, and a write that the
+		// rules then refuse reports this reason instead of hiding it
+		saLastError = err && err.message ? err.message : String(err);
+		return "";
+	}
+}
+
+/** How a database refusal should read to the caller: a refused rule is the
+ *  caller's problem (403), anything else is the Worker's (502). */
+function fbErrorStatus(reason) {
+	return /permission denied|unauthoriz|invalid.?token|expired|invalid.?credential/i.test(reason) ? 403 : 502;
+}
+
+function fbErrorHint(env, reason) {
+	if (!/permission denied/i.test(reason)) return "";
+	const held = env.FB_SECRET ? "the database secret" : saCreds(env) ? "the service account" : "";
+	if (held) {
+		// saCreds above may have just set this, so it is read afterwards on purpose
+		return " - and " + held + " this Worker holds was refused too: " + (saLastError || "check that it belongs to this database");
+	}
+	return " - this database refuses anonymous writes to it. Set FB_SERVICE_ACCOUNT (api/README.md section 5) to give the Worker an owner credential, or trip the kill switch in the Firebase console instead.";
 }
 
 class ApiError extends Error {
@@ -227,16 +374,13 @@ async function fb(env, path, init) {
 	if (!base) throw new ApiError(500, "FB_URL is not configured on this Worker");
 	let res;
 	try {
-		res = await fetch(base + "/" + path + ".json" + fbAuthSuffix(env), init);
+		res = await fetch(base + "/" + path + ".json" + (await fbAuthSuffix(env)), init);
 	} catch (err) {
 		throw new ApiError(502, "database unreachable: " + (err && err.message ? err.message : String(err)));
 	}
 	const body = await res.text();
-	if (!res.ok) {
-		throw new ApiError(502, fbErrorText(body) || "database responded " + res.status);
-	}
-	const denied = fbErrorText(body);
-	if (denied) throw new ApiError(502, denied);
+	const reason = fbErrorText(body) || (res.ok ? null : "database responded " + res.status);
+	if (reason) throw new ApiError(fbErrorStatus(reason), reason + fbErrorHint(env, reason));
 	return body;
 }
 
@@ -501,7 +645,9 @@ async function health(env, url) {
 		service: "xyro-api",
 		time: new Date().toISOString(),
 		database: fbBase(env) ? "configured" : "missing (set the FB_URL var)",
-		database_secret: env.FB_SECRET ? "set" : "not set (fine while rules allow anonymous access)",
+		database_secret: env.FB_SECRET ? "set" : "not set (fine while rules allow anonymous reads)",
+		database_auth: databaseCredential(env),
+		database_auth_error: saLastError || undefined,
 		reads: env.XYRO_KEY ? "key required" : "open",
 		writes: env.XYRO_KEY ? "key required" : "DISABLED (no XYRO_KEY)",
 		admin_writes: env.XYRO_ADMIN_KEY ? "admin key required" : "DISABLED (no XYRO_ADMIN_KEY)",

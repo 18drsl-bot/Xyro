@@ -14,6 +14,13 @@ let store = {};
 const calls = [];
 let dbDown = false; // simulate an unreachable database
 let dbDenied = false; // simulate closed rules: HTTP 401 + {"error":"Permission denied"}
+// the production shape of this database: anonymous READS are allowed, writes to
+// `staff` are refused (that node holds the staff list, the blacklist and the
+// kill switch). Writes to cmd/here stay open.
+let denyStaffWrites = false;
+// the Google token endpoint, for the service-account credential
+let tokenCalls = 0;
+let tokenDenied = false;
 
 function segs(p) {
 	return String(p).split("/").filter(s => s !== "");
@@ -66,6 +73,12 @@ global.fetch = async (url, init) => {
 		if (dbDown) throw new TypeError("network error");
 		if (dbDenied) return new Response('{"error":"Permission denied"}', { status: 401 });
 		const p = u.pathname.replace(/^\//, "").replace(/\.json$/, "");
+		// the real rules: `staff` refuses anonymous writes, and lets an owner
+		// through - which is what ?access_token= / ?auth= make a request
+		const owner = /[?&]access_token=sa-token-/.test(u.search) || /[?&]auth=/.test(u.search);
+		if (denyStaffWrites && !owner && (method === "PUT" || method === "DELETE") && p.split("/")[0] === "staff") {
+			return new Response('{"error":"Permission denied"}', { status: 401 });
+		}
 		if (method === "PUT") {
 			dbPut(p, JSON.parse(init.body));
 			return new Response(init.body, { status: 200 });
@@ -76,6 +89,11 @@ global.fetch = async (url, init) => {
 		}
 		const value = dbGet(p);
 		return new Response(value === null ? "null" : JSON.stringify(value), { status: 200 });
+	}
+	if (u.hostname === "oauth2.googleapis.com") {
+		tokenCalls++;
+		if (tokenDenied) return new Response('{"error":"invalid_grant","error_description":"Invalid JWT"}', { status: 400 });
+		return new Response(JSON.stringify({ access_token: "sa-token-" + tokenCalls, expires_in: 3600 }), { status: 200 });
 	}
 	if (u.hostname === "raw.githubusercontent.com") {
 		const body = repoFile(u.pathname);
@@ -329,7 +347,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	dbDenied = true;
 	res = await call("/staff.json");
 	json = await body(res);
-	ok("a denied read is NOT reported as 200", res.status === 502, "got " + res.status);
+	ok("a denied read is NOT reported as 200", res.status === 403, "got " + res.status);
 	ok("a denied read reports the database's reason", /Permission denied/.test(json.error || ""), JSON.stringify(json));
 	dbDenied = false;
 
@@ -344,6 +362,103 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("health reports a missing FB_URL", /missing/.test(json.database), json.database);
 	res = await call("/staff.json", { env: { FB_URL: "" } });
 	ok("no FB_URL is a 500 with an explanation", res.status === 500, "got " + res.status);
+
+	/* --- the credential the kill switch needs ---------------------------- */
+
+	// This database allows anonymous reads but refuses anonymous writes to
+	// `staff`, which is where staff/gate lives. Every case below runs with that
+	// shape on, because it is the one that shipped and did not work.
+	const { generateKeyPairSync } = require("crypto");
+	const { privateKey } = generateKeyPairSync("rsa", {
+		modulusLength: 2048,
+		publicKeyEncoding: { type: "spki", format: "pem" },
+		privateKeyEncoding: { type: "pkcs8", format: "pem" },
+	});
+	const SA = { FB_SERVICE_ACCOUNT: JSON.stringify({ type: "service_account", client_email: "xyro@proj.iam.gserviceaccount.com", private_key: privateKey }) };
+	const withKeys = { ...WITH_KEYS, ...SA };
+	denyStaffWrites = true;
+	store = { staff: { admins: ["8579040069"] } };
+	tokenCalls = 0;
+	tokenDenied = false;
+
+	// no credential: the refusal has to name the fix, not just say "denied"
+	res = await call("/gate/off", { method: "POST", body: "down", env: WITH_KEYS, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("an owner trip without a database credential is refused, not a 200", res.status === 403, "got " + res.status);
+	ok("...and the error names FB_SERVICE_ACCOUNT", /FB_SERVICE_ACCOUNT/.test(json.error || ""), JSON.stringify(json));
+	ok("...and nothing was written to the gate", dbGet("staff/gate") === null, JSON.stringify(dbGet("staff/gate")));
+	ok("a refused gate write does not claim success", json.ok === undefined, JSON.stringify(json));
+
+	// the same trip WITH a service account: it goes through, and it carries a token
+	calls.length = 0;
+	res = await call("/gate/off", { method: "POST", body: "down", env: withKeys, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	const gateCall = calls.find(c => c.method === "PUT" && c.url.pathname.includes("staff/gate"));
+	ok("with a service account the trip succeeds", res.status === 200 && json.gate.enabled === false, res.status + " " + JSON.stringify(json));
+	ok("the database saw a service-account access token", !!gateCall && /access_token=sa-token-/.test(gateCall.url.search), gateCall && gateCall.url.search);
+	ok("the gate really was written", dbGet("staff/gate").enabled === false, JSON.stringify(dbGet("staff/gate")));
+	ok("the token came from one exchange", tokenCalls === 1, String(tokenCalls));
+
+	res = await call("/gate/on", { method: "POST", env: withKeys, headers: { "x-api-key": "owner" } });
+	ok("a second trip reuses the cached token", res.status === 200 && tokenCalls === 1 && dbGet("staff/gate").enabled === true, tokenCalls + " " + res.status);
+
+	res = await call("/blacklist/12345", { method: "POST", body: "ban evasion", env: withKeys, headers: { "x-api-key": "owner" } });
+	ok("the blacklist writes with the same credential", res.status === 200 && dbGet("staff/blacklist/12345") === "ban evasion", res.status + " " + JSON.stringify(dbGet("staff/blacklist")));
+
+	// a credential that is present but broken must not break reads
+	const readKey = { "x-api-key": "sekret" };
+	res = await call("/staff.json", { env: { ...WITH_KEYS, FB_SERVICE_ACCOUNT: "not json" }, headers: readKey });
+	ok("a malformed service account leaves reads working", res.status === 200, "got " + res.status);
+	res = await call("/health", { env: { ...WITH_KEYS, FB_SERVICE_ACCOUNT: "not json" } });
+	json = await body(res);
+	ok("health reports the credential problem", /not valid JSON/.test(json.database_auth_error || ""), JSON.stringify(json.database_auth_error));
+	ok("health says which credential is in use, and flags a broken one", json.database_auth === "service account (unusable)", json.database_auth);
+	res = await call("/health", { env: withKeys });
+	json = await body(res);
+	ok("a working service account reads as plain 'service account'", json.database_auth === "service account", json.database_auth);
+
+	res = await call("/gate/off", { method: "POST", body: "down", env: WITH_KEYS, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("health's error does not leak into a refusal message", !/not valid JSON/.test(json.error || ""), JSON.stringify(json));
+
+	// a key that will not import, and a token exchange that fails
+	const BAD_SA = { FB_SERVICE_ACCOUNT: JSON.stringify({ client_email: "x@y.iam.gserviceaccount.com", private_key: "-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----\n" }) };
+	res = await call("/staff.json", { env: { ...WITH_KEYS, ...BAD_SA }, headers: readKey });
+	ok("an unreadable private key still leaves reads working", res.status === 200, "got " + res.status);
+	res = await call("/gate/off", { method: "POST", body: "down", env: { ...WITH_KEYS, ...BAD_SA }, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("an unreadable private key is reported as such", res.status === 403 && /private key could not be read/.test(json.error || ""), res.status + " " + JSON.stringify(json));
+
+	// a different account, so this cannot be answered from the token cache
+	const { privateKey: secondKey } = generateKeyPairSync("rsa", {
+		modulusLength: 2048,
+		publicKeyEncoding: { type: "spki", format: "pem" },
+		privateKeyEncoding: { type: "pkcs8", format: "pem" },
+	});
+	const SA_B = { FB_SERVICE_ACCOUNT: JSON.stringify({ client_email: "xyro-2@proj.iam.gserviceaccount.com", private_key: secondKey }) };
+	const withKeysB = { ...WITH_KEYS, ...SA_B };
+	tokenDenied = true;
+	res = await call("/staff.json", { env: withKeysB, headers: readKey });
+	ok("a refused token exchange still leaves reads working", res.status === 200, "got " + res.status);
+	res = await call("/gate/off", { method: "POST", body: "down", env: withKeysB, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("a refused token exchange is reported, not hidden", res.status === 403 && /Google refused the service account/.test(json.error || ""), res.status + " " + JSON.stringify(json));
+	res = await call("/health", { env: withKeysB });
+	json = await body(res);
+	ok("health surfaces the token failure", /Google refused/.test(json.database_auth_error || ""), JSON.stringify(json.database_auth_error));
+	tokenDenied = false;
+
+	// the legacy database secret is still accepted, and takes precedence
+	tokenCalls = 0;
+	calls.length = 0;
+	res = await call("/gate/off", { method: "POST", body: "down", env: { ...withKeys, FB_SECRET: "legacy" }, headers: { "x-api-key": "owner" } });
+	const legacyCall = calls.find(c => c.method === "PUT" && c.url.pathname.includes("staff/gate"));
+	ok("FB_SECRET wins when both are set", res.status === 200 && /auth=legacy/.test(legacyCall.url.search) && tokenCalls === 0, (legacyCall && legacyCall.url.search) + " tokens " + tokenCalls);
+	res = await call("/health", { env: { ...withKeys, FB_SECRET: "legacy" } });
+	json = await body(res);
+	ok("health names the legacy secret", json.database_auth === "legacy database secret", json.database_auth);
+	denyStaffWrites = false;
+	store = {};
 
 	/* --- the status page ------------------------------------------------- */
 	store = { here: { Alive: now() } };

@@ -149,7 +149,10 @@ drawing their tag — see **FIREBASE.md → 3c. Blacklist**.
 ## Kill switch from the bot (optional)
 
 With the Xyro API deployed (`api/README.md`), stopping and resuming everyone is
-two lines — and the owner key never touches a client:
+two lines — and the owner key never touches a client. The Worker needs one
+database credential for this to work at all (`FB_SERVICE_ACCOUNT`, `api/README.md`
+section 4), because the database refuses anonymous writes to `staff`; without it
+the call comes back `403` naming the fix.
 
 ```js
 const API = "https://xyro-api.you.workers.dev";
