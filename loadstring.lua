@@ -31,7 +31,7 @@ local SOURCES = {
 	"https://vertxxy-1.github.io/Xyro/xyro.lua",
 	"https://raw.githubusercontent.com/vertxxy-1/Xyro/main/xyro.lua",
 }
-local MIN_SIZE = 100000 -- xyro.lua is ~260KB; anything smaller is truncated
+local MIN_SIZE = 100000 -- xyro.lua is ~420KB; anything smaller is truncated
 local MARKERS = { "Xyro", "H.Nametags", "RenderStepped" } -- must all appear in a real build
 
 local function warnAll(msg)
@@ -100,54 +100,114 @@ local function base64decode(data)
 	end))
 end
 
--- decode the GitHub contents-API JSON into raw source
+-- decode the GitHub contents-API JSON into raw source. Also returns the
+-- blob's exact byte length (`size`), which is the strongest integrity signal
+-- available: byte-exact, and it tells a fresh mirror apart from a stale one.
 local function fromAPI(jsonBody)
 	local HttpService = game:GetService("HttpService")
 	local ok, data = pcall(function()
 		return HttpService:JSONDecode(jsonBody)
 	end)
-	if not (ok and type(data) == "table" and type(data.content) == "string" and #data.content > 1000) then
-		return nil
+	if not (ok and type(data) == "table") then
+		return nil, nil
+	end
+	local size = tonumber(data.size)
+	if not (type(data.content) == "string" and #data.content > 1000) then
+		return nil, size
 	end
 	local b64 = data.content:gsub("\n", "")
 	local src = base64decode(b64)
-	if type(src) == "string" then
-		return src
+	if type(src) == "string" and #src > 0 then
+		return src, size
 	end
-	return nil
+	return nil, size
 end
 
-local function looksReal(src)
+-- Is this candidate complete? Size + markers catch a short read; the compile
+-- check catches a truncation that still clears the size bar.
+--
+-- This used to test for a literal "endend" tail (whitespace stripped). That
+-- broke the moment a block was appended after the last nested end: xyro.lua
+-- now ends with the blacklist block, so the tail is
+-- "...pcall(H.blacklistShutdown)end". EVERY mirror was rejected with "tail is
+-- wrong (truncated?)" and this loader could never run the script at all - it
+-- only ever printed warnings. Compiling is the stronger test (a cut-off file
+-- cannot compile) and cannot go stale when the file's shape changes.
+--
+-- Returns ok, why, soft. `soft` means "rejected on completeness only" - the
+-- caller keeps such a candidate as a last resort instead of ending with
+-- nothing, so an executor with a fussy compiler cannot leave you scriptless.
+local function looksReal(src, sizeHint)
 	if type(src) ~= "string" or #src < MIN_SIZE then
-		return false, ("too small (%s bytes)"):format(type(src) == "string" and #src or tostring(src))
+		return false, ("too small (%s bytes)"):format(type(src) == "string" and #src or tostring(src)), false
 	end
 	for _, m in ipairs(MARKERS) do
 		if not src:find(m, 1, true) then
-			return false, ("missing marker %q"):format(m)
+			return false, ("missing marker %q"):format(m), false
 		end
 	end
-	local tail = src:sub(-400):gsub("%s+", "")
-	if not tail:match("endend$") then
-		return false, "tail is wrong (truncated?)"
+	-- byte-exact length check against the API's reported size. A mirror that is
+	-- a revision behind (jsDelivr can lag for days) and a cut-off download are
+	-- both caught here - and both are still kept as a last resort, because a
+	-- working copy one revision old beats no script at all.
+	if sizeHint and sizeHint > 0 and #src ~= sizeHint then
+		return false, ("length mismatch: got %d bytes, expected %d"):format(#src, sizeHint), true
+	end
+	local compiler = loadstring or load
+	if type(compiler) == "function" then
+		local ok, fn, err = pcall(compiler, src, "=xyro-probe")
+		if not ok then
+			return false, "compiler error: " .. tostring(fn), true
+		end
+		if type(fn) ~= "function" then
+			return false, "does not compile: " .. tostring(err), true
+		end
+		return true
+	end
+	-- no compiler available here: cheap structural check instead - the file must
+	-- end on a closed block, not on a specific token sequence
+	local tail = src:match("([^%s]+)%s*$")
+	if not (tail and (tail:match("end$") or tail:match("%)$"))) then
+		return false, "tail does not close a block (truncated?)", false
 	end
 	return true
 end
 
-if not fetch(API_URL) and not fetch(SOURCES[1]) then
+-- one probe fetch up front so "no working HTTP" is reported before we start
+-- walking mirrors. The API body is kept: it is the primary source below and
+-- re-fetching it would burn a second anonymous API call (60/hour, shared by
+-- every request behind your IP).
+local probeApi = fetch(API_URL)
+if not probeApi and not fetch(SOURCES[1]) then
 	warnAll("this executor has no working HTTP - paste xyro.lua directly instead")
 	return
 end
 
 local src, how
+local softSrc, softHow, softWhy -- best candidate that only failed completeness
+local expectedSize = nil -- exact blob length, learned from the GitHub API
+local function record(good, why, soft, body, label)
+	if good then
+		return true
+	end
+	if soft and not softSrc then
+		softSrc, softHow, softWhy = body, label, why
+	end
+	return false
+end
+
 -- 1) GitHub API first: never CDN-cached, always the newest commit
 do
 	for attempt = 1, 2 do
-		local body = fetch(API_URL)
+		local body = (attempt == 1 and probeApi) or fetch(API_URL)
 		if body then
-			local got = fromAPI(body)
+			local got, apiSize = fromAPI(body)
+			if apiSize and not expectedSize then
+				expectedSize = apiSize -- keep it even if the decode failed: the mirrors below can still be validated against it
+			end
 			if got then
-				local good, why = looksReal(got)
-				if good then
+				local good, why, soft = looksReal(got, apiSize)
+				if record(good, why, soft, got, "github api") then
 					src, how = got, "github api"
 					break
 				end
@@ -167,9 +227,10 @@ if not src then
 			local sep = url:find("?", 1, true) and "&" or "?"
 			local body = fetch(url .. sep .. "t=" .. tostring(os.time()) .. "&r=" .. attempt)
 			if body then
-				local good, why = looksReal(body)
-				if good then
-					src, how = body, url:match("([%w%.]+)/xyro%.lua$") or url
+				local good, why, soft = looksReal(body, expectedSize)
+				local label = url:match("([%w%.]+)/xyro%.lua$") or url
+				if record(good, why, soft, body, label) then
+					src, how = body, label
 					break
 				end
 				warnAll(("mirror %s attempt %d rejected (%s)"):format(url:match("https://([^/]+)"), attempt, why))
@@ -180,6 +241,13 @@ if not src then
 			break
 		end
 	end
+end
+
+-- 3) nothing passed cleanly: run the best candidate anyway rather than quitting.
+-- If it really is truncated, the compile below reports that in plain language.
+if not src and softSrc then
+	src, how = softSrc, softHow .. " (unverified: " .. tostring(softWhy) .. ")"
+	warnAll("every source failed the completeness check - trying " .. softHow .. " anyway (" .. tostring(softWhy) .. ")")
 end
 
 if not src then

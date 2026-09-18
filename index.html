@@ -807,7 +807,10 @@ function renderOptions() {
 	$("optUBox").checked = o.userBox === true;
 	$("optUBoxColor").value = (o.userBoxColor || "#1a1f2e").toLowerCase();
 	$("optUBoxTrans").value = o.userBoxTransparency != null ? o.userBoxTransparency : "";
-	$("optUBoxRadius").value = o.userBoxRadius != null ? o.userBoxRadius : "";
+	/* 8 is the script's own default (ntOpts.userBoxRadius): falling back to ""
+	   here made readOptions write 0, so an options block that simply omits the
+	   key silently lost the rounded username box */
+	$("optUBoxRadius").value = o.userBoxRadius != null ? o.userBoxRadius : 8;
 	$("optUBoxStroke").value = o.userBoxStroke || "";
 	$("optDistOn").checked = o.showDistance !== false;
 	$("optHp").checked = o.showHealth !== false;
@@ -815,8 +818,16 @@ function renderOptions() {
 	$("optScriptUsers").checked = o.onlyScriptUsers !== false;
 	$("optClickTp").checked = o.clickTeleport !== false;
 	$("optWalls").checked = o.seeThroughWalls !== false;
-	$("optCollapse").checked = (o.collapseDistance != null ? o.collapseDistance : 40) > 0;
-	$("optCollapseDist").value = o.collapseDistance != null ? o.collapseDistance : 40;
+	/* collapse round-trip. In game the switch is collapseFar (false forces the
+	   distance to 0), but this derived the checkbox from collapseDistance > 0
+	   and defaulted the distance to 40 - so a config saved as collapseFar:false
+	   with a leftover distance loaded as CHECKED, and the next publish quietly
+	   turned the 40-stud collapse back on: every tag shrank to a bare avatar the
+	   moment someone walked away. Now the checkbox honours collapseFar and the
+	   default distance is 0, matching the script (never collapse). */
+	const collapseDist = o.collapseDistance != null ? o.collapseDistance : 0;
+	$("optCollapseDist").value = collapseDist;
+	$("optCollapse").checked = o.collapseFar === false ? false : collapseDist > 0;
 	$("optCollapseIcon").value = o.collapsedIcon != null ? o.collapsedIcon : 40;
 	$("optRefresh").value = o.refreshSeconds != null ? o.refreshSeconds : 15;
 }

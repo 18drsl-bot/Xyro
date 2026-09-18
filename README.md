@@ -12,8 +12,8 @@ Executes the **latest commit every time** — no reinstalling after updates. Con
 media load through the jsDelivr CDN, with the GitHub API and raw GitHub as fallbacks,
 so published changes land in seconds.
 
-**Fallback loader** (3x retry + always-fresh GitHub API source + truncation checks,
-for flaky executors):
+**Fallback loader** (3x retry + always-fresh GitHub API source + download
+verification, for flaky executors):
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/loadstring.lua"))()
@@ -21,6 +21,12 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/vertxxy-1/Xyro/main/l
 
 The console prints `Loaded Version: vX.Y.Z` — that is what's live in version.txt, so
 you can always confirm you're on the latest build.
+
+Each download is verified three ways before it is ever executed: a size floor and
+content markers, a **byte-exact length match** against the size GitHub reports for
+the file (which also catches a CDN serving a stale revision), and a **compile** of
+the chunk itself. A cut-off or stale copy is rejected and the next mirror is tried;
+if nothing passes cleanly the best candidate still runs, with a warning saying why.
 
 ## Commands
 

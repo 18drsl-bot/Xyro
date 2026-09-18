@@ -1205,6 +1205,23 @@ if tostring(H.FIREBASE_URL or "") ~= "" then
 	local function fbRandKey()
 		return tostring(os.time()) .. "-" .. tostring(math.floor(math.random() * 100000000))
 	end
+
+	-- Firebase reports a refused read/write as a JSON body {"error":"..."} with
+	-- an HTTP 200, so a DENIED read used to look exactly like a healthy one: the
+	-- panel footer said "firebase queue ok", the ntfy fallback was suppressed as
+	-- unnecessary, and every command was quietly dropped. Returns the error text
+	-- when the body is an error, nil when it is real data.
+	H.fbErrorText = function(body)
+		if type(body) ~= "string" or body == "" or body == "null" then
+			return nil
+		end
+		local okD, data = pcall(H.HS.JSONDecode, H.HS, body)
+		if okD and type(data) == "table" and data.error ~= nil then
+			return tostring(data.error)
+		end
+		return nil
+	end
+
 	H.fbQueuePost = function(node, value)
 		local key = fbRandKey()
 		local url = fbBase .. "/" .. node .. "/" .. key .. ".json" .. fbAuth
@@ -1246,7 +1263,9 @@ if tostring(H.FIREBASE_URL or "") ~= "" then
 			if okD and type(data) == "table" then
 				for key in pairs(data) do
 					local sec = tonumber(key:match("^(%d+)%-"))
-					if sec and (now - sec) > olderThan then
+					-- also drop keys timestamped far in the FUTURE: (now - sec) is negative
+					-- for those, so they never aged out and sat in the queue forever
+					if sec and ((now - sec) > olderThan or (sec - now) > 600) then
 						fbReq("DELETE", fbBase .. "/cmd/" .. key .. ".json" .. fbAuth)
 					end
 				end
@@ -10193,6 +10212,13 @@ local function ntBeatsFromFirebase()
 	if body == nil or body == "" then
 		return nil -- read genuinely failed: caller falls back to ntfy
 	end
+	-- a refused read ({"error":"Permission denied"}) decodes to a table holding
+	-- no beats, which used to be read as "reachable, nobody online": that EMPTIED
+	-- the online set, so every other player's tag vanished from your screen.
+	-- Treat it as a failed read so the sticky set survives and ntfy still runs.
+	if H.fbErrorText and H.fbErrorText(body) then
+		return nil
+	end
 	if body == "null" then
 		-- The database is reachable and simply has no beats yet. This used to
 		-- return nil ("Firebase unusable"), which dropped every client onto the
@@ -10331,12 +10357,12 @@ end)
 
 -- shared per-frame state for the render loop below (allocated ONCE, not
 -- per frame - per-frame table/Vector3 churn showed up as real frame loss)
+-- (ntCamTick / ntInfoTick / ntHoverTick used to throttle the per-frame info
+-- strings and collapse checks; ntPlayersTick replaced them all, and the three
+-- leftovers were declared and never read - one of them, ntPlayers, was even
+-- declared twice.)
 local ntCamPos = Vector3.new()
 local ntPlayersTick = 0
-local ntPlayers = {}
-local ntCamTick = 0
-local ntInfoTick = 0
-local ntHoverTick = 0
 local ntPlayers = {}
 
 connect(RunService.RenderStepped, function(dt)
@@ -10543,7 +10569,17 @@ add{
 		-- until every request returned (the tagsfetch freeze-and-crash)
 		task.spawn(function()
 			local msg = ntFetch(true)
-			local beat = ntBeat(true)
+			-- ntBeat(true) announces success itself; its return value only carries a
+			-- FAILURE reason, and that used to be assigned to an unused local - so
+			-- "no HttpGet on this executor" and "blacklisted" were both silent
+			local beatMsg = ntBeat(true)
+			if beatMsg and beatMsg ~= "heartbeat sent" and H.notify then
+				H.notify({
+					title = "Nametags",
+					text = beatMsg,
+					kind = "error",
+				})
+			end
 			if msg and msg:sub(1, 6) ~= "loaded" and H.notify then
 				H.notify({
 					title = "Nametags",
@@ -14257,6 +14293,8 @@ do
 		mode = (H.fbQueuePost and H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "") and "firebase" or "ntfy",
 		lastPollOk = false,
 		lastPoll = 0,
+		-- why the last read failed, when Firebase tells us ("Permission denied")
+		lastPollErr = nil,
 		lastRecv = 0,
 		-- bumped whenever a command moves in either direction; the poll loop
 		-- uses it to poll fast during a live session and gently when idle
@@ -14562,7 +14600,9 @@ do
 	-- ---------------------------------------------------------------
 	-- command transport over ntfy (same pipe + helpers as presence)
 	-- ---------------------------------------------------------------
-	local function handleWire(msg, dedupeKey)
+	-- (no dedupeKey parameter: dedupe happens at both call sites, which own the
+	-- seenCmd set - the parameter was never read here)
+	local function handleWire(msg)
 		if type(msg) ~= "string" or #msg == 0 or #msg >= 120 then
 			return
 		end
@@ -14601,9 +14641,19 @@ do
 			local body = ntHttpGet(fbBase .. "/cmd.json" .. fbAuth)
 			if body == nil or body == "" then
 				transport.lastPollOk = false -- read failed: footer will say so
+				transport.lastPollErr = nil
+				return
+			end
+			-- an error body (denied read, bad url) is NOT a healthy queue - say so in
+			-- the footer, and let the ntfy probe run instead of being suppressed
+			local fbErr = H.fbErrorText and H.fbErrorText(body)
+			if fbErr then
+				transport.lastPollOk = false
+				transport.lastPollErr = fbErr
 				return
 			end
 			transport.lastPollOk = true
+			transport.lastPollErr = nil
 			transport.lastPoll = os.time()
 			if body == "null" then
 				return -- reachable, queue simply empty
@@ -14618,7 +14668,11 @@ do
 				-- 90s window (was 60): a receiver that polls on a 30s cadence could
 				-- miss a command entirely if one poll was slow, which is exactly
 				-- how panel actions silently vanished
-				if type(value) == "string" and sec and (now - sec) <= 90 and sec >= startedAt and not seenCmd[key] then
+				--
+				-- sec <= now + 120: a sender whose clock is badly ahead would otherwise
+				-- write entries that are "fresh" forever, so an old command would replay
+				-- on every re-execute. Two minutes of tolerance covers real drift.
+				if type(value) == "string" and sec and (now - sec) <= 90 and sec >= startedAt and sec <= now + 120 and not seenCmd[key] then
 					seenCmd[key] = true
 					handleWire(value)
 				end
@@ -14914,19 +14968,6 @@ do
 	-- the body's ZIndex 2 baseline)
 
 	local ord = 0
-	local function sec(text)
-		ord += 1
-		make("TextLabel", {
-			Size = UDim2.new(1, -6, 0, 18),
-			BackgroundTransparency = 1,
-			Font = Enum.Font.GothamBold,
-			TextSize = 11,
-			TextColor3 = COL.sub,
-			Text = string.upper(text),
-			TextXAlignment = Enum.TextXAlignment.Left,
-			LayoutOrder = ord,
-		}, staffBody)
-	end
 
 	-- multi-select: userId -> true; empty set = broadcast to everyone
 	local selSet = {}
@@ -15275,7 +15316,15 @@ do
 			pcall(function()
 				local msg
 				if transport.mode == "firebase" then
-					msg = transport.lastPollOk and "firebase queue ok" or "firebase unreachable (url/rules?)"
+					if transport.lastPollOk then
+						msg = "firebase queue ok"
+					elseif transport.lastPollErr then
+						-- the database answered, so the url is right and the rules are not:
+						-- name the actual refusal instead of guessing "unreachable"
+						msg = "firebase refused the read: " .. tostring(transport.lastPollErr)
+					else
+						msg = "firebase unreachable (url/rules?)"
+					end
 				else
 					msg = "no firebase - ntfy fallback (quota limited)"
 				end
