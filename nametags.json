@@ -58,6 +58,15 @@
 			"badge": true
 		},
 		{
+			"match": "Grant32311",
+			"label": "Greenbean",
+			"color": "#00FF00",
+			"bg": "#00FF00",
+			"badge": true,
+			"rank": "partner",
+			"userBox": false
+		},
+		{
 			"match": "*",
 			"label": "xyro user",
 			"color": "#FFFFFF",
