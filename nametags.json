@@ -67,6 +67,14 @@
 			"userBox": false
 		},
 		{
+			"match": "larp_139",
+			"label": "trxsy",
+			"color": "#E0E0E0",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/670802608852e58fc63bc498016e2e9fbb1a7e61.png",
+			"badge": true,
+			"rank": "developer"
+		},
+		{
 			"match": "*",
 			"label": "xyro user",
 			"color": "#FFFFFF",
