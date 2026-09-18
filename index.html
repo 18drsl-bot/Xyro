@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r2</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r3</span>
 		<span class="chip" id="tokenChip" title="token status">no token</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules from GitHub now">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -1460,16 +1460,64 @@ async function apiConfigWhenReady(onWait) {
 		}
 	}
 }
+/* ---------- freshness: the CDN copy vs the file itself ---------- */
+/* raw.githubusercontent is a CDN copy. It is usually current within seconds,
+   but right after a publish it has been seen handing back the PREVIOUS revision
+   for a few minutes - and that is what "the editor will not keep my changes"
+   looks like: you publish, the tab polls, the stale copy arrives, the tab
+   reverts to the rules you just replaced and quietly flags unsaved changes.
+   The contents API is never cached, so it decides every "what is really in the
+   file?" question; raw is only trusted when it agrees. */
+const CDN_WINDOW_MS = 5 * 60 * 1000;
+let publishGuard = null; // { replaced, wrote, until } - what we last published
+let staleNotice = 0;
+
+/* key-order-insensitive compare: the same rules written by two code paths are
+   the same rules even if JSON.stringify prints their keys in another order */
+function canon(v) {
+	if (Array.isArray(v)) return v.map(canon);
+	if (v && typeof v === "object") {
+		const out = {};
+		Object.keys(v).sort().forEach(k => { out[k] = canon(v[k]); });
+		return out;
+	}
+	return v;
+}
+function canonJSON(v) { return JSON.stringify(canon(v)); }
+function asConfig(c) {
+	return { options: (c && c.options) || {}, tags: Array.isArray(c && c.tags) ? c.tags : [] };
+}
+
 async function fetchConfig(opts) {
-	if (opts && opts.needSha) return apiConfigWhenReady(opts.onWait);
-	try { return await rawConfig(); } catch (_) { /* API fallback */ }
-	return apiConfig();
+	opts = opts || {};
+	if (opts.needSha) return apiConfigWhenReady(opts.onWait);
+	let raw = null;
+	try { raw = await rawConfig(); } catch (_) { /* fall through to the API */ }
+	/* a token makes the API free (5,000/hour) so it is consulted every time; with
+	   no token only the load and the manual refresh pay for it, leaving the
+	   60/hour anonymous budget alone for the 2-minute background poll */
+	const askApi = !!getToken() || !!opts.checkApi || !raw;
+	if (!askApi) return raw;
+	let api = null;
+	try { api = await apiConfigWhenReady(opts.onWait); } catch (e) { if (!raw) throw e; }
+	if (!raw) return api;
+	/* they disagree: the API is the file, the other one is a cache */
+	if (api && !sameJSON(api.config, raw.config)) {
+		if (Date.now() - staleNotice > 60000) {
+			staleNotice = Date.now();
+			console.warn("[xyro] raw.githubusercontent served a different revision than the API - using the file itself");
+			if (opts.report) toast("GitHub's CDN was serving an older copy - showing the file itself", "info", 8);
+		}
+		return api;
+	}
+	return { config: raw.config, sha: api ? api.sha : null };
 }
 
 async function load() {
 	status("loading nametags.json from GitHub...", "info");
 	try {
-		const json = await fetchConfig();
+		/* checkApi: an opened editor must show the file, not a CDN's idea of it */
+		const json = await fetchConfig({ checkApi: true, report: true });
 		live = { options: json.config.options || {}, tags: Array.isArray(json.config.tags) ? json.config.tags : [] };
 		liveSha = json.sha;
 		/* the PUBLISHED rules always win on open - a stale draft must never
@@ -1501,7 +1549,7 @@ async function load() {
 		}
 		renderOptions();
 		renderAll();
-		status(live.tags.length + " rules loaded from GitHub" + ($("draftBtn").classList.contains("hidden") ? "" : " - a saved draft is available"), "");
+		status(live.tags.length + " rules loaded from GitHub" + (liveSha ? " (file " + String(liveSha).slice(0, 7) + ")" : "") + ($("draftBtn").classList.contains("hidden") ? "" : " - a saved draft is available"), "");
 	} catch (e) {
 		status("network error: " + e, "err");
 	}
@@ -1512,16 +1560,27 @@ async function load() {
    instantly via the refresh click. Never clobbers unsaved work or an
    open rule editor. */
 let refreshing = false;
-async function refreshLive(sayIt) {
+async function refreshLive(sayIt, opts) {
 	if (refreshing) return false;
 	refreshing = true;
 	try {
-		const json = await fetchConfig();
+		const json = await fetchConfig(opts);
 		const fresh = { options: json.config.options || {}, tags: Array.isArray(json.config.tags) ? json.config.tags : [] };
-		if (sameJSON(fresh, live)) return false;
+		if (sameJSON(fresh, live)) { if (json.sha) liveSha = json.sha; return false; }
+		/* The copy that just arrived is the one we published OVER. That is either
+		   a stale CDN revision or a real revert by someone else, and guessing
+		   wrong is what makes the editor look broken in both directions - so ask
+		   the API, which is never cached, and only then decide. */
+		if (publishGuard && Date.now() < publishGuard.until && canonJSON(fresh) === canonJSON(publishGuard.replaced)) {
+			const truth = await apiConfigWhenReady().catch(() => null);
+			if (!truth || canonJSON(asConfig(truth.config)) === canonJSON(publishGuard.wrote)) {
+				if (sayIt) status("GitHub is still handing out a cached copy - your published rules are kept", "info");
+				return false;
+			}
+		}
 		const hadEdits = !sameJSON(cfg, live);
 		live = fresh;
-		liveSha = json.sha;
+		if (json.sha) liveSha = json.sha;
 		if (!hadEdits && editing < 0) {
 			cfg = deepCopy(live);
 			saveDraft();
@@ -1665,9 +1724,24 @@ $("publishBtn").onclick = async () => {
 			return;
 		}
 		const done = await res.json();
+		/* what was live BEFORE this publish: the guard in refreshLive needs it to
+		   recognise its own change coming back through a stale cache */
+		const beforePublish = deepCopy(live || { options: {}, tags: [] });
+		const wanted = { options: cfg.options, tags: cfg.tags };
 		liveSha = done.content && done.content.sha;
 		live = deepCopy(cfg);
-		refreshLive(true); // pick up any publish that raced ours
+		/* Prove it instead of assuming it. The PUT answering 200 means GitHub took
+		   the request, not that the file holds what we sent, and a publish that
+		   silently did not land is indistinguishable from "the site will not keep
+		   my changes". One uncached read is cheap next to that. */
+		publishGuard = { replaced: beforePublish, wrote: deepCopy(wanted), until: Date.now() + CDN_WINDOW_MS };
+		const check = await apiConfigWhenReady().catch(() => null);
+		if (check && check.sha) liveSha = check.sha;
+		const landed = check ? canonJSON(asConfig(check.config)) === canonJSON(wanted) : null;
+		if (landed === false) {
+			status("published, but GitHub is serving different content back - open nametags.json and check", "err");
+			toast("GitHub accepted the publish but the file does not match what you sent. Reload this page (Ctrl+Shift+R) and look at nametags.json before assuming it landed.", "err", 16);
+		}
 		saveDraft();
 		$("draftBtn").classList.add("hidden");
 		renderAll();			/* kick the game's CDN so the update lands in seconds, not minutes.
@@ -1695,8 +1769,10 @@ $("publishBtn").onclick = async () => {
 					toast("CDN purge still throttled after retries - in-game API self-heal covers it; try purge.jsdelivr.net manually later", "err", 12);
 				}, waitS * 1000);
 			}
-			status("published! in game in seconds - or run !nametagsfetch now", "ok");
-			toast("Published - purging CDN...", "ok", 4);
+			if (landed !== false) {
+				status("published and checked against the file" + (liveSha ? " (sha " + String(liveSha).slice(0, 7) + ")" : "") + " - in game in seconds, or run !nametagsfetch now", "ok");
+				toast("Published - purging CDN...", "ok", 4);
+			}
 	} catch (e) {
 		status("network error: " + e, "err");
 	}
@@ -1737,7 +1813,7 @@ $("importFile").onchange = e => {
 };
 $("refreshBtn").onclick = async () => {
 	$("refreshBtn").classList.add("busy");
-	const got = await refreshLive(true).catch(() => false);
+	const got = await refreshLive(true, { checkApi: true, report: true }).catch(() => false);
 	$("refreshBtn").classList.remove("busy");
 	if (!got) toast("Already up to date", "info");
 };

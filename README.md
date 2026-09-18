@@ -116,6 +116,14 @@ Icons support PNG/JPG/GIF by URL, asset id, or base64 `data:` URI - **GIFs fully
 The editor is **GitHub-hosted only**: https://vertxxy-1.github.io/Xyro/ — nothing runs on
 your PC; publish straight from that page.
 
+It asks the **Contents API** (never cached) what the file says, and treats the
+raw CDN copy as a hint only, so "the site does not match nametags.json" cannot
+happen from a stale cache. After a publish it reads the file back and says so -
+"published and checked against the file (sha abc1234)" - and if GitHub reports
+something different it says that instead of claiming success. The header chip
+(`build: api-r3`) names the build the page is actually running, so if a hard
+refresh (Ctrl+Shift+R) is needed you can see it.
+
 ## Firebase staff list
 
 By default the admin list is hardcoded in `xyro.lua` (`ADMIN_IDS`). To manage
