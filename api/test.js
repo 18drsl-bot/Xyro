@@ -65,7 +65,9 @@ const REPO_FILES_BASE = {
 	"/vertxxy-1/Xyro/main/media/seal_founder.png": "\u0089PNG\r\nseal-pixels",
 	"/vertxxy-1/Xyro/main/media/verified_seal_blue.png": "\u0089PNG\r\nverified-seal-pixels",
 };
+let emptyRepoFile = false; // simulate GitHub answering 200 with no body at all
 function repoFile(pathname) {
+	if (emptyRepoFile && pathname.endsWith("/nametags.json")) return "";
 	if (pathname === "/vertxxy-1/Xyro/main/xyro.lua") return scriptTruncated ? "-- cut off\nreturn" : FAKE_SCRIPT;
 	// the rules are mutable here: publishing through the API must change what
 	// the next reader gets, and a corrupt file must be caught rather than served
@@ -112,6 +114,27 @@ global.fetch = async (url, init) => {
 	if (u.hostname === "api.github.com") {
 		const auth = (init && init.headers && (init.headers.authorization || init.headers.Authorization)) || "";
 		if (auth === "Bearer bad-token") return new Response('{"message":"Bad credentials"}', { status: 401 });
+		// GitHub sends x-oauth-scopes for a CLASSIC token and nothing for a
+		// fine-grained one; the Worker tells the two apart from exactly this.
+		if (auth === "Bearer classic-token") {
+			const body = repoFile("/vertxxy-1/Xyro/main/nametags.json");
+			return new Response(JSON.stringify({ sha: githubSha, content: Buffer.from(body, "utf8").toString("base64") }), {
+				status: 200,
+				headers: { "x-oauth-scopes": "repo, workflow, delete_repo, admin:org, admin:public_key, gist" },
+			});
+		}
+			// GitHub does not inline content for files over 1 MB: content:"" +
+		// encoding:"none". The Worker must fall back to raw for those, or serve
+		// the 200-with-no-body that made the big tag images blank.
+		if (auth === "Bearer big-file-token") {
+			const bigName = decodeURIComponent(u.pathname.replace("/repos/vertxxy-1/Xyro/contents/", ""));
+			return new Response(JSON.stringify({
+				sha: "big-sha",
+				size: 2257528,
+				content: bigName === "media/verified_seal_blue.png" ? "" : "c29tZQ==",
+				encoding: bigName === "media/verified_seal_blue.png" ? "none" : "base64",
+			}), { status: 200 });
+		}
 		const name = decodeURIComponent(u.pathname.replace("/repos/vertxxy-1/Xyro/contents/", ""));
 		if (method === "PUT") {
 			if (githubConflict) return new Response('{"message":"nametags.json does not match " + "' + githubSha + '"}', { status: 409 });
@@ -421,6 +444,40 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	res = await call("/media/%2e%2e%2fworker.js");
 	ok("a media name that is not one plain segment never reaches a repo path", res.status === 404, "got " + res.status);
 
+	/* A cache entry is whatever was produced at the time, so one bad answer - or
+	   one bug in decoding it - gets replayed to every client for the whole TTL
+	   and survives the deploy that fixed it. Observed for real: the contents API
+	   returned content:"" for files over 1MB, so three seals were cached as
+	   0-byte 200s and kept serving empty after the fix shipped. */
+	{
+		const realFetch = globalThis.fetch;
+		let upstream = 0;
+		globalThis.fetch = (url, init) => { upstream++; return realFetch(url, init); };
+		const before = calls.length;
+		let puts = 0;
+		globalThis.caches = {
+			default: {
+				match: async () => new Response(new Uint8Array(0), { headers: { "content-type": "image/png", "content-length": "0" } }),
+				put: async () => { puts++; },
+				delete: async () => {},
+			},
+		};
+		res = await call("/media/seal_founder.png");
+		const guarded = new Uint8Array(await res.arrayBuffer());
+		ok("a 0-byte entry in the edge cache is ignored, not served", res.status === 200 && guarded.length > 4, guarded.length + " bytes served");
+		ok("...and it is refetched from upstream and re-cached", calls.length > before && puts === 1, "upstream " + (calls.length - before) + ", puts " + puts);
+
+		// ...while a healthy entry is still served straight from the cache
+		globalThis.caches.default.match = async () => new Response(new Uint8Array([1, 2, 3, 4]), { headers: { "content-type": "image/png", "content-length": "4" } });
+		const upstreamBefore = calls.length;
+		res = await call("/media/seal_founder.png");
+		const hit = new Uint8Array(await res.arrayBuffer());
+		ok("a good cache entry is still served without touching upstream", hit.length === 4 && calls.length === upstreamBefore,
+			hit.length + " bytes, upstream " + (calls.length - upstreamBefore));
+		delete globalThis.caches;
+		globalThis.fetch = realFetch;
+	}
+
 	// a corrupt rules file must be loud: a client that applies half of it draws
 	// the wrong tags for everyone
 	nametagsFixture = "{ this is not json";
@@ -487,6 +544,24 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	json = await body(await call("/health", { env: { GH_TOKEN: "gh-read-token" } }));
 	ok("health says publishing is on with one", /PUT \/nametags/.test(json.nametags.publish || ""), json.nametags.publish);
 
+	/* --- big files: the contents API will not inline them, so raw must --- */
+	calls.length = 0;
+	res = await call("/media/verified_seal_blue.png", { env: { GH_TOKEN: "big-file-token" } });
+	const bigBytes = new Uint8Array(await res.arrayBuffer());
+	ok("a file too big for the contents API is read from raw instead of served empty", res.status === 200 && bigBytes.length > 0, res.status + " " + bigBytes.length + " bytes");
+	ok("...and the text of that file is intact", new TextDecoder().decode(bigBytes).startsWith("\u0089PNG"), JSON.stringify(new TextDecoder().decode(bigBytes).slice(0, 12)));
+	ok("...which means it really did go upstream a second time", calls.filter(c => c.url.hostname === "raw.githubusercontent.com").length === 1, calls.map(c => c.url.hostname).join(", "));
+	calls.length = 0;
+	res = await call("/media/seal_founder.png", { env: { GH_TOKEN: "big-file-token" } });
+	ok("a small file still comes from the API (the cheap path)", res.status === 200 && calls.some(c => c.url.hostname === "api.github.com") && !calls.some(c => c.url.hostname === "raw.githubusercontent.com"), calls.map(c => c.url.hostname).join(", "));
+
+	// an empty upstream body must be loud, never a 200 with nothing in it
+	emptyRepoFile = true;
+	res = await call("/nametags?fresh=1");
+	json = await body(res);
+	ok("an empty repo read is a 502, not a silently empty body", res.status === 502 && /came back empty/.test(json.error || ""), res.status + " " + JSON.stringify(json));
+	emptyRepoFile = false;
+
 	/* --- publishing from the editor: the sha, the check, the lesser key --- */
 
 	/* the editor needs the blob sha to publish safely, and a browser can only
@@ -508,6 +583,18 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	res = await call("/nametags/check", { method: "POST", env: OWNER, headers: { "x-api-key": "owner" } });
 	json = await body(res);
 	ok("with everything in place it reports the current file sha", res.status === 200 && json.ok === true && json.sha === githubSha, res.status + " " + JSON.stringify(json));
+	ok("a fine-grained token is reported as such, with no warning", json.token && json.token.kind === "fine-grained" && !json.warning, JSON.stringify(json.token));
+
+	// a classic token: cannot be limited to one repo, so say so where a human reads it
+	res = await call("/nametags/check", { method: "POST", env: { ...WITH_KEYS, GH_TOKEN: "classic-token" }, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("a classic token is identified", res.status === 200 && json.token && json.token.kind === "classic", JSON.stringify(json.token));
+	ok("...naming the scopes that make it an account-wide risk", same(json.token.wide, ["workflow", "delete_repo", "admin:org", "admin:public_key"]), JSON.stringify(json.token.wide));
+	ok("...without listing harmless ones as dangerous", !json.token.wide.includes("gist") && !json.token.wide.includes("repo"), JSON.stringify(json.token.wide));
+	ok("and the warning says what a leak would cost", /CLASSIC/.test(json.warning || "") && /delete_repo/.test(json.warning || "") && /fine-grained/.test(json.warning || ""), json.warning);
+	res = await call("/nametags/check", { method: "POST", env: OWNER, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("a fine-grained token gets no warning at all", !json.warning, JSON.stringify(json.warning));
 	res = await call("/nametags/check", { method: "POST", env: { ...WITH_KEYS, GH_TOKEN: "bad-token" }, headers: { "x-api-key": "owner" } });
 	json = await body(res);
 	ok("a token GitHub refuses is reported, not hidden", res.status === 502 && json.reason === "github" && /Contents: Read and write/.test(json.error || ""), res.status + " " + JSON.stringify(json));

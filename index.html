@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r7</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r8</span>
 		<span class="chip" id="tokenChip" title="token status">no token</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules now (through the API when one is configured, otherwise straight from GitHub)">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -1555,9 +1555,20 @@ $("saveOwner").onclick = async () => {
 		localStorage.setItem(LS_OWNER, v);
 		$("ownerKey").value = "";
 		refreshKeyChip();
-		status("owner key accepted - Publish now writes through the API" + (out.sha ? " (file " + String(out.sha).slice(0, 7) + ")" : ""), "ok");
-		toast("Ready - Publish goes through your API from now on", "ok");
 		refreshLive(false, { checkApi: true });
+		/* The Worker reports what kind of repo token it holds. A classic one
+		   cannot be limited to this repository, so its leak is an account-wide
+		   problem - say that here, at the one moment a human is trusting it. */
+		const tok = out.token || {};
+		if (tok.kind === "classic") {
+			status("owner key accepted - but the Worker's repo token is a CLASSIC one (see below)", "err");
+			toast("Warning: the Worker's GH_TOKEN is a classic token" +
+				(tok.wide && tok.wide.length ? ", carrying " + tok.wide.slice(0, 5).join(", ") : "") +
+				". It cannot be limited to this repo: a leak could delete your other repositories or add an SSH key that survives rotation, not just edit tags. " + (out.warning || ""), "err", 20);
+		} else {
+			status("owner key accepted - Publish now writes through the API" + (out.sha ? " (file " + String(out.sha).slice(0, 7) + ")" : "") + (tok.kind === "fine-grained" ? " and the repo token is fine-grained" : ""), "ok");
+			toast("Ready - Publish goes through your API from now on", "ok");
+		}
 	} catch (e) {
 		status("network error while testing the key: " + e, "err");
 	}

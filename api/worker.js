@@ -665,6 +665,7 @@ function repoRef(env) {
  *  Returns { bytes, sha, source } - `sha` is only known on the API path. */
 async function repoBytes(env, name, bust) {
 	const ref = repoRef(env);
+	let shaFromApi = "";
 	if (env.GH_TOKEN) {
 		try {
 			const api = "https://api.github.com/repos/" + ref.owner + "/" + ref.repo + "/contents/" + name +
@@ -678,11 +679,21 @@ async function repoBytes(env, name, bust) {
 			});
 			if (res.ok) {
 				const envelope = await res.json();
-				if (envelope && typeof envelope.content === "string") {
+				/* The contents API only INLINES content for files up to 1 MB. Bigger
+				   ones come back as content:"" plus encoding:"none" - and decoding
+				   that yields an empty body, which is served as a blank image. Not
+				   theoretical: the 2 MB tag artwork did exactly this the moment a repo
+				   token was configured, while every small seal kept working. Raw has
+				   no such limit, so anything the API will not inline is read from raw
+				   instead (the sha is still worth keeping - a publish sends it back). */
+				if (envelope && envelope.sha) shaFromApi = envelope.sha;
+				// (not gated on encoding ==="base64": a response that simply omits the
+				// field is still fine, "none" is the one that means "no content here")
+				if (envelope && typeof envelope.content === "string" && envelope.content !== "" && envelope.encoding !== "none") {
 					const bin = atob(envelope.content.replace(/\s/g, ""));
 					const bytes = new Uint8Array(bin.length);
 					for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-					return { bytes, sha: envelope.sha || "", source: "github-api" };
+					return { bytes, sha: shaFromApi, source: "github-api" };
 				}
 			} else if (res.status === 404) {
 				throw new ApiError(404, "no such repo file: " + name);
@@ -699,7 +710,14 @@ async function repoBytes(env, name, bust) {
 	const res = await fetch(raw, { cf: { cacheTtl: 0 } });
 	if (res.status === 404) throw new ApiError(404, "no such repo file: " + name);
 	if (!res.ok) throw new ApiError(502, "repo file " + name + " returned " + res.status);
-	return { bytes: new Uint8Array(await res.arrayBuffer()), sha: "", source: "raw" };
+	const bytes = new Uint8Array(await res.arrayBuffer());
+	/* Refuse an empty body rather than passing it on. A 200 with nothing in it
+	   is how the 1 MB trap above reached clients as a blank badge: silence is
+	   the one failure mode nobody can debug from inside the game. */
+	if (bytes.length === 0) {
+		throw new ApiError(502, "repo file " + name + " came back empty (0 bytes) - refusing to serve it");
+	}
+	return { bytes, sha: shaFromApi, source: shaFromApi ? "raw (too big for the contents API to inline)" : "raw" };
 }
 
 /** GET /nametags (aliases /nametags.json and /config) - the published tag
@@ -740,6 +758,22 @@ async function serveNametags(env, ctx, url) {
 		};
 	});
 }
+
+/** Scopes that turn a leaked token from a REPO problem into an ACCOUNT problem.
+ *
+ *  GitHub sends `x-oauth-scopes` for classic tokens and nothing at all for
+ *  fine-grained ones, which is how the two can be told apart without asking the
+ *  user - a classic token cannot be limited to one repository, so a copy of it
+ *  can delete repos, add SSH keys or edit org membership. Worth shouting about
+ *  on the one route where a human is about to trust the token. */
+// Only the ones that can DESTROY or take over: a scope list padded with mild
+// account-level grants (gist, notifications, project) would bury the point.
+const BROAD_SCOPES = [
+	"delete_repo", "admin:org", "admin:enterprise", "admin:public_key",
+	"admin:ssh_signing_key", "admin:repo_hook", "admin:gpg_key", "workflow",
+	"write:packages", "delete:packages", "write:network_configurations",
+	"audit_log", "write:discussion",
+];
 
 /** Content types the media route will serve. A whitelist, not a guess: this
  *  route reads a repo path, so an unexpected extension is refused rather than
@@ -832,10 +866,25 @@ async function checkPublishReady(env) {
 			}, 502);
 		}
 		const data = await res.json();
+		/* What kind of credential is this? A fine-grained token sends no scope
+		   header at all; a classic one always does, and its scope list is the
+		   honest answer to "how much would leak if this escaped?". */
+		const scopeHeader = res.headers.get("x-oauth-scopes") || "";
+		const scopes = scopeHeader.split(",").map(s => s.trim()).filter(Boolean);
+		const wide = scopes.filter(s => BROAD_SCOPES.includes(s));
+		const token = scopes.length
+			? { kind: "classic", scopes, wide }
+			: { kind: "fine-grained", scopes: [], wide: [] };
 		return json(env, {
 			ok: true,
 			sha: data && data.sha ? data.sha : "",
 			bytes: data && data.size ? data.size : 0,
+			token,
+			warning: scopes.length
+				? "this is a CLASSIC token, which cannot be limited to one repository" +
+					(wide.length ? " and it carries " + wide.join(", ") : "") +
+					" - a leak affects your whole account (repos, SSH keys, org), not just these tags. Replace it with a fine-grained token (Contents: Read and write on " + ref.owner + "/" + ref.repo + ")."
+				: "",
 			note: "a read-only token gets this far and is refused on the first publish",
 		});
 	} catch (err) {
@@ -928,7 +977,14 @@ async function cached(env, ctx, url, ttl, contentType, produce) {
 	const cacheKey = new Request(url.origin + url.pathname);
 	if (canCache) {
 		const hit = await caches.default.match(cacheKey);
-		if (hit) return hit;
+		/* Never serve an empty cached body. A cache entry is written from
+		   whatever was produced at the time, so one bad upstream answer - or one
+		   bug in how it was decoded - gets replayed to everybody for the whole
+		   TTL, and outlives the deploy that fixed it. An empty body is never
+		   legitimate here: the rules file and every piece of artwork have bytes.
+		   A miss just re-fetches and re-caches, which is what we want. */
+		const cachedLength = Number(hit && hit.headers.get("content-length"));
+		if (hit && !(cachedLength === 0)) return hit;
 	}
 	const out = await produce();
 	const spec = out && typeof out === "object" && !ArrayBuffer.isView(out) && !(out instanceof ArrayBuffer) && "body" in out

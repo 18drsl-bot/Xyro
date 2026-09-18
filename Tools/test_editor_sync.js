@@ -129,6 +129,7 @@ const gh = {
 let apiJson = '{"api":{"url":"","key":""}}';
 let apiDown = false;
 let apiNoToken = false; // a Worker deployed without GH_TOKEN: reads fine, writes 503
+let apiClassicToken = false; // the Worker holds a CLASSIC token (account-wide), not fine-grained
 let apiPuts = 0; // publishes that went through the API (not GitHub)
 const OWNER_KEY = "owner-secret";
 
@@ -159,7 +160,15 @@ global.fetch = async (url, init) => {
 		if (u.pathname === "/nametags/check") {
 			if (apiKey !== OWNER_KEY) return new Response('{"error":"forbidden: this route needs the owner key"}', { status: 403 });
 			if (apiNoToken) return new Response('{"ok":false,"reason":"no_gh_token","error":"the Worker has no GH_TOKEN"}', { status: 503 });
-			return new Response(JSON.stringify({ ok: true, sha: gh.sha() }), { status: 200 });
+			const token = apiClassicToken
+				? { kind: "classic", scopes: ["repo", "delete_repo", "workflow"], wide: ["delete_repo", "workflow"] }
+				: { kind: "fine-grained", scopes: [], wide: [] };
+			return new Response(JSON.stringify({
+				ok: true,
+				sha: gh.sha(),
+				token,
+				warning: apiClassicToken ? "this is a CLASSIC token, which cannot be limited to one repository" : "",
+			}), { status: 200 });
 		}
 		if (u.pathname === "/nametags") {
 			if (method === "PUT") {
@@ -370,6 +379,27 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	await el("saveOwner").onclick();
 	ok("Save & test asks the Worker's check route", calls.some(c => c.url.pathname === "/nametags/check" && c.method === "POST"), calls.map(c => c.method + " " + c.url.pathname).join(", "));
 	ok("a refused owner key is not saved", localStorage.getItem("xyro_owner_key") === OWNER_KEY && /refused that key/.test(el("status").textContent), el("status").textContent);
+
+	// the key and the repo token are different things: an accepted key with an
+	// account-wide token is the moment to say so, where the human is looking
+	const toastCount = () => el("toasts").children.length;
+	const newToasts = n => el("toasts").children.slice(n).map(t => t.textContent).join(" | ");
+	let toastsBefore = toastCount();
+	el("ownerKey").value = OWNER_KEY;
+	await el("saveOwner").onclick();
+	let toastsAdded = newToasts(toastsBefore);
+	ok("a fine-grained repo token is accepted with no warning", !/classic/i.test(toastsAdded) && /Ready/.test(toastsAdded), toastsAdded.slice(0, 140));
+	ok("...and the status names it as fine-grained", /fine-grained/.test(el("status").textContent), el("status").textContent);
+
+	apiClassicToken = true;
+	toastsBefore = toastCount();
+	el("ownerKey").value = OWNER_KEY;
+	await el("saveOwner").onclick();
+	toastsAdded = newToasts(toastsBefore);
+	ok("a classic (account-wide) repo token is warned about, by name", /classic token/i.test(toastsAdded) && /delete_repo/.test(toastsAdded), toastsAdded.slice(0, 200));
+	ok("...explaining that it is not limited to this repo", /cannot be limited to this repo/.test(toastsAdded), toastsAdded.slice(0, 200));
+	ok("...while the owner key is still accepted - they are separate credentials", localStorage.getItem("xyro_owner_key") === OWNER_KEY, "");
+	apiClassicToken = false;
 
 	// a Worker that cannot publish should say so rather than fail silently
 	apiNoToken = true;
