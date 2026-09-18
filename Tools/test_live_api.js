@@ -245,7 +245,46 @@ const timeIt = async fn => { const t = Date.now(); const r = await fn(); return 
 			ok("...and the file still holds exactly the same rules", after === gotText, "the no-op publish changed the file");
 			ok("...and the publish cleared its own cache (the read above was fresh)", after === gotText);
 		}
+
+		/* The guard the editor's one-request publish depends on. It used to read
+		   the file first and pass that sha; now it passes the sha it already has,
+		   which is only safe because a stale one is REFUSED. GitHub rejects it, so
+		   nothing is written - this runs by default without touching your repo. */
+		if (canPublish) {
+			const stale = await fetch(base + "/nametags?sha=0000000000000000000000000000000000000000", {
+				method: "PUT",
+				headers: { "x-api-key": ownerKey, "content-type": "application/json" },
+				body: gotText,
+			});
+			ok("a publish carrying a stale sha is refused (409), so a stale tab cannot clobber a newer revision",
+				stale.status === 409, "got " + stale.status + " " + (await stale.text()).slice(0, 120));
+			const untouched = await (await fetch(base + "/nametags?fresh=1")).text();
+			ok("...and the refused write left the file exactly as it was", untouched === gotText, "the file changed after a refused write");
+		}
 	}
+
+	/* ------------------------------------ the editor the API itself serves */
+	group("the editor the API serves");
+	const editor = await fetch(base + "/editor");
+	const editorHTML = await editor.text();
+	ok("GET /editor serves the tag editor", editor.status === 200 && /text\/html/.test(editor.headers.get("content-type") || "") && editorHTML.includes('id="ruleList"'),
+		editor.status + " " + editor.headers.get("content-type"));
+	ok("...cached for 60s instead of GitHub Pages' ~10 minutes", /max-age=60/.test(editor.headers.get("cache-control") || ""), editor.headers.get("cache-control"));
+	ok("...with this origin injected, so opening it costs no api.json lookup",
+		editorHTML.includes('window.__XYRO_API={"url":"' + base + '"'), (editorHTML.match(/window\.__XYRO_API=[^<]*/) || ["missing"])[0]);
+	ok("...inside <head>, before anything renders", editorHTML.indexOf("__XYRO_API") < editorHTML.indexOf("</head>"), "");
+	/* the served page must BE the repo page: a stale copy here would be a second
+	   editor that quietly drifts from the one in git */
+	const repoHTML = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
+	const bare = s => s.replace(/\r\n/g, "\n").replace(/<script>window\.__XYRO_API=[^<]*<\/script>\n?/, "").trim();
+	const servedChip = (bare(editorHTML).match(/build: (api-r\d+)/) || [])[1];
+	const repoChip = (repoHTML.match(/build: (api-r\d+)/) || [])[1];
+	ok("...and it is the page in the repo, not a stale copy", bare(editorHTML) === bare(repoHTML), "served " + servedChip + " vs repo " + repoChip + " (" + (bare(editorHTML) === bare(repoHTML) ? "same" : "different") + ")");
+	const editorCfg = await (await fetch(base + "/api.json")).json().catch(() => null);
+	ok("GET /api.json points a page served here at this origin",
+		!!(editorCfg && editorCfg.api && editorCfg.api.url === base), JSON.stringify(editorCfg));
+	const editorFresh = await fetch(base + "/editor?fresh=1");
+	ok("?fresh=1 sidesteps the page cache", /no-store/.test(editorFresh.headers.get("cache-control") || ""), editorFresh.headers.get("cache-control"));
 
 	console.log("\n" + pass + " passed, " + fail + " failed" + (skip ? ", " + skip + " skipped/incomplete" : ""));
 	process.exit(fail ? 1 : 0);
