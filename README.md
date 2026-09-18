@@ -115,8 +115,18 @@ the script re-checks for published changes, 10–300, default 15)
 Tags render as plain billboard UI, so **any executor works** — no Drawing API needed.
 Icons support PNG/JPG/GIF by URL, asset id, or base64 `data:` URI - **GIFs fully animate** (decoded frame-by-frame in script, since Roblox only shows a GIF's first frame). Rules also take `bgImage` (URL or data URI) to fill the pill background; the editor's **Choose file** buttons upload images to `media/` in this repo (base64-embeds them without a token).
 
-The editor is **GitHub-hosted only**: https://vertxxy-1.github.io/Xyro/ — nothing runs on
-your PC; publish straight from that page.
+The editor is a web page - nothing runs on your PC; publish straight from it. Two
+
+ addresses serve the same editor, and the second is the faster one:
+
+- https://vertxxy-1.github.io/Xyro/ (GitHub Pages; caches the page for ~10 minutes,
+  so a new build needs Ctrl+Shift+R)
+- **https://xyro-api.xyroapi.workers.dev/editor** (served by the API itself: cached for
+  60s, same origin as publishing - no cross-origin preflight - and it arrives knowing
+  where the API is, so it opens one request sooner)
+
+Either way it paints the last copy your browser saw before the network answers, so
+opening it is instant, and a publish is a single round trip.
 
 It reads the rules and the tag artwork through the **Xyro API** when one is
 configured (`GET /nametags`, `GET /media/<file>`), which is the file rather than a

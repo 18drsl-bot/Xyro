@@ -106,6 +106,14 @@ const timers = [];
 const setIntervalFn = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
 const setTimeoutFn = (fn) => { return 0; }; // the purge retry loop: not exercised
 
+/* requestAnimationFrame, as a browser has it: callbacks are queued and run on
+   the next frame. Edits go through it (that is the render coalescing), so a
+   test that asserts what an edit drew has to flush a frame first - and the
+   queue being observable is what lets the coalescing itself be asserted. */
+let rafQueue = [];
+global.requestAnimationFrame = fn => { rafQueue.push(fn); return rafQueue.length; };
+const flushFrame = () => { const run = rafQueue; rafQueue = []; run.forEach(f => f()); return run.length; };
+
 const logs = [];
 const consoleStub = { log: (...a) => logs.push(["log", ...a]), warn: (...a) => logs.push(["warn", ...a]), error: (...a) => logs.push(["error", ...a]), info: (...a) => logs.push(["info", ...a]) };
 
@@ -133,11 +141,24 @@ let apiClassicToken = false; // the Worker holds a CLASSIC token (account-wide),
 let apiPuts = 0; // publishes that went through the API (not GitHub)
 const OWNER_KEY = "owner-secret";
 
+/* relative URLs resolve against the page, exactly as a browser resolves them -
+   without this a fetch("api.json") here throws and every same-origin read the
+   editor does would look like a failure rather than a request */
+const PAGE_ORIGIN = "https://vertxxy-1.github.io/Xyro/";
+let stallRules = false; // a read that never answers, to see what the first frame looks like
 const calls = [];
 global.fetch = async (url, init) => {
-	const u = new URL(url);
+	const u = new URL(url, PAGE_ORIGIN);
 	const method = (init && init.method) || "GET";
 	calls.push({ url: u, method, headers: init && init.headers, body: init && init.body });
+	/* the page's own origin: api.json lives here, next to the page. A relative
+	   read must be a real request (and a cache hit in a browser), not a detour
+	   through raw.githubusercontent */
+	if (u.hostname === "vertxxy-1.github.io") {
+		if (u.pathname.endsWith("/api.json")) return new Response(apiJson, { status: 200 });
+		return new Response("missing", { status: 404 });
+	}
+	if (stallRules && u.pathname === "/nametags") return new Promise(() => {});
 	if (u.hostname === "api.github.com") {
 		if (u.pathname.endsWith("/contents/nametags.json")) {
 			if (method === "PUT") {
@@ -211,7 +232,7 @@ const factory = new Function(
 	"  refreshLive: refreshLive, publish: () => $(\"publishBtn\").onclick(), canonJSON: canonJSON, asConfig: asConfig," +
 	"  renderPreview: renderPreview, renderEditorPreview: renderEditorPreview, editorTag: editorTag," +
 	"  mediaURL: mediaURL, get rulesSource(){return rulesSource;}," +
-	"  openEditor: openEditor, closeEditor: closeEditor," +
+	"  openEditor: openEditor, closeEditor: closeEditor, changed: changed," +
 	"  toasts: () => $(\"toasts\").children.map(t => t.textContent)," +
 	"};"
 );
@@ -361,7 +382,17 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	const shaAtReadTime = gh.sha();
 	const githubPutsBefore = gh.puts;
 	apiPub.cfg = { options: { ...apiPub.cfg.options, size: 61 }, tags: apiPub.cfg.tags.map(t => (t.match === "*" ? { ...t, label: "via api" } : t)) };
+	const callsBeforePublish = calls.length;
 	await apiPub.publish();
+	const publishCalls = calls.slice(callsBeforePublish).filter(c => c.url.hostname === "api.example");
+	/* The whole point of the sha the editor now keeps: the write IS the first
+	   request. It used to be a fresh read, the write, then a third read to prove
+	   it - three trips to commit one file, and the read was not what made the
+	   write safe, the sha was. */
+	ok("a publish starts with the write itself - no read-before-write when the sha is known",
+		publishCalls.length >= 1 && publishCalls[0].method === "PUT",
+		"first: " + (publishCalls[0] ? publishCalls[0].method + " " + publishCalls[0].url.pathname : "nothing") +
+		"; whole publish: " + publishCalls.map(c => c.method + " " + c.url.pathname).join(", "));
 	const putCall = calls.find(c => c.url.hostname === "api.example" && c.method === "PUT");
 	ok("Publish went to the API, not GitHub", !!putCall && gh.puts === githubPutsBefore, "api puts " + apiPuts + ", github puts " + (gh.puts - githubPutsBefore));
 	ok("...carrying the owner key", !!putCall && putCall.headers && putCall.headers["x-api-key"] === OWNER_KEY, JSON.stringify(putCall && putCall.headers));
@@ -434,10 +465,78 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("no hardcoded jsDelivr media URL is left in the editor", !/cdn\.jsdelivr\.net\/gh\/vertxxy-1\/Xyro@main\/media/.test(script), "");
 	ok("a publish does not purge a CDN the API clients never read", /if \(!NT_BASE\) \{/.test(script) && /the API serves it, so every client is current/.test(script), "");
 	ok("publishing prefers the API whenever a key is saved", script.includes("if (getOwnerKey() && NT_BASE) {") && /async function publishThroughApi\(\)/.test(script), "");
-	ok("the API publish sends the blob sha back", script.includes('remote.sha ? "?sha=" + encodeURIComponent(remote.sha)'), "");
-	ok("and proves itself with a read-back, like the GitHub path", /const landed = check \? canonJSON\(asConfig\(check\)\)/.test(script), "");
+	ok("the API publish sends the blob sha, so a stale write is refused rather than clobbering",
+		script.includes('shaToSend ? "?sha=" + encodeURIComponent(shaToSend)'), "");
+	ok("with no sha known it still reads the file before writing", /if \(!shaToSend\) \{/.test(script), "");
+	ok("and verifies the write OFF the critical path, not in front of the click",
+		/readRules\(\)\.then\(/.test(script) && /const landed = canonJSON\(asConfig\(r\.config\)\) === canonJSON\(wrote\)/.test(script), "");
 	ok("the owner key has its own card, input and test button", html.includes('id="ownerCard"') && html.includes('id="ownerKey"') && html.includes('id="saveOwner"') && html.includes('id="forgetOwner"'), "");
 	ok("the owner key is a separate credential from the GitHub token", /const LS_OWNER = "/.test(script) && !/localStorage\.setItem\(LS_TOKEN, v\);[\s\S]{0,80}LS_OWNER/.test(script), "");
+
+	/* --- 8. opening fast: the snapshot, the coalesced render ---------------- */
+
+	/* api.json belongs to the page's own origin. Reading it from
+	   raw.githubusercontent meant every visit paid a cross-origin round trip
+	   before it could even ask where the API was. */
+	localStorage.setItem("xyro_token", "github_pat_test");
+	apiJson = '{"api":{"url":"https://api.example","key":"pub-key"}}';
+	calls.length = 0;
+	factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle();
+	ok("api.json is read from the page's own origin",
+		calls.some(c => c.url.hostname === "vertxxy-1.github.io" && c.url.pathname.endsWith("/api.json")),
+		calls.map(c => c.url.hostname + c.url.pathname).join(", "));
+	ok("...not from raw.githubusercontent",
+		!calls.some(c => c.url.hostname === "raw.githubusercontent.com" && c.url.pathname.endsWith("/api.json")), "");
+
+	/* a page the Worker serves (/editor) has the API location injected, so it
+	   needs no api.json lookup at all - and the injected value must win over
+	   whatever a stale api.json in the repo happens to say */
+	apiJson = '{"api":{"url":"https://wrong.example","key":"stale"}}';
+	calls.length = 0;
+	const injected = factory({ addEventListener() {}, __XYRO_API: { url: "https://api.example", key: "inj-key" } }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle();
+	ok("an injected API location needs no api.json lookup",
+		!calls.some(c => c.url.pathname.endsWith("/api.json")), calls.map(c => c.url.pathname).join(", "));
+	ok("...and beats a stale copy in the repo",
+		!calls.some(c => c.url.hostname === "wrong.example") && calls.some(c => c.url.hostname === "api.example" && c.url.pathname === "/nametags"),
+		calls.map(c => c.url.hostname + c.url.pathname).join(", "));
+	ok("...with the artwork following it", /^https:\/\/api\.example\/media\//.test(injected.mediaURL("seal_founder.png")), injected.mediaURL("seal_founder.png"));
+	apiJson = '{"api":{"url":"https://api.example","key":"pub-key"}}';
+
+	/* an open paints the last copy this browser saw before the network answers.
+	   `live` stays null until the real read lands - that is what keeps the dirty
+	   chip and the unsaved-changes guard honest about what is published. */
+	localStorage.setItem("xyro_live_v1", JSON.stringify({ options: { size: 88 }, tags: [{ match: "snap", label: "SNAPSHOT" }] }));
+	stallRules = true;
+	const instant = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	ok("a reopened editor paints the last copy before the network answers",
+		instant.cfg.tags.length === 1 && instant.cfg.tags[0].label === "SNAPSHOT", JSON.stringify(instant.cfg.tags));
+	ok("...drawn from the snapshot, not mistaken for published rules", instant.live === null, JSON.stringify(instant.live));
+	ok("...and the status says which it is", /showing your last copy/.test(el("status").textContent), el("status").textContent);
+	ok("...so the rule list is on screen on the first frame", el("ruleList").children.length > 0, String(el("ruleList").children.length));
+	stallRules = false;
+
+	/* the other half: a read that DOES land replaces the snapshot, so the next
+	   open paints something current */
+	await settle(20);
+	const live2 = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle(20);
+	ok("a completed read replaces the snapshot for the next open",
+		(JSON.parse(localStorage.getItem("xyro_live_v1") || "{}").tags || []).length === 2,
+		localStorage.getItem("xyro_live_v1"));
+	ok("...and the editor shows the published rules, not the snapshot", live2.live && live2.live.tags.length === 2, JSON.stringify(live2.live && live2.live.tags));
+
+	/* a burst of edits must be one frame of rendering, not one per keystroke:
+	   every edit used to rebuild the whole rule list AND the online user list */
+	rafQueue.length = 0;
+	live2.changed("keystroke 1");
+	live2.changed("keystroke 2");
+	live2.changed("keystroke 3");
+	ok("a burst of edits is coalesced into ONE frame of work", rafQueue.length === 1, String(rafQueue.length));
+	flushFrame();
+	ok("...which then draws, and leaves nothing queued", rafQueue.length === 0, String(rafQueue.length));
+	ok("...having drawn the edited rules", el("ruleList").children.length > 0, String(el("ruleList").children.length));
 
 	console.log("\n" + (failures.length ? failures.length + " FAILED" : pass + " checks passed") + (failures.length ? " (" + pass + " passed)" : ""));
 	process.exit(failures.length ? 1 : 0);

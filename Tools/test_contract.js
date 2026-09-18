@@ -216,7 +216,7 @@ ok("and waits for api.json before the first read, so boot is not a GitHub read",
 ok("the API returns the blob sha as x-xyro-sha", worker.includes('"x-xyro-sha": file.sha'), "");
 ok("...and exposes it to the browser", worker.includes('"access-control-expose-headers": "x-xyro-sha'), "");
 ok("the editor reads the same header name", html.includes('res.headers.get("x-xyro-sha")'), "");
-ok("the editor sends it back as ?sha=", html.includes('"?sha=" + encodeURIComponent(remote.sha)'), "");
+ok("the editor sends it back as ?sha=", html.includes('"?sha=" + encodeURIComponent(shaToSend)'), "");
 ok("the Worker honours that sha (GitHub 409s a stale write)", worker.includes('url.searchParams.get("sha")') && /put\.status === 409 \? 409 : 502/.test(worker), "");
 ok("the editor asks /nametags/check before trusting a key", html.includes('"/nametags/check"') && worker.includes('path === "/nametags/check"'), "");
 ok("the Worker's check route changes nothing", /async function checkPublishReady\(env\)/.test(worker) && !/fb\(env/.test(block(worker, "async function checkPublishReady", "\n}\n\n/** PUT /nametags")), "");

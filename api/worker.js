@@ -615,7 +615,7 @@ ${row("Reads", env.XYRO_KEY ? "key required" : "open")}
 ${row("Nametags", `served here \u00b7 <a href="/nametags">/nametags</a> + <code>/media/*</code>`)}
 ${row("Publishing tags", env.GH_TOKEN ? `${dot(true)}through this API ${env.XYRO_PUBLISH_KEY ? "(publish-only key set)" : "(owner key)"}` : `${dot(false)}unavailable - set GH_TOKEN`)}
 <footer>
-Machine-readable: <a href="/health">/health</a> \u00b7 script: <code>/script</code> \u00b7 loader to hand out: <code>/loader</code> \u00b7 tag rules: <a href="/nametags">/nametags</a> \u00b7 this page refreshes every 30s
+Machine-readable: <a href="/health">/health</a> \u00b7 script: <code>/script</code> \u00b7 loader to hand out: <code>/loader</code> \u00b7 tag rules: <a href="/nametags">/nametags</a> \u00b7 <a href="/editor">tag editor</a> \u00b7 this page refreshes every 30s
 </footer>
 </div></body></html>`;
 
@@ -1029,6 +1029,7 @@ async function health(env, url) {
 		nametags: {
 			rules: "GET /nametags (aliases /nametags.json, /config)",
 			media: "GET /media/<file>",
+			editor: "GET /editor (self-configuring; /api.json points at it)",
 			read_source: env.GH_TOKEN ? "github api (never cached)" : "raw, cache-busted",
 			publish: env.GH_TOKEN
 				? (env.XYRO_PUBLISH_KEY ? "PUT /nametags (owner key or publish-only key)" : "PUT /nametags (owner key)")
@@ -1078,6 +1079,24 @@ async function gateRefusal(env) {
  *  local `wrangler dev` both work untouched), and the key becomes whatever this
  *  Worker is currently using - which is what makes the hand-out line short and
  *  a key rotation unable to break a loader anyone already has. */
+/** The tag editor, served from this origin.
+ *
+ *  Same page GitHub Pages publishes, with three differences that are all about
+ *  latency rather than looks:
+ *    - 60s cache instead of Pages' ~ten minutes, so a new build is one refresh
+ *      away instead of a Ctrl+Shift+R and a wait;
+ *    - same origin as the API, so a publish is not a cross-origin PUT with an
+ *      OPTIONS preflight in front of it;
+ *    - the API location is injected into the page, so boot costs one request
+ *      for the rules instead of a request for api.json first.
+ */
+function injectEditorConfig(src, env, origin) {
+	const cfg = JSON.stringify({ url: origin, key: env.XYRO_KEY || "" });
+	const tag = '<script>window.__XYRO_API=' + cfg + ';</script>';
+	if (src.indexOf("</head>") >= 0) return src.replace("</head>", tag + "\n</head>");
+	return tag + "\n" + src;
+}
+
 function injectLoaderConfig(src, env, origin) {
 	const key = env.XYRO_KEY || "";
 	return src
@@ -1121,6 +1140,21 @@ async function handle(req, env, ctx) {
 	/* a page for humans at / and /status, JSON at /health for everything else */
 	if (path === "/" || path === "/status") return statusPage(env);
 	if (path === "/health") return health(env, url);
+
+	/* the tag editor itself, at the same origin as the API it talks to */
+	if (path === "/editor" && req.method === "GET") {
+		return cached(env, ctx, url, 60, "text/html; charset=utf-8", async () =>
+			injectEditorConfig(await repoFile(env, "index.html", url.searchParams.has("fresh")), env, url.origin)
+		);
+	}
+	/* What the editor reads to find the API. On GitHub Pages this is a file in
+	   the repo; here it is generated, so a page served from this origin points
+	   at itself with no cross-origin detour and nothing to keep in step. */
+	if (path === "/api.json" && req.method === "GET") {
+		return json(env, { api: { url: url.origin, key: env.XYRO_KEY || "" } }, 200, {
+			"cache-control": "public, max-age=60",
+		});
+	}
 
 	if (path === "/version") {
 		return cached(env, ctx, url, 60, "text/plain; charset=utf-8", () => repoFile(env, "version.txt", url.searchParams.has("fresh")));

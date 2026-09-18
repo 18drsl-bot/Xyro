@@ -397,6 +397,17 @@ So the Worker hosts all of it now, on your own domain:
 | the rules | `GET /nametags` | 30s edge cache, `?fresh=1` for a guaranteed read |
 | the seals and badge | `GET /media/seal_founder.png`, `/media/verified_seal_blue.png` | 300s (the files are immutable once named), `?fresh=1` to override |
 | publishing | `PUT /nametags` | commits to `nametags.json` and drops the cache immediately |
+| **the tag editor** | `GET /editor` | 60s, `?fresh=1` to override; `/api.json` points a page here at itself |
+
+The editor has two homes. GitHub Pages still serves it at
+`https://vertxxy-1.github.io/Xyro/`, and `/editor` here serves the same page from
+the API's own origin. Prefer `/editor`: three latency costs disappear at once.
+Pages caches its copy for about ten minutes, so a new build needs a hard refresh
+- this route is cached for 60 seconds. A publish from here is same-origin, so
+there is no `OPTIONS` preflight in front of the `PUT`. And the page arrives with
+its API location already injected, so boot does not spend a request on
+`/api.json` before it can ask for the rules. Publishing behaves identically from
+either copy: same key, same file, same sha guard.
 
 The script and the editor both use it: with `api.json` present, the game reads
 the rules and every piece of tag artwork from this one origin, and the editor

@@ -58,6 +58,8 @@ const FAKE_SCRIPT = "-- xyro\n" + "H.Nametags = {}\nRenderStepped\n" + "x".repea
 let scriptTruncated = false;
 // the loader template, with the two constants /loader rewrites
 const REPO_FILES_BASE = {
+	// the editor page: the Worker serves it with its API location injected
+	"/vertxxy-1/Xyro/main/index.html": "<!doctype html>\n<html><head><title>Xyro Tag Editor</title></head><body><p>editor</p></body></html>\n",
 	"/vertxxy-1/Xyro/main/custom-loader.lua": '-- Xyro loader\nlocal API = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main"\nlocal KEY = "stale-in-repo"\nprint("body")\n',
 	"/vertxxy-1/Xyro/main/loadstring.lua": '-- the other loader\nlocal API = "whatever"\nlocal KEY = "whatever"\n',
 	"/vertxxy-1/Xyro/main/version.txt": "0.8.11\n",
@@ -443,6 +445,29 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("a missing media file is a 404, not a 502", res.status === 404, "got " + res.status);
 	res = await call("/media/%2e%2e%2fworker.js");
 	ok("a media name that is not one plain segment never reaches a repo path", res.status === 404, "got " + res.status);
+
+	/* --- the editor, served from this origin ----------------------------- */
+	/* Same page as GitHub Pages, but at the API's origin: that is what removes
+	   the cross-origin preflight from a publish and the ~10-minute page cache
+	   that made a new build a Ctrl+Shift+R and a wait. */
+	res = await call("/editor", { env: { XYRO_KEY: "client-key" } });
+	let editorHTML = await res.text();
+	ok("GET /editor serves the tag editor as HTML", res.status === 200 && /text\/html/.test(res.headers.get("content-type") || "") && /<title>Xyro Tag Editor<\/title>/.test(editorHTML), res.status + " " + res.headers.get("content-type"));
+	ok("...cached for a minute, not GitHub Pages' ten", /max-age=60/.test(res.headers.get("cache-control") || ""), res.headers.get("cache-control"));
+	ok("...with its own API location injected, so boot needs no api.json lookup",
+		/window\.__XYRO_API=\{"url":"https:\/\/api\.test","key":"client-key"\}/.test(editorHTML),
+		(editorHTML.match(/window\.__XYRO_API=[^<]*/) || ["none"])[0]);
+	ok("...injected inside <head>, before anything renders", editorHTML.indexOf("__XYRO_API") < editorHTML.indexOf("</head>"), "");
+	res = await call("/editor?fresh=1", { env: { XYRO_KEY: "client-key" } });
+	ok("?fresh=1 on the editor is never cached", /no-store/.test(res.headers.get("cache-control") || ""), res.headers.get("cache-control"));
+
+	res = await call("/api.json", { env: { XYRO_KEY: "client-key" } });
+	const apiJson = await body(res);
+	ok("GET /api.json points a page on this origin at this origin",
+		res.status === 200 && apiJson && apiJson.api && apiJson.api.url === "https://api.test" && apiJson.api.key === "client-key",
+		JSON.stringify(apiJson));
+	ok("...and is not key-gated, because the page that reads it has no key yet",
+		!(/forbidden/.test(JSON.stringify(apiJson))), JSON.stringify(apiJson));
 
 	/* A cache entry is whatever was produced at the time, so one bad answer - or
 	   one bug in decoding it - gets replayed to every client for the whole TTL

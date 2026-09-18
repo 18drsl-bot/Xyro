@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r8</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r9</span>
 		<span class="chip" id="tokenChip" title="token status">no token</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules now (through the API when one is configured, otherwise straight from GitHub)">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -640,6 +640,9 @@ const LS_TOKEN = "xyro_token";
    is worth treating as a password - see the card that sets it. */
 const LS_OWNER = "xyro_owner_key";
 const LS_DRAFT = "xyro_draft_v2";
+/* the last rules this browser successfully read: painted immediately on open so
+   the page is never blank while the network answers */
+const LS_LIVE = "xyro_live_v1";
 const RAW = "https://raw.githubusercontent.com/" + REPO + "/main/" + PATH;
 /* live players now come from Firebase (here/<username> = unix seconds), the
    ntfy presence topic is only a fallback - mirrors NT_BEAT_WINDOW in xyro.lua */
@@ -672,13 +675,38 @@ function applyMediaHosts() {
 }
 
 /* the api.json lookup, exposed as a promise: load() runs at boot and must not
-   read from GitHub merely because it happens to run first */
+   read from GitHub merely because it happens to run first.
+
+   Three sources, cheapest first:
+     1. window.__XYRO_API - injected by the Worker when this page IS /editor, so
+        an editor served from the API's own origin needs no lookup at all;
+     2. api.json next to the page - same-origin, so on GitHub Pages it is a 30ms
+        local read rather than a cross-origin round trip to raw.githubusercontent;
+     3. the raw file, which is what a copy opened from a disk or a gist uses.
+   Only one of them runs, and the rules fetch starts as soon as this resolves. */
+async function resolveApi() {
+	if (window.__XYRO_API && typeof window.__XYRO_API.url === "string" && window.__XYRO_API.url.trim()) {
+		return window.__XYRO_API;
+	}
+	try {
+		/* relative, no cache-buster: this is the page's own origin, and a cache
+		   hit here is the point - api.json changes about never */
+		const res = await fetch("api.json");
+		if (res.ok) {
+			const parsed = await res.json();
+			const api = parsed && typeof parsed === "object" ? (parsed.api || parsed) : null;
+			if (api && typeof api.url === "string" && api.url.trim()) return api;
+		}
+	} catch (_) { /* no api.json beside the page - try the repo */ }
+	const res = await fetch("https://raw.githubusercontent.com/" + REPO + "/main/api.json?t=" + Date.now(), { cache: "no-store" });
+	if (!res.ok) return null;
+	const parsed = await res.json();
+	return parsed && typeof parsed === "object" ? (parsed.api || parsed) : null;
+}
+
 const apiReady = (async function followApi() {
 	try {
-		const res = await fetch("https://raw.githubusercontent.com/" + REPO + "/main/api.json?t=" + Date.now(), { cache: "no-store" });
-		if (!res.ok) return;
-		const parsed = await res.json();
-		const api = parsed && typeof parsed === "object" ? (parsed.api || parsed) : null;
+		const api = await resolveApi();
 		if (!api || typeof api.url !== "string" || !api.url.trim()) return;
 		const base = api.url.trim().replace(/\/+$/, "");
 		NT_BASE = base;
@@ -957,9 +985,33 @@ function saveDraft() {
 	}
 }
 
+/* Renders are coalesced to one per animation frame.
+ *
+ *  A single edit fires several handlers at once - a colour input and its hex
+ *  box, the contenteditable preview label, the options row - and each one used
+ *  to rebuild the ENTIRE rule list and the entire online-user list
+ *  synchronously, on every keystroke. Typing a long name meant hundreds of full
+ *  rebuilds, which is what "laggy" was. Scheduled instead, a burst becomes one
+ *  frame of work, and the work itself is unchanged.
+ *
+ *  Only editing goes through here. Anything whose result must be on screen
+ *  before the next statement runs (loading, publishing, opening the editor)
+ *  still calls renderAll() directly. */
+let renderQueued = false;
+function queueRender() {
+	if (renderQueued) return;
+	renderQueued = true;
+	const run = () => { renderQueued = false; renderAll(); };
+	if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+	else setTimeout(run, 16);
+}
+
 function changed(why) {
+	/* the first read is still in flight and the snapshot is on screen: an edit
+	   made now must survive that read, so load() is told not to clobber it */
+	if (!live) bootEdited = true;
 	saveDraft();
-	renderAll();
+	queueRender();
 }
 
 /* ---------- rule editor ---------- */
@@ -1696,7 +1748,11 @@ async function hostedRules(opts) {
 	const config = await res.json();
 	if (!config || typeof config.options !== "object" || !Array.isArray(config.tags)) throw new Error("api returned no rules");
 	rulesSource = "the Xyro API";
-	return { config, sha: null };
+	/* The Worker hands the blob sha back on a fresh read. Keeping it is what lets
+	   a publish skip its own read-before-write: the sha goes straight into the
+	   PUT, and GitHub refuses a stale one rather than overwriting a change that
+	   landed in between. */
+	return { config, sha: res.headers.get("x-xyro-sha") || null };
 }
 
 async function fetchConfig(opts) {
@@ -1734,15 +1790,56 @@ async function fetchConfig(opts) {
 	return { config: raw.config, sha: api ? api.sha : null };
 }
 
-async function load() {		status("loading the published tag rules...", "info");
+/* ---------- the snapshot that makes an open instant ---------- */
+/* Drawn before the network answers, so the editor is usable on the first frame
+   instead of after a round trip. It is a SNAPSHOT, not the published state:
+   `live` stays null until the real read lands, which is what keeps the dirty
+   chip and the unsaved-changes guard honest - nothing drawn here can be
+   mistaken for what is actually published. */
+let bootEdited = false;
+let paintedSnapshot = false;
+function bootFromSnapshot() {
+	try {
+		const raw = localStorage.getItem(LS_LIVE);
+		if (!raw) return false;
+		const snap = JSON.parse(raw);
+		if (!snap || !Array.isArray(snap.tags) || !snap.tags.length) return false;
+		cfg = { options: snap.options || {}, tags: snap.tags };
+		renderOptions();
+		renderAll();
+		paintedSnapshot = true;
+		status("showing your last copy - checking for changes...", "info");
+		return true;
+	} catch (_) {
+		return false;
+	}
+}
+function saveSnapshot(config) {
+	try { localStorage.setItem(LS_LIVE, JSON.stringify(config)); } catch (_) { /* private mode */ }
+}
+
+async function load() {
+	/* when a snapshot is already on screen the page is not "loading" anything -
+	   it is checking whether what you can see is still current */
+	status(paintedSnapshot ? "showing your last copy - checking for changes..." : "loading the published tag rules...", "info");
 	try {
 		/* checkApi: an opened editor must show the file, not a CDN's idea of it */
 		const json = await fetchConfig({ checkApi: true, report: true });
 		live = { options: json.config.options || {}, tags: Array.isArray(json.config.tags) ? json.config.tags : [] };
 		liveSha = json.sha;
+		saveSnapshot(live);
 		/* the PUBLISHED rules always win on open - a stale draft must never
 		   masquerade as the live config. A differing draft is offered as an
-		   explicit one-click restore instead. */
+		   explicit one-click restore instead. EXCEPT for a field edited while
+		   this first read was in flight: the snapshot was on screen by then, so
+		   replacing cfg here would delete a keystroke the user just made. */
+		if (bootEdited) {
+			$("draftBtn").classList.add("hidden");
+			renderOptions();
+			renderAll();
+			status(live.tags.length + " rules loaded from " + rulesSource + " - your edit was kept, publish when ready", "info");
+			return;
+		}
 		cfg = deepCopy(live);
 		/* the preview @line: nothing on the network can resolve the logged-in
 		   Roblox name from this origin, so use the first real rule - in practice
@@ -1800,6 +1897,7 @@ async function refreshLive(sayIt, opts) {
 		}
 		const hadEdits = !sameJSON(cfg, live);
 		live = fresh;
+		saveSnapshot(live);
 		if (json.sha) liveSha = json.sha;
 		if (!hadEdits && editing < 0) {
 			cfg = deepCopy(live);
@@ -1873,44 +1971,70 @@ async function publishThroughApi() {
 		return { config: await res.json(), sha: res.headers.get("x-xyro-sha") || "" };
 	};
 	try {
-		/* One fresh read gives both the file and the blob sha the write needs.
-		   ?fresh=1 walks past the Worker's 30s edge cache, so this really is
-		   what is published right now. */
-		let remote;
-		try {
-			remote = await readRules();
-		} catch (e) {
-			status("the API could not read the rules (" + (e && e.message ? e.message : e) + ")", "err");
-			return !getToken();
-		}
-		if (live && !sameJSON(remote.config, live)) {
-			cfg = mergeRemote(live, cfg, remote.config);
-			renderOptions();
-			renderAll();
-			toast("Someone published while you were editing - your publish was merged with the latest rules", "info", 9);
-		}
-		if (sameJSON(cfg, remote.config)) {
-			live = deepCopy(cfg);
-			saveDraft();
-			$("draftBtn").classList.add("hidden");
-			status("nothing to publish - the file already has everything", "ok");
-			return true;
+		/* ONE round trip when this tab already knows the file's sha, which is the
+		   normal case: publishing used to be a fresh read, then the write, then a
+		   third read to prove it landed - three trips to commit one file, each
+		   one waiting on GitHub. The read-before-write is not what protects
+		   anything: the sha the write carries is. GitHub refuses a write whose
+		   sha is stale, so the worst case is a 409 and one merged retry, and
+		   that path below is unchanged. The read only happens when we have no
+		   sha to send - a first open, or a page whose read carried none. */
+		let remote = null;
+		let shaToSend = liveSha || "";
+		if (!shaToSend) {
+			try {
+				remote = await readRules();
+				shaToSend = remote.sha;
+			} catch (e) {
+				status("the API could not read the rules (" + (e && e.message ? e.message : e) + ")", "err");
+				return !getToken();
+			}
+			if (live && !sameJSON(remote.config, live)) {
+				cfg = mergeRemote(live, cfg, remote.config);
+				renderOptions();
+				renderAll();
+				toast("Someone published while you were editing - your publish was merged with the latest rules", "info", 9);
+			}
+			if (sameJSON(cfg, remote.config)) {
+				live = deepCopy(cfg);
+				saveDraft();
+				$("draftBtn").classList.add("hidden");
+				status("nothing to publish - the file already has everything", "ok");
+				return true;
+			}
 		}
 		const beforePublish = deepCopy(live || { options: {}, tags: [] });
-		const wanted = { options: cfg.options, tags: cfg.tags };
+		/* built per attempt: a merge on the retry path changes cfg underneath */
+		const putBody = () => JSON.stringify({ options: cfg.options, tags: cfg.tags }, null, "\t") + "\n";
+		const putURL = () => stamp(NT_BASE + "/nametags" + (shaToSend ? "?sha=" + encodeURIComponent(shaToSend) : ""));
 		if (!confirm("Publish through the API?\n\n" + publishSummary() +
 			"\n\nThe Worker commits it and drops its cache, so every client gets it within seconds.")) {
 			status("publish cancelled", "info");
 			return true;
 		}
-		/* ?sha= is what makes this safe against a concurrent publish: GitHub
-		   refuses a write whose sha is stale instead of overwriting it */
-		const putURL = stamp(NT_BASE + "/nametags" + (remote.sha ? "?sha=" + encodeURIComponent(remote.sha) : ""));
-		const put = await fetch(putURL, {
+		let put = await fetch(putURL(), {
 			method: "PUT",
 			headers: { "x-api-key": ownerKey, "content-type": "application/json" },
-			body: JSON.stringify(wanted, null, "\t") + "\n",
+			body: putBody(),
 		});
+		if (put.status === 409 && !remote) {
+			/* the file moved on under us. Read it, merge our edit into theirs and
+			   publish ONCE more - one retry, not a loop, so two people publishing
+			   at the same second cannot ping-pong the file between them. */
+			const latest = await readRules().catch(() => null);
+			if (latest) {
+				cfg = mergeRemote(live || { options: {}, tags: [] }, cfg, latest.config);
+				shaToSend = latest.sha;
+				renderOptions();
+				renderAll();
+				toast("Someone published while you were editing - merged, publishing again", "info", 9);
+				put = await fetch(putURL(), {
+					method: "PUT",
+					headers: { "x-api-key": ownerKey, "content-type": "application/json" },
+					body: putBody(),
+				});
+			}
+		}
 		if (put.status === 503) {
 			status("the API cannot publish yet - set GH_TOKEN on the Worker (api/README.md section 7)", "err");
 			return !getToken();
@@ -1922,7 +2046,7 @@ async function publishThroughApi() {
 		}
 		if (put.status === 409) {
 			status("someone else published while you were editing", "err");
-			toast("The file moved on before your publish landed, so nothing was overwritten. Refreshing to merge.", "err", 12);
+			toast("The file moved on before your publish landed, so nothing was overwritten. Refreshing to merge - publish again after that.", "err", 12);
 			await refreshLive(false, { checkApi: true });
 			return true;
 		}
@@ -1936,21 +2060,31 @@ async function publishThroughApi() {
 		const done = await put.json().catch(() => ({}));
 		if (done && done.sha) liveSha = done.sha;
 		live = deepCopy(cfg);
-		publishGuard = { replaced: beforePublish, wrote: deepCopy(wanted), until: Date.now() + CDN_WINDOW_MS };
+		const wrote = deepCopy(live);
+		saveSnapshot(live);
+		publishGuard = { replaced: beforePublish, wrote: deepCopy(wrote), until: Date.now() + CDN_WINDOW_MS };
 		saveDraft();
 		$("draftBtn").classList.add("hidden");
 		renderAll();
-		/* prove it, exactly like the GitHub path: the Worker deleted its cached
-		   copy during the write, so this read is the file itself */
-		const check = await readRules().then(r => r.config).catch(() => null);
-		const landed = check ? canonJSON(asConfig(check)) === canonJSON(wanted) : null;
-		if (landed === false) {
-			status("published, but the file reads back differently - open nametags.json and check", "err");
-			toast("The API accepted the publish but the file does not match. Reload (Ctrl+Shift+R) before assuming it landed.", "err", 16);
-		} else {
-			status("published through the API" + (liveSha ? " (sha " + String(liveSha).slice(0, 7) + ")" : "") + " - every client is current within ~30s", "ok");
-			toast("Published - the API serves it now", "ok", 5);
-		}
+		/* Report success the moment the write is accepted, then prove it OFF the
+		   critical path. The write already returned the new sha and the Worker
+		   dropped its cached copy as part of it, so the read that follows cannot
+		   disagree for long - and blocking the click on it cost a whole extra
+		   round trip on every single publish. */
+		status("published through the API" + (liveSha ? " (sha " + String(liveSha).slice(0, 7) + ")" : "") + " - verifying...", "ok");
+		toast("Published - the API serves it now", "ok", 5);
+		readRules().then(r => {
+			const landed = canonJSON(asConfig(r.config)) === canonJSON(wrote);
+			if (landed) {
+				liveSha = r.sha || liveSha;
+				status("published through the API" + (liveSha ? " (sha " + String(liveSha).slice(0, 7) + ")" : "") + " - every client is current within ~30s", "ok");
+			} else {
+				status("published, but the file reads back differently - open nametags.json and check", "err");
+				toast("The API accepted the publish but the file does not match. Reload (Ctrl+Shift+R) before assuming it landed.", "err", 16);
+			}
+		}).catch(() => {
+			status("published (the verification read did not answer - the write itself was accepted)", "info");
+		});
 		return true;
 	} catch (e) {
 		status("network error while publishing through the API: " + e, "err");
@@ -2178,6 +2312,9 @@ window.addEventListener("beforeunload", e => {
 
 /* ---------- boot ---------- */
 refreshTokenChip();
+/* paint the last copy this browser saw before the network answers, so opening
+   the editor is instant instead of a blank page and a status line */
+bootFromSnapshot();
 load();
 </script>
 </body>
