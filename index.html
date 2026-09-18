@@ -608,7 +608,9 @@ const LS_DRAFT = "xyro_draft_v2";
 const RAW = "https://raw.githubusercontent.com/" + REPO + "/main/" + PATH;
 /* live players now come from Firebase (here/<username> = unix seconds), the
    ntfy presence topic is only a fallback - mirrors NT_BEAT_WINDOW in xyro.lua */
-const FB_HERE = "https://xyro-fcaf8-default-rtdb.firebaseio.com/here.json";
+const FB_BASE = "https://xyro-fcaf8-default-rtdb.firebaseio.com";
+const FB_HERE = FB_BASE + "/here.json";
+const FB_STAFF = FB_BASE + "/staff.json";
 const PRESENCE_WINDOW = 75;
 
 const $ = id => document.getElementById(id);
@@ -659,22 +661,31 @@ function badgeHTML(t, big, mini) {
 /* your Roblox username, so the preview pill shows a real @line. Resolved
    from the logged-in roblox.com session (works because this editor is
    used in a browser already signed into Roblox); cached in localStorage */
+/* this used to call users.roblox.com/…/authenticated, which can NEVER work from
+   this page: Roblox sends no CORS headers to non-roblox.com origins, so the
+   request always failed (and always logged a red CORS error in the console).
+   The remembered name is the reliable source, and load() falls back to your own
+   rule when nothing is remembered. The @line is click-to-edit either way. */
 let myName = localStorage.getItem("xyro_myName") || "user";
-(async function resolveMe() {
-	try {
-		const res = await fetch("https://users.roblox.com/v1/users/authenticated", { credentials: "include" });
-		if (!res.ok) return;
-		const me = await res.json();
-		if (me && me.name) {
-			myName = me.name;
-			localStorage.setItem("xyro_myName", myName);
-			const pv = $("pvUser");
-			const ed = $("edUser");
-			if (pv && document.activeElement !== pv) pv.textContent = "@" + myName;
-			if (ed) ed.textContent = "@" + myName;
-		}
-	} catch (_) { /* offline / not logged in - placeholder stays */ }
-})();
+
+function setMyName(name) {
+	if (!name) return;
+	myName = name;
+	try { localStorage.setItem("xyro_myName", name); } catch (_) { /* private mode */ }
+	const pv = $("pvUser");
+	const ed = $("edUser");
+	if (pv && document.activeElement !== pv) pv.textContent = "@" + name;
+	if (ed) ed.textContent = "@" + name;
+}
+
+/* rule override > global option. The rule editor's "default" is the EMPTY
+   STRING (not undefined), which is why an unset rule used to preview as "box
+   off" even with the global @username box switched on. */
+function userBoxOn(t) {
+	if (t.userBox === true || t.userBox === "true") return true;
+	if (t.userBox === false || t.userBox === "false") return false;
+	return $("optUBox").checked;
+}
 
 function renderPreview() {
 	const t = (editing >= 0 ? editorTag() : null) || cfg.tags[0] || { label: "x9k_alt", color: "#ffd700" };
@@ -682,7 +693,7 @@ function renderPreview() {
 	badge.style.setProperty("--c", hex6(t.color) || "#6c80ff");
 	/* @username box mirrors the global options (plus rule override);
 	   with the box off the @line still shows, just unboxed like in game */
-	const ubOn = t.userBox === "true" || (t.userBox === undefined && $("optUBox").checked);
+	const ubOn = userBoxOn(t);
 	const ub = $("pvUbox");
 	ub.style.display = "";
 	ub.classList.toggle("plain", !ubOn);
@@ -724,10 +735,7 @@ function renderPreview() {
 	lbl.addEventListener("blur", () => renderPreview());
 	usr.addEventListener("blur", () => {
 		const v = usr.textContent.replace(/@/g, "").trim() || myName;
-		myName = v;
-		localStorage.setItem("xyro_myName", v);
-		usr.textContent = "@" + v;
-		$("edUser").textContent = "@" + v;
+		setMyName(v);
 	});
 })();
 
@@ -746,7 +754,7 @@ function renderRules() {
 			(t.image ? '<span class="mark">&#127917; icon</span>' : "") +
 			(t.bgImage ? '<span class="mark">&#127917; bg</span>' : "") +
 			(t.bg ? '<span class="mark">bg</span>' : "") +
-			(t.userBox === true ? '<span class="mark">@box</span>' : t.userBox === false ? '<span class="mark">no @box</span>' : "") +
+			(t.userBox === true || t.userBox === "true" ? '<span class="mark">@box</span>' : t.userBox === false || t.userBox === "false" ? '<span class="mark">no @box</span>' : "") +
 			(t.size ? '<span class="mark">s' + esc(t.size) + "</span>" : "");
 		row.innerHTML =
 			badgeHTML(t, false, true) +
@@ -821,8 +829,29 @@ function renderDirty() {
 
 function renderAll() { renderPreview(); renderRules(); renderUsers(); renderDirty(); }
 
+/* a draft is best-effort. This used to be a bare setItem: one rule carrying an
+   embedded base64 image (or a full localStorage) made it THROW, which aborted
+   the handler before renderAll - the editor just stopped reacting, which reads
+   as "the site is broken". A storage failure must never stop the UI updating. */
+let storageWarned = false;
+function saveDraft() {
+	try {
+		const body = JSON.stringify(cfg);
+		localStorage.setItem(LS_DRAFT, body);
+		return true;
+	} catch (e) {
+		if (!storageWarned) {
+			storageWarned = true;
+			toast(e && e.name === "QuotaExceededError"
+				? "Local draft is too big to save (storage full) - your edits are still here, but they will not survive a reload. Publish soon."
+				: "Could not save the local draft: " + e, "err", 12);
+		}
+		return false;
+	}
+}
+
 function changed(why) {
-	localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+	saveDraft();
 	renderAll();
 }
 
@@ -946,7 +975,7 @@ function renderEditorPreview() {
 	const radius = t.shape === "Square" ? "4px" : t.shape === "Rounded" ? "14px" : t.shape === "Circle" ? "999px" : "18px";
 	badge.style.borderRadius = radius;
 	/* @username box on the mini preview: per-rule override or global default */
-	const ubOn = t.userBox === "true" || (t.userBox === undefined && $("optUBox").checked);
+	const ubOn = userBoxOn(t);
 	const ub = $("edUbox");
 	ub.style.display = "";
 	ub.classList.toggle("plain", !ubOn);
@@ -1088,33 +1117,44 @@ function moveRule(i, dir) {
 	});
 });
 
+/* parseFloat(x) || fallback turns a DELIBERATE 0 into the fallback (typing 0
+   for transparency gave you 0.25), so parse, then only fall back on NaN */
+function numOr(raw, fallback) {
+	const n = parseFloat(raw);
+	return isNaN(n) ? fallback : n;
+}
+function intOr(raw, fallback) {
+	const n = parseInt(raw, 10);
+	return isNaN(n) ? fallback : n;
+}
+
 function readOptions() {
 	return {
-		size: Math.min(48, Math.max(8, parseInt($("optSize").value) || 15)),
-		userSize: Math.min(24, Math.max(8, parseInt($("optUserSize").value) || 10)),
-		height: Math.min(96, Math.max(28, parseInt($("optHeight").value) || 48)),
+		size: Math.min(48, Math.max(8, intOr($("optSize").value, 15))),
+		userSize: Math.min(24, Math.max(8, intOr($("optUserSize").value, 10))),
+		height: Math.min(96, Math.max(28, intOr($("optHeight").value, 48))),
 		font: $("optFont").value,
-		maxDistance: Math.max(0, parseInt($("optDist").value) || 0),
+		maxDistance: Math.max(0, intOr($("optDist").value, 0)),
 		showDistance: $("optDistOn").checked,
 		showHealth: $("optHp").checked,
 		showBox: $("optBox").checked,
 		onlyScriptUsers: $("optScriptUsers").checked,
 		pillColor: $("optPillColor").value.toUpperCase(),
-		pillTransparency: Math.min(1, Math.max(0, parseFloat($("optPillTrans").value) || 0.12)),
-		imageSize: Math.min(128, Math.max(8, parseInt($("optImgSize").value) || 44)),
+		pillTransparency: Math.min(1, Math.max(0, numOr($("optPillTrans").value, 0.12))),
+		imageSize: Math.min(128, Math.max(8, intOr($("optImgSize").value, 44))),
 		textColor: $("optTextColor").value.toUpperCase(),
 		userColor: $("optUserColor").value.toUpperCase(),
 		userBox: $("optUBox").checked,
 		userBoxColor: $("optUBoxColor").value.toUpperCase(),
-		userBoxTransparency: Math.min(1, Math.max(0, parseFloat($("optUBoxTrans").value) || 0.25)),
-		userBoxRadius: Math.min(24, Math.max(0, parseInt($("optUBoxRadius").value) || 0)),
+		userBoxTransparency: Math.min(1, Math.max(0, numOr($("optUBoxTrans").value, 0.25))),
+		userBoxRadius: Math.min(24, Math.max(0, intOr($("optUBoxRadius").value, 0))),
 		userBoxStroke: $("optUBoxStroke").value.trim().toUpperCase(),
 		clickTeleport: $("optClickTp").checked,
 		seeThroughWalls: $("optWalls").checked,
-		collapseDistance: Math.max(0, parseInt($("optCollapseDist").value) || 0),
-		collapsedIcon: Math.min(128, Math.max(16, parseInt($("optCollapseIcon").value) || 40)),
+		collapseDistance: Math.max(0, intOr($("optCollapseDist").value, 0)),
+		collapsedIcon: Math.min(128, Math.max(16, intOr($("optCollapseIcon").value, 40))),
 		collapseFar: $("optCollapse").checked,
-		refreshSeconds: Math.min(300, Math.max(10, parseInt($("optRefresh").value) || 15)),
+		refreshSeconds: Math.min(300, Math.max(10, intOr($("optRefresh").value, 15))),
 	};
 }
 
@@ -1175,9 +1215,34 @@ function renderUsers() {
 	}
 }
 
+/* blacklisted accounts are refused by the script, so they should not be listed
+   as "script users" here either. Read from the same staff.json the script uses;
+   cached for five minutes, and a failure simply means no filtering. */
+let blacklistNames = new Set();
+let blacklistAt = 0;
+async function refreshBlacklist() {
+	if (blacklistAt && Date.now() - blacklistAt < 300000) return;
+	try {
+		const res = await fetch(FB_STAFF + "?t=" + Date.now(), { cache: "no-store" });
+		if (!res.ok) return;
+		const data = await res.json();
+		const bl = data && (data.blacklist || data.blocked);
+		const set = new Set();
+		const add = v => { const s = String(v == null ? "" : v).trim().toLowerCase(); if (s) set.add(s); };
+		if (Array.isArray(bl)) bl.forEach(add);
+		else if (bl && typeof bl === "object") {
+			Object.keys(bl).forEach(k => add(k));
+			["ids", "usernames"].forEach(k => { if (Array.isArray(bl[k])) bl[k].forEach(add); });
+		}
+		blacklistNames = set;
+		blacklistAt = Date.now();
+	} catch (_) { /* keep whatever we had */ }
+}
+
 async function pollUsers() {
 	try {
 		let sawSource = false;
+		await refreshBlacklist();
 		/* presence comes from Firebase (here/<username> = unix seconds) - the
 		   ntfy topic alone is quota-dead, so reading only that showed an empty
 		   list while players were in fact online. ntfy stays as a fallback so
@@ -1212,6 +1277,7 @@ async function pollUsers() {
 				} catch (_) { /* partial line */ }
 			}
 		}
+		for (const n of blacklistNames) delete seenUsers[n]; // blocked accounts cannot run the script
 		const cutoff = Date.now() - PRESENCE_WINDOW * 1000;
 		for (const n of Object.keys(seenUsers)) if (seenUsers[n] < cutoff) delete seenUsers[n];
 		renderUsers();
@@ -1361,6 +1427,13 @@ async function load() {
 		   masquerade as the live config. A differing draft is offered as an
 		   explicit one-click restore instead. */
 		cfg = deepCopy(live);
+		/* the preview @line: nothing on the network can resolve the logged-in
+		   Roblox name from this origin, so use the first real rule - in practice
+		   that is your own username, and the preview stops saying @user */
+		if (myName === "user") {
+			const own = live.tags.find(t => (t.match || "") && t.match !== "*");
+			if (own) setMyName(own.match);
+		}
 		const draft = localStorage.getItem(LS_DRAFT);
 		if (draft) {
 			try {
@@ -1402,7 +1475,7 @@ async function refreshLive(sayIt) {
 		liveSha = json.sha;
 		if (!hadEdits && editing < 0) {
 			cfg = deepCopy(live);
-			localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+			saveDraft();
 			$("draftBtn").classList.add("hidden");
 			renderOptions();
 			renderAll();
@@ -1500,7 +1573,7 @@ $("publishBtn").onclick = async () => {
 			}
 			if (sameJSON(cfg, remote.config)) {
 				live = deepCopy(cfg);
-				localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+				saveDraft();
 				$("draftBtn").classList.add("hidden");
 				status("nothing to publish - GitHub already has everything", "ok");
 				toast("Nothing to publish - GitHub already has everything", "ok");
@@ -1546,7 +1619,7 @@ $("publishBtn").onclick = async () => {
 		liveSha = done.content && done.content.sha;
 		live = deepCopy(cfg);
 		refreshLive(true); // pick up any publish that raced ours
-		localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+		saveDraft();
 		$("draftBtn").classList.add("hidden");
 		renderAll();			/* kick the game's CDN so the update lands in seconds, not minutes.
 			   jsDelivr rate-throttles purges (~4 min windows): when throttled,
@@ -1584,7 +1657,7 @@ $("revertBtn").onclick = () => {
 	if (!live) { toast("Nothing loaded yet", "err"); return; }
 	if (!sameJSON(cfg, live) && !confirm("Discard your unsaved changes and go back to the last published version?")) return;
 	cfg = deepCopy(live);
-	localStorage.setItem(LS_DRAFT, JSON.stringify(cfg));
+	saveDraft();
 	$("draftBtn").classList.add("hidden");
 	closeEditor();
 	renderOptions();

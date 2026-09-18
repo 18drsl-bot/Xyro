@@ -104,6 +104,46 @@ Your bot can write that file with the same `readConfig`/`writeConfig` helpers
 above (pointed at `firebase.json` instead of `nametags.json`) — a `PUT` to
 `/contents/firebase.json`.
 
+## Blacklist from the bot (optional)
+
+The blacklist lives in the same Firebase `staff` node, and unlike the script
+your bot **can** write it — it runs on your machine with a database secret, so
+the rules below stay closed to the public while the bot keeps full access:
+
+```json
+{
+  "rules": {
+    "staff": {
+      ".read": true,
+      ".write": false,
+      "blacklist": { ".write": "auth != null" }
+    },
+    "cmd":  { ".read": true, ".write": true },
+    "here": { ".read": true, ".write": true }
+  }
+}
+```
+
+```js
+// /block 1234567890 ban evasion       -> add (value = the reason shown on screen)
+// /unblock 1234567890                 -> remove
+const DB = "https://your-db-default-rtdb.firebaseio.com";
+const SECRET = process.env.XYRO_DB_SECRET; // never ship this to clients
+const key = who => `/staff/blacklist/${who}.json?auth=${SECRET}`;
+
+async function blacklist(who, reason) {
+	await fetch(DB + key(who), { method: "PUT", body: JSON.stringify(reason || "") });
+}
+async function unblacklist(who) {
+	await fetch(DB + key(who), { method: "DELETE" });
+}
+```
+
+Players pick the change up on their next launch, or immediately with
+`!staffrefresh`; in game `!blocked` prints the list. A blacklisted account gets
+no UI, tags, presence or command transport, and every other client stops
+drawing their tag — see **FIREBASE.md → 3c. Blacklist**.
+
 ## Verified badge
 
 Just set `"badge": true` on a rule — players get the **real Roblox verified

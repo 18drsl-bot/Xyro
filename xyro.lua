@@ -796,6 +796,12 @@ H.HS = game:GetService("HttpService")
 H.FIREBASE_URL = "" -- e.g. "https://your-db-default-rtdb.firebaseio.com"
 H.FIREBASE_AUTH = "" -- optional: database secret (only if rules require auth)
 H.NT_RANKS = H.NT_RANKS or {} -- nametag rank tiers (filled from staff.json "ranks")
+-- blacklist: <id or username> -> reason. Filled from staff.json's "blacklist"
+-- (see fbApplyStaff). Read-only for clients ON PURPOSE: if clients could write
+-- it, anyone could blacklist a rival. Manage it in the Firebase console (or
+-- from the Discord bot, which holds a server-side token).
+H.BLACKLIST_IDS = H.BLACKLIST_IDS or {}
+H.BLACKLIST_NAMES = H.BLACKLIST_NAMES or {}
 -- ===========================================================
 
 ----------------------------------------------------------------------------
@@ -972,6 +978,53 @@ local function fbApplyStaff(body)
 			end
 		end
 	end
+	-- blacklist: {"8579040069":"ban evasion"} (id or username -> reason),
+	-- or arrays ["8579040069","someone"], or {"ids":[...],"usernames":[...]}.
+	-- Re-read on every fetch, so clearing an entry takes effect on the next
+	-- refresh without a script change.
+	if type(data.blacklist) == "table" then
+		local blockList = data.blacklist
+		local function addMember(raw, reason)
+			local s = tostring(raw or "")
+			if s == "" then
+				return
+			end
+			local why = ""
+			if reason ~= nil and type(reason) ~= "boolean" then
+				why = tostring(reason)
+			end
+			local id = tonumber(s)
+			if id then
+				H.BLACKLIST_IDS[id] = why
+			else
+				H.BLACKLIST_NAMES[s:lower()] = why
+			end
+		end
+		for key, value in pairs(blockList) do
+			if type(value) == "table" then
+				-- {"ids":[...],"usernames":[...]} or a nested map. The KEY type
+				-- decides the shape: a numeric key means the VALUE is the member
+				-- (array), a string key means the KEY is the member and the value
+				-- is its reason. Guessing from the value instead would read the
+				-- reason text as a username.
+				for k2, v2 in pairs(value) do
+					if type(k2) == "number" then
+						addMember(v2, "")
+					elseif type(v2) == "string" or type(v2) == "number" then
+						addMember(k2, v2)
+					else
+						addMember(k2, "")
+					end
+				end
+			elseif type(key) == "number" then
+				addMember(value, "") -- array form
+			elseif value == nil or type(value) == "boolean" then
+				addMember(key, "") -- map form, no reason
+			else
+				addMember(key, value) -- map form with a reason
+			end
+		end
+	end
 	return true
 end
 
@@ -988,8 +1041,129 @@ local function fbFetchStaffOnce()
 		return false
 	end
 	return fbApplyStaff(body)
-end	pcall(fbLoadRepoConfig) -- repo firebase.json -> FIREBASE_URL (no script edits needed)
+end
+
+-- --------------------------------------------------------------- blacklist
+-- staff.json -> "blacklist": {"<id or username>": "<reason>"}
+-- Returns the reason string, or nil when the account is not listed.
+local function fbIsBlacklisted(userId, userName)
+	local id = tonumber(userId)
+	if id and H.BLACKLIST_IDS[id] ~= nil then
+		return H.BLACKLIST_IDS[id]
+	end
+	if type(userName) == "string" then
+		local key = tostring(userName):lower()
+		if H.BLACKLIST_NAMES[key] ~= nil then
+			return H.BLACKLIST_NAMES[key]
+		end
+	end
+	return nil
+end
+H.blacklistReason = fbIsBlacklisted -- reused by nametags, presence and the panel
+
+-- the notice is hand-rolled (this code path runs before the theme/UI helpers
+-- exist), and it stays on screen - there is nothing to click away
+local function fbBlacklistNotice(reason)
+	local host = (gethui and gethui()) or game:GetService("CoreGui")
+	if not host then
+		return
+	end
+	local old = host:FindFirstChild("XyroBlacklisted")
+	if old then
+		old:Destroy()
+	end
+	local sg = Instance.new("ScreenGui")
+	sg.Name = "XyroBlacklisted"
+	sg.IgnoreGuiInset = true
+	sg.ResetOnSpawn = false
+	sg.DisplayOrder = 2147483647
+	sg.Parent = host
+	local card = Instance.new("Frame")
+	card.AnchorPoint = Vector2.new(0.5, 0.5)
+	card.Position = UDim2.fromScale(0.5, 0.5)
+	card.Size = UDim2.fromOffset(370, 140)
+	card.BackgroundColor3 = Color3.fromRGB(15, 15, 19)
+	card.BorderSizePixel = 0
+	card.Parent = sg
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = card
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(230, 62, 62)
+	stroke.Thickness = 1
+	stroke.Transparency = 0.35
+	stroke.Parent = card
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1, -28, 0, 26)
+	title.Position = UDim2.new(0, 14, 0, 14)
+	title.BackgroundTransparency = 1
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 15
+	title.TextColor3 = Color3.fromRGB(240, 240, 245)
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Text = "Xyro - access blocked"
+	title.Parent = card
+	local bodyText = Instance.new("TextLabel")
+	bodyText.Size = UDim2.new(1, -28, 1, -58)
+	bodyText.Position = UDim2.new(0, 14, 0, 46)
+	bodyText.BackgroundTransparency = 1
+	bodyText.Font = Enum.Font.Gotham
+	bodyText.TextSize = 13
+	bodyText.TextWrapped = true
+	bodyText.TextColor3 = Color3.fromRGB(150, 152, 160)
+	bodyText.TextXAlignment = Enum.TextXAlignment.Left
+	bodyText.TextYAlignment = Enum.TextYAlignment.Top
+	bodyText.Text = "This account is on the Xyro blacklist, so the script will not run here."
+		.. ((reason ~= nil and reason ~= "") and ("\nReason: " .. reason) or "")
+		.. "\n\nThink this is a mistake? Open a ticket in the Discord."
+	bodyText.Parent = card
+end
+
+-- destroys everything Xyro put on screen, including the staff panel's own
+-- protected gui (which the main cleanup knows nothing about)
+function H.blacklistShutdown()
+	pcall(function()
+		local host = (gethui and gethui()) or game:GetService("CoreGui")
+		if host then
+			for _, guiName in { "XyroStaffPanelGui", "XyroStaffBlind" } do
+				local found = host:FindFirstChild(guiName)
+				if found then
+					found:Destroy()
+				end
+		end
+	end
+	end)
+	pcall(function()
+		local pg = player:FindFirstChildOfClass("PlayerGui")
+		if pg then
+			for _, guiName in { "ScriptHub", "XyroStaffPanelGui" } do
+				local found = pg:FindFirstChild(guiName)
+				if found then
+					found:Destroy()
+				end
+			end
+		end
+	end)
+end
+
+pcall(fbLoadRepoConfig) -- repo firebase.json -> FIREBASE_URL (no script edits needed)
 pcall(fbFetchStaffOnce) -- boot-time sync fetch; failing just means offline defaults
+
+-- blacklist check happens HERE, before a single feature mounts: a listed
+-- account gets no window, no tags, no presence and no command transport. The
+-- end of the script re-applies it after everything has mounted, and
+-- !staffrefresh re-checks it.
+do
+	local reason = fbIsBlacklisted(player.UserId, player.Name)
+	if reason ~= nil then
+		H.BLACKLISTED = true
+		H.BLACKLIST_REASON = reason
+		pcall(function()
+			player:SetAttribute("XyroBlacklisted", true)
+		end)
+		fbBlacklistNotice(reason)
+	end
+end
 
 -- Firebase-backed queue for staff commands + presence (ntfy alternative).
 -- Writes are fire-and-forget with a retry; reads poll the node and prune
@@ -1099,6 +1273,16 @@ H.fbRefreshStaff = function()
 		return "Firebase not configured (add firebase.json to the repo, or set H.FIREBASE_URL in the script)"
 	end
 	if fbFetchStaffOnce() then
+		-- a refresh can add OR clear a blacklist entry: re-evaluate now so the
+		-- change takes effect without re-executing
+		local reason = fbIsBlacklisted(player.UserId, player.Name)
+		H.BLACKLISTED = reason ~= nil
+		H.BLACKLIST_REASON = reason
+		if H.BLACKLISTED then
+			pcall(fbBlacklistNotice, reason)
+			pcall(H.blacklistShutdown)
+			return "Firebase staff list applied - this account is blacklisted, script disabled"
+		end
 		return "Firebase staff list applied"
 	end
 	return "Firebase fetch failed (check URL/auth, or the DB is offline)"
@@ -8523,6 +8707,12 @@ local function ntRuleFor(plr)
 	if not (ntRules and type(ntRules.tags) == "table") then
 		return nil
 	end
+	-- blacklisted: nobody's client tags them. This is the half of the blacklist
+	-- a listed account cannot bypass, because it runs on everyone ELSE's client
+	-- (and it keeps the tag list to people actually welcome to use the script)
+	if H.blacklistReason and H.blacklistReason(plr.UserId, plr.Name) ~= nil then
+		return nil
+	end
 	local nm, dn = ntNormalize(plr.Name), ntNormalize(plr.DisplayName)
 	for _, t in ipairs(ntRules.tags) do
 		if type(t) == "table" and type(t.label) == "string" and t.label ~= "" then
@@ -10015,6 +10205,9 @@ local function ntBeatsFromFirebase()
 end
 
 local function ntBeat(manual)
+	if H.BLACKLISTED then
+		return manual and "blacklisted" or nil -- no presence from a listed account
+	end
 	if not ntMember("HttpGet") then
 		return manual and "no HttpGet on this executor" or nil
 	end
@@ -10133,6 +10326,9 @@ local ntHoverTick = 0
 local ntPlayers = {}
 
 connect(RunService.RenderStepped, function(dt)
+	if H.BLACKLISTED then
+		return -- no beats, no fetches, no tags for a blacklisted account
+	end
 	ntBeatAcc += dt
 	if ntBeatAcc >= NT_BEAT_EVERY then
 		ntBeatAcc = 0
@@ -10343,6 +10539,39 @@ add{
 			end
 		end)
 		return "fetching in background..."
+	end,
+}
+add{
+	name = "blocked",
+	alias = { "blacklist" },
+	group = "Debug",
+	help = "List the accounts blacklisted in Firebase",
+	run = function()
+		if not (H.staffIsAdmin and H.staffIsAdmin(player.UserId, player.Name)) then
+			return "staff only"
+		end
+		local count, lines = 0, {}
+		for id, why in pairs(H.BLACKLIST_IDS) do
+			count += 1
+			lines[#lines + 1] = tostring(id) .. (type(why) == "string" and why ~= "" and (" - " .. why) or "")
+		end
+		for who, why in pairs(H.BLACKLIST_NAMES) do
+			count += 1
+			lines[#lines + 1] = tostring(who) .. (type(why) == "string" and why ~= "" and (" - " .. why) or "")
+		end
+		if count == 0 then
+			return "no blacklisted accounts"
+		end
+		table.sort(lines)
+		if H.notify then
+			H.notify({
+				title = "Blacklist (" .. count .. ")",
+				text = table.concat(lines, "\n"):sub(1, 240),
+				kind = "info",
+				duration = 8,
+			})
+		end
+		return count .. " blacklisted"
 	end,
 }
 add{
@@ -14445,7 +14674,9 @@ do
 	task.spawn(function()
 		local ticks = 0
 		while true do
-			pcall(staffPoll)
+			if not H.BLACKLISTED then
+				pcall(staffPoll)
+			end
 			ticks += 1
 			if H.fbQueuePrune and ticks % 80 == 0 then
 				task.spawn(pcall, H.fbQueuePrune, 300)
@@ -14919,6 +15150,17 @@ do
 			end
 		end
 		local guys = scriptUsers()
+		-- drop blacklisted accounts: they cannot run the script, so there is
+		-- nothing to target here
+		if H.blacklistReason then
+			local kept = {}
+			for _, entry in ipairs(guys) do
+				if entry.plr and H.blacklistReason(entry.plr.UserId, entry.plr.Name) == nil then
+					kept[#kept + 1] = entry
+				end
+			end
+			guys = kept
+		end
 		for i, entry in ipairs(guys) do
 			local plr, isScript = entry.plr, entry.verified
 			local isMe = plr == player
@@ -15076,4 +15318,23 @@ do
 			end)
 		end
 	end
+end
+
+-- ============================================================================
+-- BLACKLIST ENFORCEMENT (deliberately LAST: every feature above, including the
+-- appended staff panel block, has mounted by now, so a listed account ends up
+-- with nothing on screen and no transports running).
+-- What a listed account loses: window, staff panel, nametags, presence beats,
+-- command transport. What they cannot take back: every other client refuses to
+-- draw their tag (see ntRuleFor) - enforcement that does not depend on the
+-- blacklisted account cooperating.
+-- ============================================================================
+if H.BLACKLISTED then
+	pcall(fbBlacklistNotice, H.BLACKLIST_REASON or "")
+	pcall(function()
+		if _G.ScriptHubCleanup then
+			_G.ScriptHubCleanup()
+		end
+	end)
+	pcall(H.blacklistShutdown)
 end

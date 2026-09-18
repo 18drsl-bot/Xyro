@@ -113,6 +113,49 @@ accept aliases (`owner` → founder, `dev`/`developer`/`devteam` → developer,
 the seal even if they're not in the staff list; staff **without** a rank show white.
 Rank changes land on the next launch or with **`!staffrefresh`**.
 
+## 3c. Blacklist
+
+Add a `blacklist` node next to `admins` to block an account from using the
+script. Keys are **exact Roblox user IDs or usernames**, values are the reason
+shown to them on screen (optional):
+
+```json
+{
+  "staff": {
+    "admins": ["8579040069"],
+    "blacklist": {
+      "1234567890": "ban evasion",
+      "someLeaker": "leaking the script"
+    }
+  }
+}
+```
+
+These shapes all work (pick whichever is easier):
+
+```json
+{ "blacklist": ["1234567890", "someLeaker"] }
+{ "blacklist": { "ids": ["1234567890"], "usernames": ["someLeaker"] } }
+{ "blacklist": { "1234567890": true, "someLeaker": true } }
+```
+
+What a listed account gets:
+
+- **No UI at all** — the window, staff panel and Debug tab never appear; a
+  "Xyro - access blocked" card shows the reason instead
+- **No nametag, no presence, no command transport** — they stop heartbeating,
+  so they drop off the editor's *Script users* list within ~75 seconds
+- **Nobody else's client tags them either** — the tag suppression runs on every
+  *other* player's client, which is the part a blacklisted user cannot bypass
+  by editing their copy of the script
+
+Manage it in the **Firebase console** (Data → `staff` → `blacklist`). It is
+intentionally **read-only for clients**: if scripts could write it, anyone could
+blacklist a rival. Changes apply on the next launch, or immediately with
+**`!staffrefresh`** — which also *un*-blocks: clear the entry and refresh.
+
+In game, staff can print the current list with **`!blocked`**.
+
 ## 4. Point the script at it (no script edits!)
 
 Add a **`firebase.json`** file to the **repo root** with your database URL:
@@ -159,6 +202,9 @@ a password — the open-read rules avoid the issue entirely.
   **`!staffrefresh`** in the command bar.
 - Staff get: the **Debug tab**, the **verified badge** on their nametag, and
   any other admin-only behavior, live — same as hardcoded admins.
+- Staff can read the blacklist with **`!blocked`** (aliases: `!blacklist`).
+- A blacklisted account is refused before any feature mounts, so it never even
+  reaches the point of showing a window.
 
 ## What the script sends
 - `GET https://<your-db>/staff.json` at launch (and on `!staffrefresh`).

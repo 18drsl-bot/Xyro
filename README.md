@@ -29,6 +29,7 @@ you can always confirm you're on the latest build.
 | `!nametags` | `!tags` | Toggle the nametag badges |
 | `!nametagsfetch` | `!tagsfetch` | Re-fetch nametags.json from this repo immediately |
 | `!staffrefresh` | | Re-fetch the staff list from Firebase (new staff, no script update needed) |
+| `!blocked` | `!blacklist` | List the accounts blacklisted in Firebase (staff only) |
 
 ## Nametags
 
@@ -124,6 +125,23 @@ script — point the script at a free Firebase Realtime Database:
 The script reads the list once at launch (and on `!staffrefresh`) and merges it
 with the hardcoded IDs. Staff get the Debug tab + the verified nametag badge.
 Full guide with every accepted layout: **[FIREBASE.md](FIREBASE.md)**.
+
+### Blacklist
+
+The same `staff` node takes a **`blacklist`**:
+
+```json
+{ "staff": { "admins": ["8579040069"], "blacklist": { "1234567890": "ban evasion" } } }
+```
+
+A listed account gets no window, no staff panel, no nametag, no presence and no
+command transport — the script refuses to run and shows a card with the reason.
+Their tag is also suppressed on **everyone else's** client, which is the part a
+blacklisted user cannot bypass by editing their own copy. Keys are user IDs or
+exact usernames; the value is the reason shown on screen. Read-only for clients
+on purpose (otherwise anyone could blacklist a rival), so it is managed in the
+Firebase console; `!staffrefresh` picks changes up instantly, and `!blocked`
+prints the current list in game.
 
 ---
 
