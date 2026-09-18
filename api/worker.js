@@ -1043,11 +1043,24 @@ async function publishNametags(env, req, url) {
 		const fromClient = /^d1-(\d+)$/.exec(sent);
 		let expected = fromClient ? Number(fromClient[1]) : 0;
 		if (!fromClient) {
-			// the editor read the rules from the repo (or sent a git sha), so its
-			// guard is not ours to use: take the current revision instead. The
-			// window between this read and the write is milliseconds, and the
-			// statement itself still refuses a row that moved underneath it.
+			/* The caller's guard is not one of ours - it read the rules from the repo
+			   and is holding a git blob sha, from before this Worker owned them. That
+			   is the SEED case while nothing is stored yet, and it must keep working.
+			   Once a revision exists it means something else: the caller read a
+			   different source than the one it is about to overwrite, so its guard
+			   cannot be checked at all. Quietly taking the current revision there is
+			   how a tab left open across the move to the database clobbers rules it
+			   never read - the exact "it will not keep my changes" failure the guard
+			   exists to prevent. Refuse, and say what to do about it. */
 			const current = await storedRules(env).catch(() => null);
+			if (current && Number(current.rev) > 0 && sent) {
+				return json(env, {
+					error: "this publish carries a repo guard (" + String(sent).slice(0, 12) + "), but the rules are stored as revision " + current.rev + " in this Worker's database - reload the editor so it reads the current revision",
+					revision: current.rev,
+				}, 409);
+			}
+			// no sha at all is a deliberate overwrite (documented), and an empty
+			// store has nothing to clobber
 			expected = current ? current.rev : 0;
 		}
 		let ok = false;

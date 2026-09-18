@@ -204,10 +204,13 @@ const timeIt = async fn => { const t = Date.now(); const r = await fn(); return 
 			ok("the Worker can reach the repo with its GH_TOKEN", !!checkBody.sha, JSON.stringify(checkBody));
 			console.log("     file sha: " + String(checkBody.sha).slice(0, 7) + " · the editor's Save & test will pass");
 			/* the credential's blast radius: a fine-grained token cannot be broader
-			   than this repo, a classic one is always account-wide */
+			   than this repo, a classic one is always account-wide. NO token is the
+			   healthy answer now - publishing goes to the Worker's own database - so
+			   only a CLASSIC one is a failure here. Failing on "none" made a correct
+			   setup look broken. */
 			const tok = checkBody.token || {};
 			console.log("     repo token: " + (tok.kind || "unknown") + (tok.wide && tok.wide.length ? " (" + tok.wide.join(", ") + ")" : ""));
-			ok("the repo token is fine-grained, not a classic account-wide token", tok.kind === "fine-grained",
+			ok("the repo token is not a classic account-wide one", tok.kind === "fine-grained" || tok.kind === "none",
 				(tok.kind || "unknown") + " - a leak of a classic token can delete other repos and add SSH keys; see api/README.md section 7");
 			if (tok.kind !== "fine-grained" && checkBody.warning) console.log("     " + checkBody.warning);
 		} else if (check.status === 503) {

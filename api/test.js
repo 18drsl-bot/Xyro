@@ -759,6 +759,19 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("a publish carrying a revision that has moved on is refused (409)", behind.status === 409, "got " + behind.status + " " + JSON.stringify(json));
 	ok("...and the rules the newer publish wrote are untouched", JSON.parse(db.body()).tags[0].label === "CURRENT", db.body());
 
+	/* A tab that loaded the rules from the REPO is holding a git blob sha, which
+	   cannot be checked against the row revision at all. Once a revision exists
+	   that tab read a different source than the one it would overwrite, so
+	   treating its guard as "overwrite whatever is there" is how it clobbers
+	   rules it never saw - the exact "it will not keep my changes" failure. The
+	   repo-guard publish must be refused while a revision exists, and must keep
+	   working when the store is still empty (that is the seed case, above). */
+	const foreign = await call("/nametags?sha=0000000000000000000000000000000000000000", { method: "PUT", body: '{"options":{},"tags":[{"label":"FOREIGN"}]}', env: DB, headers: { "x-api-key": "owner" } });
+	json = await body(foreign);
+	ok("a publish carrying a repo (git) guard is refused once a revision exists", foreign.status === 409, "got " + foreign.status + " " + JSON.stringify(json));
+	ok("...naming the revision to reload for", json.revision === db.rev() && new RegExp("revision " + db.rev() + "\\b").test(json.error || ""), JSON.stringify(json));
+	ok("...and the live rules keep the newer publish's contents", JSON.parse(db.body()).tags[0].label === "CURRENT", db.body());
+
 	// the editor's "Save & test", with no token anywhere in sight
 	res = await call("/nametags/check", { method: "POST", env: DB, headers: { "x-api-key": "owner" } });
 	json = await body(res);
