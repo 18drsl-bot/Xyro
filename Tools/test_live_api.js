@@ -99,7 +99,13 @@ const timeIt = async fn => { const t = Date.now(); const r = await fn(); return 
 	if (ghToken) {
 		ok("a repo-token read carries the blob sha (safe publishing)", !!fresh.headers.get("x-xyro-sha"));
 	} else {
-		ok("with no repo token there is no sha, as designed", !fresh.headers.get("x-xyro-sha"));
+		/* The guard no longer depends on a repo token. When the rules live in the
+		   Worker's own database the header is the row revision (d1-N), which is
+		   precisely what makes a publish safe with no token involved. Asserting
+		   "no sha" here described the days when the repo file WAS the store, so a
+		   correct token-free setup failed this check. */
+		const guard = fresh.headers.get("x-xyro-sha") || "";
+		ok("a read carries a guard with or without a repo token, so a publish is guarded", /^d1-\d+$/.test(guard), guard || "(no x-xyro-sha header at all)");
 	}
 
 	for (const alias of ["/nametags.json", "/config"]) {
