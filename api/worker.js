@@ -1310,17 +1310,74 @@ async function online(env, url) {
 	return json(env, { count: names.length, online: names, beats: fresh, window });
 }
 
+/** The blacklist as this Worker owns it. See schema.sql: the staff node needs a
+ *  database credential to write, which is why entries are kept here and merged
+ *  into the reads the script already makes. Empty on a Worker with no binding. */
+async function dbBlacklist(env) {
+	if (!env.xyro_tags || typeof env.xyro_tags.prepare !== "function") return {};
+	const out = await env.xyro_tags.prepare("SELECT who, reason FROM blacklist").all();
+	const map = {};
+	for (const row of (out && out.results) || []) {
+		if (row && row.who) map[row.who] = typeof row.reason === "string" ? row.reason : "";
+	}
+	return map;
+}
+
+async function dbBlock(env, who, reason) {
+	await env.xyro_tags
+		.prepare("INSERT INTO blacklist (who, reason, added_at) VALUES (?, ?, ?) " +
+			"ON CONFLICT(who) DO UPDATE SET reason = excluded.reason, added_at = excluded.added_at")
+		.bind(who, String(reason == null ? "" : reason), Math.floor(Date.now() / 1000))
+		.run();
+}
+
+async function dbUnblock(env, who) {
+	await env.xyro_tags.prepare("DELETE FROM blacklist WHERE who = ?").bind(who).run();
+}
+
+function hasDb(env) {
+	return !!(env.xyro_tags && typeof env.xyro_tags.prepare === "function");
+}
+
+/** The list the script is given: the database's entries merged over whatever the
+ *  staff node already says. Both are honoured, so a block made in the Firebase
+ *  console and one made in the editor both stick, and the database wins a
+ *  conflict because that is the copy a human just edited. */
 async function blacklistMap(env) {
-	const staff = parseNode(await fb(env, "staff"));
-	const list = staff.blacklist;
-	return list && typeof list === "object" ? list : {};
+	let fromDb = {};
+	try {
+		fromDb = await dbBlacklist(env);
+	} catch (err) {
+		console.error("[blacklist] database read failed:", err && err.message ? err.message : err);
+	}
+	const list = parseNode(await fb(env, "staff")).blacklist;
+	const merged = list && typeof list === "object" ? { ...list } : {};
+	return { ...merged, ...fromDb };
 }
 
 async function setBlacklist(env, who, reason, remove) {
-	await fb(env, "staff/blacklist/" + who, remove
-		? { method: "DELETE" }
-		: { method: "PUT", body: JSON.stringify(String(reason == null ? "" : reason)) });
-	return json(env, { ok: true, who, action: remove ? "removed" : "blocked" });
+	if (!hasDb(env)) {
+		// no store of our own: the database the staff node lives in is the only copy
+		await fb(env, "staff/blacklist/" + who, remove
+			? { method: "DELETE" }
+			: { method: "PUT", body: JSON.stringify(String(reason == null ? "" : reason)) });
+		return json(env, { ok: true, who, action: remove ? "removed" : "blocked", store: "database" });
+	}
+	if (remove) await dbUnblock(env, who);
+	else await dbBlock(env, who, reason);
+	/* The staff node stays authoritative for anything written there, so keep it in
+	   step when this Worker happens to have a credential - a mirror, exactly like
+	   the repo copy of the rules. Its failure cannot fail the block, because the
+	   block is already live in the read above. */
+	let mirror = "skipped (no database credential)";
+	if (env.FB_SECRET || saCreds(env)) {
+		mirror = await fb(env, "staff/blacklist/" + who, remove
+			? { method: "DELETE" }
+			: { method: "PUT", body: JSON.stringify(String(reason == null ? "" : reason)) })
+			.then(() => "written to the staff node too")
+			.catch(err => "failed: " + (err && err.message ? err.message : err));
+	}
+	return json(env, { ok: true, who, action: remove ? "removed" : "blocked", store: "worker database", staff_node: mirror });
 }
 
 async function handle(req, env, ctx) {
@@ -1409,7 +1466,19 @@ async function handle(req, env, ctx) {
 		if (!readKeyOk(req, url, env)) return json(env, { error: "forbidden: bad or missing key" }, 403);
 		const node = nodeFile[1];
 		const data = parseNode(await fb(env, node));
-		if (node === "staff") return json(env, data, 200, { "cache-control": url.searchParams.has("fresh") ? "no-store" : "public, max-age=10" });
+		if (node === "staff") {
+			/* The blacklist this Worker owns is merged in HERE, which is what makes
+			   blocking possible without a database credential: this is the request
+			   the script makes, so its view of who is blocked is complete even when
+			   the staff node could not be written. */
+			try {
+				const own = await dbBlacklist(env);
+				if (Object.keys(own).length) data.blacklist = { ...(data.blacklist && typeof data.blacklist === "object" ? data.blacklist : {}), ...own };
+			} catch (err) {
+				console.error("[blacklist] merge failed:", err && err.message ? err.message : err);
+			}
+			return json(env, data, 200, { "cache-control": url.searchParams.has("fresh") ? "no-store" : "public, max-age=10" });
+		}
 		pruneInBackground(env, ctx, node, data);
 		return json(env, freshOnly(node, data, PRESENCE_WINDOW), 200, { "cache-control": "no-store" });
 	}

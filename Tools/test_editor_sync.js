@@ -139,6 +139,11 @@ let apiDown = false;
 let apiNoToken = false; // a Worker deployed without GH_TOKEN: reads fine, writes 503
 let apiClassicToken = false; // the Worker holds a CLASSIC token (account-wide), not fine-grained
 let apiStoresRules = false; // the Worker stores the rules itself: no repo token exists to judge
+/* the blacklist as the Worker serves it: a map of key -> reason */
+let blMap = {};
+let blWrites = [];
+let hereData = {}; // the here/ node: who is running the script right now
+let blNoCred = false; // the Worker has no database credential, so writes are refused
 let apiPuts = 0; // publishes that went through the API (not GitHub)
 const OWNER_KEY = "owner-secret";
 
@@ -211,9 +216,33 @@ global.fetch = async (url, init) => {
 			}
 			return new Response(text(gh.file), { status: 200, headers: { "x-xyro-sha": gh.sha() } });
 		}
+		if (u.pathname === "/blacklist") {
+			// reading is gated by the CLIENT key, which the editor sends as ?key=
+			if (u.searchParams.get("key") !== "pub-key") return new Response('{"error":"forbidden: bad or missing key"}', { status: 403 });
+			return new Response(JSON.stringify({ count: Object.keys(blMap).length, blacklist: blMap }), { status: 200 });
+		}
+		const blWho = u.pathname.match(/^\/blacklist\/([^/]+)$/);
+		if (blWho) {
+			// editing needs the OWNER key - the client key is public on purpose
+			if (apiKey !== OWNER_KEY) return new Response('{"error":"forbidden: this route needs the admin key"}', { status: 403 });
+			/* a WRITE the database refuses: the Worker has no credential for it, which
+			   is a different failure from a bad key and has its own one-command fix */
+			if (blNoCred) return new Response('{"error":"Permission denied - this database refuses anonymous writes to it. Set FB_SERVICE_ACCOUNT (api/README.md section 4) to give the Worker an owner credential."}', { status: 403 });
+			const who = decodeURIComponent(blWho[1]);
+			blWrites.push({ method, who, body: init && init.body });
+			if (method === "DELETE") {
+				delete blMap[who];
+				return new Response(JSON.stringify({ ok: true, who, action: "removed" }), { status: 200 });
+			}
+			blMap[who] = String((init && init.body) || "");
+			return new Response(JSON.stringify({ ok: true, who, action: "blocked" }), { status: 200 });
+		}
 		if (u.pathname.startsWith("/media/")) {
 			return new Response("PNG:" + u.pathname.split("/").pop(), { status: 200, headers: { "content-type": "image/png" } });
 		}
+		/* presence comes through the API (here/ is the node the script writes), so
+		   the live user list is built from this, not from a direct database read */
+		if (u.pathname === "/here.json") return new Response(JSON.stringify(hereData), { status: 200 });
 		if (u.pathname.endsWith(".json")) return new Response("{}", { status: 200 });
 	}
 	if (u.hostname === "raw.githubusercontent.com") {
@@ -224,7 +253,11 @@ global.fetch = async (url, init) => {
 		}
 		return new Response("missing", { status: 404 });
 	}
-	if (u.hostname.endsWith("firebaseio.com")) return new Response("{}", { status: 200 });
+	if (u.hostname.endsWith("firebaseio.com")) {
+		// presence: the here/ node the live user list is built from
+		if (u.pathname.endsWith("/here.json")) return new Response(JSON.stringify(hereData), { status: 200 });
+		return new Response("{}", { status: 200 });
+	}
 	if (u.hostname === "purge.jsdelivr.net") {
 		return new Response(JSON.stringify({ paths: { ["/gh/vertxxy-1/Xyro@main/nametags.json"]: { throttled: false } } }), { status: 200 });
 	}
@@ -242,7 +275,8 @@ const factory = new Function(
 	"  refreshLive: refreshLive, publish: () => $(\"publishBtn\").onclick(), canonJSON: canonJSON, asConfig: asConfig," +
 	"  renderPreview: renderPreview, renderEditorPreview: renderEditorPreview, editorTag: editorTag," +
 	"  mediaURL: mediaURL, get rulesSource(){return rulesSource;}," +
-	"  openEditor: openEditor, closeEditor: closeEditor, changed: changed," +
+	"  openEditor: openEditor, closeEditor: closeEditor, changed: changed, renderUsers: renderUsers," +
+	"  blockAccount: blockAccount, loadBlacklist: loadBlacklist, renderBlacklist: renderBlacklist, pollUsers: pollUsers," +
 	"  toasts: () => $(\"toasts\").children.map(t => t.textContent)," +
 	"};"
 );
@@ -561,6 +595,79 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	flushFrame();
 	ok("...which then draws, and leaves nothing queued", rafQueue.length === 0, String(rafQueue.length));
 	ok("...having drawn the edited rules", el("ruleList").children.length > 0, String(el("ruleList").children.length));
+
+	/* --- 9. the blacklist, managed from here ------------------------------ */
+
+	/* The script enforces the list; this card is the only way to edit it, and the
+	   split is the point: reading uses the public client key, editing needs the
+	   owner key, because an edit route behind a public key would let any player
+	   block a rival. */
+	blMap = { x9k: "ban evasion", 8579040069: "harassment" };
+	localStorage.setItem("xyro_owner_key", OWNER_KEY);
+	apiJson = '{"api":{"url":"https://api.example","key":"pub-key"}}';
+	calls.length = 0;
+	const bl = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle(20);
+	ok("the card loads the list from the API", calls.some(c => c.url.pathname === "/blacklist"), calls.map(c => c.url.pathname).join(", "));
+	ok("...reading with the public client key, not the owner key", calls.some(c => c.url.pathname === "/blacklist" && c.url.searchParams.get("key") === "pub-key"), "");
+	ok("...and being refused without it", calls.filter(c => c.url.pathname === "/blacklist").every(c => c.url.searchParams.has("key")), "");
+	ok("it shows who is blocked", el("blockCount").textContent === "2 blocked", el("blockCount").textContent);
+	ok("...with the reason the script prints in game", bl.renderBlacklist() === undefined && JSON.stringify(blMap).includes("ban evasion"), "");
+
+	// blocking: the write, and the reason it needs
+	blWrites.length = 0;
+	el("blockWho").value = "rivalplayer";
+	el("blockWhy").value = "advertising";
+	const added = await bl.blockAccount("rivalplayer", "advertising", false);
+	ok("blocking posts to the API", added === true && blWrites.length === 1 && blWrites[0].method === "POST", JSON.stringify(blWrites));
+	ok("...to /blacklist/<who>", blWrites[0] && blWrites[0].who === "rivalplayer", JSON.stringify(blWrites[0]));
+	ok("...carrying the owner key", calls.filter(c => c.url.pathname === "/blacklist/rivalplayer")[0] && calls.filter(c => c.url.pathname === "/blacklist/rivalplayer")[0].headers["x-api-key"] === OWNER_KEY, JSON.stringify(calls.filter(c => c.url.pathname === "/blacklist/rivalplayer")[0] && calls.filter(c => c.url.pathname === "/blacklist/rivalplayer")[0].headers));
+	ok("...with the reason as the body, which is what the script shows", blWrites[0] && blWrites[0].body === "advertising", JSON.stringify(blWrites[0]));
+	ok("the list updates without a re-read", el("blockCount").textContent === "3 blocked", el("blockCount").textContent);
+
+	// and the live user list marks them, so nobody blocks twice
+	hereData = { rivalplayer: Math.floor(Date.now() / 1000) };
+	el("userList").children.length = 0; // the fake DOM keeps append history, so start clean
+	await bl.pollUsers();
+	bl.renderUsers();
+	const rows = el("userList").children.map(r => r.children.map(c => c.textContent).join(" ")).join(" | ");
+	ok("a blocked player is marked in the live list", /blacklisted/.test(rows), rows.slice(0, 160));
+
+	// unblocking
+	blWrites.length = 0;
+	await bl.blockAccount("rivalplayer", "", true);
+	ok("unblocking deletes it", blWrites.length === 1 && blWrites[0].method === "DELETE" && !blMap.rivalplayer, JSON.stringify(blWrites));
+
+	// the refusals that keep it safe
+	blWrites.length = 0;
+	localStorage.removeItem("xyro_owner_key");
+	toastsBefore = toastCount();
+	const noKey = await bl.blockAccount("someoneelse", "test", false);
+	ok("with no owner key saved it refuses to write", noKey === false && blWrites.length === 0, JSON.stringify(blWrites));
+	ok("...and says which card fixes that", /owner key/i.test(newToasts(toastsBefore)), newToasts(toastsBefore).slice(0, 160));
+	localStorage.setItem("xyro_owner_key", OWNER_KEY);
+	blWrites.length = 0;
+	const badName = await bl.blockAccount("not a name!", "x", false);
+	ok("a malformed key never reaches the API", badName === false && blWrites.length === 0, JSON.stringify(blWrites));
+	blWrites.length = 0;
+	const empty = await bl.blockAccount("", "", false);
+	ok("an empty key never reaches the API either", empty === false && blWrites.length === 0, "");
+	ok("the card exposes the controls it needs", html.includes('id="blockWho"') && html.includes('id="blockWhy"') && html.includes('id="blockAdd"') && html.includes('id="blockList"') && html.includes('id="blockCount"'), "");
+	localStorage.removeItem("xyro_owner_key");
+
+	/* A Worker that cannot write the database. It must not look like a bad key
+	   (that sends you to the wrong card) and it must not look like success. */
+	localStorage.setItem("xyro_owner_key", OWNER_KEY);
+	blNoCred = true;
+	toastsBefore = toastCount();
+	const denied = await bl.blockAccount("someoneelse", "test", false);
+	toastsAdded = newToasts(toastsBefore);
+	ok("a database that refuses the write is not reported as success", denied === false, String(denied));
+	ok("...it says the card is read-only", el("blockState").textContent === "read-only", el("blockState").textContent);
+	ok("...shows the one-command fix instead of a bare failure", !el("blockFix").classList.contains("hidden") && html.includes("FB_SERVICE_ACCOUNT"), "");
+	ok("...and does not call it a key problem", !/owner key refused/i.test(el("blockState").textContent) && /write the database/i.test(toastsAdded), toastsAdded.slice(0, 200));
+	blNoCred = false;
+	localStorage.removeItem("xyro_owner_key");
 
 	console.log("\n" + (failures.length ? failures.length + " FAILED" : pass + " checks passed") + (failures.length ? " (" + pass + " passed)" : ""));
 	process.exit(failures.length ? 1 : 0);

@@ -16,3 +16,19 @@ CREATE TABLE IF NOT EXISTS rules (
 	rev        INTEGER NOT NULL DEFAULT 1,
 	updated_at INTEGER NOT NULL DEFAULT 0
 );
+
+-- The blacklist, kept here so it can be edited WITHOUT a database credential.
+--
+-- The staff node lives in Firebase, and that database refuses anonymous writes,
+-- so blocking someone used to need a service-account secret on the Worker. But
+-- the script reads the blacklist through this Worker anyway (GET /staff.json),
+-- so the Worker can hold its own entries and merge them into that read - "who is
+-- blocked" stops depending on a credential nobody has set yet. Entries written
+-- in the Firebase console are still honoured; these are merged on top, and
+-- mirrored back when a credential does exist.
+
+CREATE TABLE IF NOT EXISTS blacklist (
+	who      TEXT PRIMARY KEY,
+	reason   TEXT    NOT NULL DEFAULT '',
+	added_at INTEGER NOT NULL DEFAULT 0
+);

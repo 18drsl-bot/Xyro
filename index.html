@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r10</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r11</span>
 		<span class="chip" id="tokenChip" title="token status">no token</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules now (through the API when one is configured, otherwise straight from GitHub)">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -486,6 +486,26 @@
 				</h2>
 				<div class="hint" style="margin-top:0">Everyone currently running the script (live presence, refreshes every 20s). Green means the game is drawing a tag for them right now &mdash; a rule matching their username, or a <code>*</code> catch-all. A rule that only matches their display name cannot be seen from here. Click +tag to create a rule for them.</div>
 				<div class="rlist" id="userList"></div>
+			</div>
+
+			<div class="card" id="blockCard">
+				<h2>
+					<span class="hl">Blacklist <span id="blockCount" class="chip"></span></span>
+					<span class="chip" id="blockState">not loaded</span>
+				</h2>
+				<div class="hint" style="margin-top:0">A blacklisted account is refused by the <b>script itself</b>: it shows the reason and stops loading, so nothing of Xyro runs for them. Usernames and numeric ids both work, and a blocked player cannot run the script to get around it. Editing needs your <b>owner key</b> (the card at the top) &mdash; deliberately not the public client key, or any player could block a rival.</div>
+				<div class="row" style="margin-top:10px">
+					<input id="blockWho" placeholder="username or user id">
+					<input id="blockWhy" placeholder="reason (shown in game)">
+					<button id="blockAdd" class="ghost">Block</button>
+				</div>
+				<div class="rlist" id="blockList"></div>
+				<div class="hint hidden" id="blockFix" style="margin-top:10px">
+					<b>Read-only for now:</b> the Worker can read the list but has no credential to write the database, so nothing can be blocked from here.
+					Set one on the Worker and this card becomes read-write:
+					<code>npx wrangler secret put FB_SERVICE_ACCOUNT</code> (paste the whole service-account key file &mdash; <b>api/README.md</b> section 4), or the legacy <code>FB_SECRET</code>.
+					Reading, the in-game <code>!blocked</code> list and the live-user filter already work; the Firebase console still edits it too.
+				</div>
 			</div>
 		</div>
 
@@ -717,6 +737,7 @@ const apiReady = (async function followApi() {
 		console.info("[xyro] nametags, live users + staff via the Xyro API:", base);
 		applyMediaHosts();
 		refreshKeyChip(); // the chip says which route Publish will take, so it needs the base
+		loadBlacklist(); // the blacklist card reads through the API, so it waits for it
 	} catch {}
 })();
 
@@ -1396,6 +1417,27 @@ function renderUsers() {
 			$("fLabel").focus();
 		};
 		row.append(dot, nm, state, btn);
+		/* and the other thing you do to a live player: block them. It only fills
+		   the card in - the write still needs a reason typed and the owner key,
+		   which is the point. */
+		if (blockMap && blockMap[n]) {
+			const blocked = document.createElement("span");
+			blocked.className = "hint";
+			blocked.textContent = "blacklisted";
+			row.appendChild(blocked);
+		} else {
+			const bl = document.createElement("button");
+			bl.textContent = "block";
+			bl.className = "subtle";
+			bl.style.cssText = "padding:5px 12px;font-size:12px;flex:none";
+			bl.onclick = () => {
+				$("blockWho").value = n;
+				$("blockCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
+				$("blockWhy").focus();
+				toast("Add a reason for " + n + ", then Block", "info", 6);
+			};
+			row.appendChild(bl);
+		}
 		list.appendChild(row);
 	}
 }
@@ -1439,6 +1481,138 @@ async function refreshBlacklist() {
 		blacklistAt = Date.now();
 	} catch (_) { /* keep whatever we had */ }
 }
+
+/* ---------- blacklist management ---------- */
+/* The script enforces the list - a listed account is shown the reason and the
+   script stops - so this card is only the way to edit it. Reading goes through
+   the public client key (the same staff.json read the script makes); EDITING
+   requires the owner key, deliberately: the client key is public, and an edit
+   route behind it would let any player block a rival. */
+let blockMap = null;
+function blockApiUrl(who) {
+	return NT_BASE + "/blacklist" + (who ? "/" + encodeURIComponent(who) : "") +
+		(NT_KEY ? "?key=" + encodeURIComponent(NT_KEY) : "");
+}
+
+async function loadBlacklist() {
+	if (!NT_BASE) {
+		$("blockState").textContent = "no API configured";
+		return;
+	}
+	try {
+		const res = await fetch(stamp(blockApiUrl("")), { cache: "no-store" });
+		if (res.status === 403) { $("blockState").textContent = "key refused"; return; }
+		if (!res.ok) throw new Error("api " + res.status);
+		const data = await res.json();
+		blockMap = data && data.blacklist && typeof data.blacklist === "object" ? data.blacklist : {};
+		$("blockState").textContent = "live";
+		renderBlacklist();
+	} catch (e) {
+		$("blockState").textContent = "could not read the list";
+	}
+}
+
+function renderBlacklist() {
+	const list = $("blockList");
+	list.innerHTML = "";
+	const keys = Object.keys(blockMap || {});
+	$("blockCount").textContent = keys.length ? keys.length + " blocked" : "nobody";
+	if (!keys.length) {
+		const empty = document.createElement("div");
+		empty.className = "hint";
+		empty.style.marginTop = "6px";
+		empty.textContent = "Nobody is blacklisted. Block someone to stop the script running on their account.";
+		list.appendChild(empty);
+		return;
+	}
+	keys.sort();
+	for (const who of keys) {
+		const row = document.createElement("div");
+		row.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.05)";
+		const nm = document.createElement("b");
+		nm.textContent = who; // from the database - never innerHTML
+		nm.style.cssText = "font-size:13px;flex:none;font-variant-numeric:tabular-nums";
+		const why = document.createElement("span");
+		why.className = "hint";
+		why.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis";
+		why.textContent = typeof blockMap[who] === "string" && blockMap[who] ? blockMap[who] : "no reason given";
+		const btn = document.createElement("button");
+		btn.textContent = "Unblock";
+		btn.className = "subtle";
+		btn.style.cssText = "padding:5px 12px;font-size:12px;flex:none";
+		btn.onclick = () => blockAccount(who, "", true);
+		row.append(nm, why, btn);
+		list.appendChild(row);
+	}
+}
+
+async function blockAccount(who, why, remove) {
+	who = String(who || "").trim();
+	if (!who) { toast("Give a username or user id first", "err"); return false; }
+	if (!/^[A-Za-z0-9_]{1,32}$/.test(who)) {
+		toast("Usernames and ids only: letters, numbers and underscore (up to 32)", "err", 7);
+		return false;
+	}
+	if (!NT_BASE) { toast("No API configured - see api/README.md", "err", 8); return false; }
+	const ownerKey = getOwnerKey();
+	if (!ownerKey) {
+		toast("Save your owner key first - the public client key cannot edit the blacklist", "err", 10);
+		$("ownerCard").scrollIntoView({ behavior: "smooth" });
+		return false;
+	}
+	if (remove && !confirm("Unblock " + who + "? The script will run for them again.")) return false;
+	$("blockState").textContent = remove ? "unblocking..." : "blocking...";
+	try {
+		const res = await fetch(stamp(NT_BASE + "/blacklist/" + encodeURIComponent(who)), {
+			method: remove ? "DELETE" : "POST",
+			headers: { "x-api-key": ownerKey, "content-type": "text/plain" },
+			body: remove ? undefined : why,
+		});
+		const out = await res.json().catch(() => ({}));
+		const msg = String(out.error || ("status " + res.status));
+		/* A database that refuses the WRITE is not the same as a bad key: the
+		   Worker has no credential to write with, and that is a one-command fix.
+		   Saying "failed" there would send you looking in the wrong place. */
+		const needsCred = /FB_SERVICE_ACCOUNT|FB_SECRET|Permission denied/i.test(msg);
+		if (res.status === 403 && !needsCred) { $("blockState").textContent = "owner key refused"; toast("The API refused that owner key", "err", 10); return false; }
+		if (res.status === 503 && !needsCred) { $("blockState").textContent = "no admin key on the Worker"; toast(msg, "err", 12); return false; }
+		if (!res.ok || !out.ok) {
+			if (needsCred) {
+				$("blockState").textContent = "read-only";
+				$("blockFix").classList.remove("hidden");
+				toast("The Worker cannot write the database, so nothing was blocked - see the note under the Blacklist card", "err", 14);
+			} else {
+				$("blockState").textContent = "failed";
+				toast("Could not " + (remove ? "unblock" : "block") + " " + who + ": " + msg, "err", 12);
+			}
+			return false;
+		}
+		$("blockFix").classList.add("hidden");
+		toast((remove ? "Unblocked " : "Blocked ") + who + (remove ? "" : (why ? " - " + why : "")), "ok", 6);
+		blockMap = blockMap || {};
+		if (remove) delete blockMap[who];
+		else blockMap[who] = why;
+		blacklistAt = 0; // the live user list filters on this, so re-read it soon
+		renderBlacklist();
+		$("blockState").textContent = "live";
+		return true;
+	} catch (e) {
+		$("blockState").textContent = "network error";
+		toast("Blacklist write failed: " + e, "err", 12);
+		return false;
+	}
+}
+
+$("blockAdd").onclick = async () => {
+	const who = $("blockWho").value.trim();
+	const why = $("blockWhy").value.trim();
+	if (await blockAccount(who, why, false)) {
+		$("blockWho").value = "";
+		$("blockWhy").value = "";
+	}
+};
+$("blockWhy").addEventListener("keydown", e => { if (e.key === "Enter") $("blockAdd").click(); });
+$("blockWho").addEventListener("keydown", e => { if (e.key === "Enter") $("blockWhy").focus(); });
 
 async function pollUsers() {
 	try {
@@ -1608,6 +1782,7 @@ $("saveOwner").onclick = async () => {
 		$("ownerKey").value = "";
 		refreshKeyChip();
 		refreshLive(false, { checkApi: true });
+		loadBlacklist(); // the card can edit now, so show what is in it
 		/* The Worker reports what kind of repo token it holds. A classic one
 		   cannot be limited to this repository, so its leak is an account-wide
 		   problem - say that here, at the one moment a human is trusting it. */

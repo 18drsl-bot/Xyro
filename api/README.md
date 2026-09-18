@@ -331,6 +331,36 @@ second one before it could exist.
 
 **What it does not buy:** a client that holds *some* key can still send that key.
 So a write being "key-authenticated" is not the same as "staff-authenticated".
+
+### The blacklist needs no database credential
+
+The blacklist lives in the staff node, and that node's database refuses anonymous
+writes — so editing it used to need `FB_SERVICE_ACCOUNT` (or `FB_SECRET`) on the
+Worker. It doesn't any more, because **the script reads the blacklist through
+this Worker**: the Worker keeps its own entries in a table (`blacklist`, see
+`schema.sql`) and merges them into the `GET /staff.json` read the game actually
+makes. So blocking someone works with nothing but the owner key — verified
+against a deployment that has no database credential at all.
+
+* **Both copies are honoured.** An entry written in the Firebase console and one
+  written here are merged; the Worker's wins a conflict, because that is the one
+  a human just edited.
+* **The staff node is a mirror, not the store.** If this Worker does hold a
+  database credential, a block is also written to `staff/blacklist/<who>` — and
+  that write failing cannot fail the block, because the block is already live in
+  the read above.
+* **The kill switch is the one thing that still needs the credential.** Its state
+  lives in the staff node that clients poll, so tripping it from here is refused
+  with the reason and the exact command to fix it. The same merge trick would
+  work for it (there is an `xyro_tags` binding to hold it), it just has not been
+  moved yet.
+* Reading is unchanged and needs no credential: `GET /blacklist` answers behind
+  the read key, and the editor's card lists it even when it cannot write.
+
+In the editor, the **Blacklist** card (next to the live user list) is where you
+edit this: a username or id plus a reason, and an **Unblock** button per entry.
+It says plainly when the Worker cannot write, instead of reporting a failure you
+would go looking for in the wrong place.
 Today that is fine for the things the client key gates (a queue entry, a presence
 beat) because clients were already trusted to write them. It is *not* fine for
 anything new and dangerous — a kick, a ban, a rank change. For those, authorize
@@ -508,8 +538,8 @@ npx wrangler deploy
 | `/media/<file>` | GET | no | seals, the verified badge and any other tag artwork (edge-cached 300s; `?fresh=1` bypasses) |
 | `/online` | GET | if gated | presence: `{count, online[], beats{}, window}` |
 | `/staff` | GET | if gated | the whole `staff` node |
-| `/blacklist` | GET | if gated | just the blacklist map |
-| `/blacklist/<who>` | POST | **admin** | block; body is the reason shown on screen |
+| `/blacklist` | GET | if gated | the blacklist map (the Worker's own entries merged over the staff node) |
+| `/blacklist/<who>` | POST | **admin** | block; body is the reason shown on screen (no database credential needed) |
 | `/blacklist/<who>` | DELETE | **admin** | unblock |
 | `/staff.json` | GET | if gated | database-shaped: the `staff` node |
 | `/cmd.json` | GET | if gated | database-shaped: only fresh queue entries (stale ones deleted) |

@@ -93,6 +93,8 @@ function newDb(opts = {}) {
 		body: () => state.body,
 		rev: () => state.rev,
 		set(body, rev) { state.body = body; state.rev = rev; },
+		setRows(rows) { opts.rows = rows; },
+		writes: () => opts.writes || [],
 		binding: {
 			prepare(sql) {
 				statements.push(sql);
@@ -104,8 +106,13 @@ function newDb(opts = {}) {
 						if (opts.failRead) throw new Error("D1_ERROR: no such table: rules");
 						return state.body == null ? null : { body: state.body, rev: state.rev };
 					},
+					async all() {
+						if (opts.failRead) throw new Error("D1_ERROR: no such table: blacklist");
+						return { results: opts.rows || [] };
+					},
 					async run() {
 						if (opts.failRead) throw new Error("D1_ERROR: no such table: rules");
+						if (/blacklist/i.test(sql)) { opts.writes = opts.writes || []; opts.writes.push({ sql, args }); return { meta: { changes: 1 } }; }
 						const body = args[0];
 						const expected = Number(args[args.length - 1]);
 						if (state.body == null) { state.body = body; state.rev = 1; return { meta: { changes: 1 } }; }
@@ -764,6 +771,60 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("with a token set the repo is mirrored too", res.status === 200 && /committed/.test(json.repo_mirror || "") && githubPuts.length === 1, JSON.stringify(json.repo_mirror));
 	json = await body(await call("/health", { env: withMirror }));
 	ok("health says the mirror is on", /committed as well/.test(json.nametags.repo_mirror || ""), json.nametags.repo_mirror);
+
+	/* ------------------------------------------- the blacklist, no credential
+	 *
+	 *  The staff node lives in Firebase and refuses anonymous writes, so blocking
+	 *  someone used to need a service-account secret. But the script reads the
+	 *  blacklist THROUGH this Worker, so the Worker can hold its own entries and
+	 *  merge them into that read - which is what makes the blacklist editable by
+	 *  someone who has only ever set the owner key. */
+	const blDb = newDb();
+	const BL = { ...NO_TOKEN, xyro_tags: blDb.binding };
+	blDb.setRows([{ who: "fromconsole", reason: "blocked in the console" }]);
+
+	res = await call("/blacklist", { env: BL, headers: { "x-api-key": "sekret" } });
+	json = await body(res);
+	ok("the list merges the database entries with the staff node", res.status === 200 && json.blacklist.fromconsole === "blocked in the console", JSON.stringify(json));
+
+	const fbWritesBefore = calls.filter(c => c.method !== "GET" && c.url.hostname === "test-db.firebaseio.com").length;
+	res = await call("/blacklist/griefer", { method: "POST", body: "ban evasion", env: BL, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("blocking works with NO database credential at all", res.status === 200 && json.ok === true, res.status + " " + JSON.stringify(json));
+	ok("...storing it in the Worker own database", json.store === "worker database", JSON.stringify(json));
+	ok("...and touching Firebase not once", calls.filter(c => c.method !== "GET" && c.url.hostname === "test-db.firebaseio.com").length === fbWritesBefore, "firebase writes: " + (calls.filter(c => c.method !== "GET" && c.url.hostname === "test-db.firebaseio.com").length - fbWritesBefore));
+	ok("...via one upsert, so blocking twice is not an error", blDb.writes().length === 1 && /ON CONFLICT\(who\) DO UPDATE/.test(blDb.writes()[0].sql), JSON.stringify(blDb.writes()));
+
+	/* the part that matters: the SCRIPT reads staff.json, so the merge has to
+	   happen on that read or the block would never reach the game */
+	blDb.setRows([{ who: "fromconsole", reason: "blocked in the console" }, { who: "griefer", reason: "ban evasion" }]);
+	res = await call("/staff.json", { env: BL, headers: { "x-api-key": "sekret" } });
+	json = await body(res);
+	ok("the script sees it: staff.json carries the merged blacklist", json.blacklist && json.blacklist.griefer === "ban evasion", JSON.stringify(json.blacklist));
+	ok("...alongside anything the staff node already had", json.blacklist.fromconsole === "blocked in the console", "");
+
+	res = await call("/blacklist/griefer", { method: "DELETE", env: BL, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("unblocking deletes from the same store", res.status === 200 && json.action === "removed" && /DELETE FROM blacklist/.test(blDb.writes().slice(-1)[0].sql), JSON.stringify(json));
+
+	// the push key is not enough: blocking is an owner action
+	res = await call("/blacklist/griefer", { method: "POST", body: "x", env: { ...BL, XYRO_PUBLISH_KEY: "publisher" }, headers: { "x-api-key": "publisher" } });
+	ok("the publish-only key still cannot block", res.status === 403, "got " + res.status);
+
+	// with a credential, keep the staff node in step - best effort only
+	const mirrorWrites = calls.length;
+	res = await call("/blacklist/griefer", { method: "POST", body: "ban evasion", env: { ...BL, FB_SECRET: "legacy-secret" }, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("with a credential the staff node is written too", res.status === 200 && /written to the staff node/.test(json.staff_node || ""), JSON.stringify(json.staff_node));
+	ok("...and that write goes to the right path", calls.slice(mirrorWrites).some(c => /\/staff\/blacklist\/griefer\.json/.test(c.url.pathname) && c.method === "PUT"), calls.slice(mirrorWrites).map(c => c.method + " " + c.url.pathname).join(", "));
+
+	/* no store of its own: the staff node is the only copy, so a Worker with no
+	   credential must still refuse honestly */
+	denyStaffWrites = true;
+	res = await call("/blacklist/griefer", { method: "POST", body: "x", env: { ...NO_TOKEN, XYRO_ADMIN_KEY: "owner" }, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("with neither a database nor a credential it says what is missing", res.status === 403 && /FB_SERVICE_ACCOUNT/.test(json.error || ""), res.status + " " + JSON.stringify(json.errors));
+	denyStaffWrites = false;
 
 	/* --- failure modes -------------------------------------------------- */
 	dbDenied = true;

@@ -270,5 +270,26 @@ ok("...and the dot follows that, not the named-rule match alone",
 ok("the rule match is prefix-based like ntRuleFor", /return m !== "" && m !== "\*" && n\.startsWith\(m\);/.test(html), "");
 ok("the site says display-name matches are invisible to it", /only matches their display name cannot be seen from here/.test(html), "");
 
+/* ---------------------- the blacklist: one list, three sides ------------ */
+
+/* The script enforces the list, the site edits it and the Worker brokers it.
+   The route shape is the contract: a rename on one side means the site reports
+   a failure while nothing is broken, or - worse - a block that never lands
+   while the page says it did. */
+ok("the Worker serves the blacklist as a map",
+	worker.includes('path === "/blacklist"') && worker.includes("blacklist: list") && /function blacklistMap/.test(worker), "");
+ok("...and edits one entry at /blacklist/<who> with POST and DELETE",
+	/bl = path\.match/.test(worker) && worker.includes('req.method === "POST" || req.method === "DELETE"') && /const who = decodeURIComponent\(bl\[1\]\)/.test(worker), "");
+ok("editing needs the OWNER key, never the public client key",
+	/deliberately not the client key|a client key is public/.test(worker) && worker.includes("adminKeyResponse(req, url, env)"), "");
+ok("the site names the same routes and methods",
+	html.includes('NT_BASE + "/blacklist"') && html.includes('NT_BASE + "/blacklist/" + encodeURIComponent(who)') && /method: remove \? "DELETE" : "POST"/.test(html), "");
+ok("...sending the reason as the body, which is what the script prints",
+	/body: remove \? undefined : why/.test(html) && worker.includes("reason.slice(0, 200)"), "");
+ok("both sides accept the same key shapes",
+	worker.includes("/^[A-Za-z0-9_]{1,32}$/") && html.includes("/^[A-Za-z0-9_]{1,32}$/"), "");
+ok("the script refuses a blacklisted account instead of only hiding its tag",
+	/function fbIsBlacklisted/.test(lua) && /H\.blacklistShutdown/.test(lua) && /is on the Xyro blacklist, so the script will not run here/.test(lua), "");
+
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);

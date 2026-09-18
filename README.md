@@ -190,9 +190,18 @@ command transport — the script refuses to run and shows a card with the reason
 Their tag is also suppressed on **everyone else's** client, which is the part a
 blacklisted user cannot bypass by editing their own copy. Keys are user IDs or
 exact usernames; the value is the reason shown on screen. Read-only for clients
-on purpose (otherwise anyone could blacklist a rival), so it is managed in the
-Firebase console; `!staffrefresh` picks changes up instantly, and `!blocked`
-prints the current list in game.
+on purpose (otherwise anyone could blacklist a rival); `!blocked` prints the
+current list in game, and `!staffrefresh` picks changes up instantly.
+
+Manage it from the **Blacklist card in the editor**
+(https://xyro-api.xyroapi.workers.dev/editor, next to the live user list): type a
+username or id plus a reason and press **Block**, or press **block** on anyone in
+the live list to fill that in for you. Each entry has an **Unblock** button.
+Editing needs your owner key, which is also why the card will not write without
+one - the public client key is what the game uses to read the list, and an edit
+route behind it would let any player block a rival. Under the hood it is
+`POST`/`DELETE /blacklist/<who>` (see api/README.md section 8); the Firebase
+console still works too.
 
 ### Optional: put it behind your own API (Cloudflare Worker)
 
