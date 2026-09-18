@@ -1118,6 +1118,10 @@ local function fbBlacklistNotice(reason)
 		.. "\n\nThink this is a mistake? Open a ticket in the Discord."
 	bodyText.Parent = card
 end
+-- exported for the callers below (and the tail enforcement at the end of the
+-- file, which is in a different scope): referencing the bare local name from
+-- another block would be a global = nil
+H.blacklistNotice = fbBlacklistNotice
 
 -- destroys everything Xyro put on screen, including the staff panel's own
 -- protected gui (which the main cleanup knows nothing about)
@@ -1161,7 +1165,7 @@ do
 		pcall(function()
 			player:SetAttribute("XyroBlacklisted", true)
 		end)
-		fbBlacklistNotice(reason)
+		H.blacklistNotice(reason)
 	end
 end
 
@@ -1279,7 +1283,7 @@ H.fbRefreshStaff = function()
 		H.BLACKLISTED = reason ~= nil
 		H.BLACKLIST_REASON = reason
 		if H.BLACKLISTED then
-			pcall(fbBlacklistNotice, reason)
+			pcall(H.blacklistNotice, reason)
 			pcall(H.blacklistShutdown)
 			return "Firebase staff list applied - this account is blacklisted, script disabled"
 		end
@@ -1814,6 +1818,10 @@ H.COL, H.ESPCOL, H.ClickTp, H.Binds = COL, ESPCOL, ClickTp, Binds
 H.themedRefs, H.themeRefreshers = themedRefs, themeRefreshers
 H.make, H.round, H.tween = make, round, tween
 H.gui, H.click, H.main, H.titleBar, H.keyChip = gui, click, main, titleBar, keyChip
+-- the settings/tools block lives in its own scope, so the user card has to be
+-- exported: its bare name there was nil, which left the ⚙ settings button
+-- parentless (created, never shown)
+H.userCard = userCard
 
 H.guiHost, H.DISPLAY_ORDER = guiHost, DISPLAY_ORDER	H.pages, H.tabs, H.selectTab, H.makeTab = pages, tabs, selectTab, makeTab
 	H.isAdmin, H.ADMIN_IDS, H.ADMIN_NAMES = isAdmin, ADMIN_IDS, ADMIN_NAMES
@@ -4080,7 +4088,9 @@ local slots = 16
 
 local function runRemote(url)
 	if not loadstring then
-		notify("This executor has no loadstring", "error", 5)
+		-- H.notify: the bare `notify` belongs to the first UI block (closed at
+		-- line 1840), so in here it is a global = nil
+		H.notify("This executor has no loadstring", "error", 5)
 		return false, "loadstring is unavailable"
 	end
 
@@ -4237,32 +4247,32 @@ do
 	connect(antiVcBtn.MouseButton1Click, function()
 		click()
 		if not loadstring then
-			notify({ title = "Anti-VC", text = "loadstring is not available on this executor", kind = "error" })
+			H.notify({ title = "Anti-VC", text = "loadstring is not available on this executor", kind = "error" })
 			return
 		end
-		notify({ title = "Anti-VC", text = "loading...", kind = "info" })
+		H.notify({ title = "Anti-VC", text = "loading...", kind = "info" })
 		task.spawn(function()
 			local okSrc, source = pcall(function()
 				return game:HttpGet(antiVcUrl, true)
 			end)
 			if not okSrc or type(source) ~= "string" or source == "" then
 				warn("[antivc] " .. tostring(source))
-				notify({ title = "Anti-VC", text = "download failed - see console", kind = "error" })
+				H.notify({ title = "Anti-VC", text = "download failed - see console", kind = "error" })
 				return
 			end
 			local fn, compileErr = loadstring(source)
 			if not fn then
 				warn("[antivc] " .. tostring(compileErr))
-				notify({ title = "Anti-VC", text = "compile failed - see console", kind = "error" })
+				H.notify({ title = "Anti-VC", text = "compile failed - see console", kind = "error" })
 				return
 			end
 			local okRun, runErr = pcall(fn)
 			if not okRun then
 				warn("[antivc] " .. tostring(runErr))
-				notify({ title = "Anti-VC", text = "runtime failed - see console", kind = "error" })
+				H.notify({ title = "Anti-VC", text = "runtime failed - see console", kind = "error" })
 				return
 			end
-			notify({ title = "Anti-VC", text = "loaded", kind = "success" })
+			H.notify({ title = "Anti-VC", text = "loaded", kind = "success" })
 		end)
 	end)
 end
@@ -4774,7 +4784,7 @@ local cogBtn = make("TextButton", {
 	Text = "⚙",
 	AutoButtonColor = false,
 	BorderSizePixel = 0,
-}, userCard)
+}, H.userCard or main)
 round(cogBtn, 13)
 
 local setFrame = make("Frame", {
@@ -7236,7 +7246,7 @@ Extra.openExecutor = function()
 			pcall(function() if writefile then writefile(t.path, src) end end)
 		end
 		if not loadstring then
-			notify("This executor has no loadstring", "error", 5)
+			notify("This executor has no loadstring", "error", 5) -- block-local wrapper
 			return
 		end
 		local fn, cerr = loadstring(src)
@@ -8034,7 +8044,11 @@ make("UIPadding", {
 }, cmdHistoryList)
 
 local function hideCmdHistory()
-	tween(cmdHistoryList, { Size = UDim2.new(0, 190, 0, 0) })
+	-- H.tween, not tween: the bare `tween` is a local of the UI-builder block that
+	-- closed up at line 1840, so out here it is a global = nil. That made the
+	-- history dropdown throw "attempt to call a nil value" on every focus loss,
+	-- which also skipped the line that hides it.
+	H.tween(cmdHistoryList, { Size = UDim2.new(0, 190, 0, 0) })
 	task.delay(0.16, function()
 		cmdHistoryList.Visible = false
 	end)
@@ -8074,7 +8088,7 @@ connect(cmdBox.Focused, function()
 	end
 	local h = math.min(cmdHistoryLayout.AbsoluteContentSize.Y + 6, 160)
 	cmdHistoryList.Visible = true
-	tween(cmdHistoryList, { Size = UDim2.new(0, 190, 0, h) })
+	H.tween(cmdHistoryList, { Size = UDim2.new(0, 190, 0, h) }) -- same scope trap as above
 end)
 
 connect(cmdBox.FocusLost, function(enter)
@@ -10298,15 +10312,15 @@ task.spawn(function()
 	while true do
 		task.wait(first and 20 or 600)
 		first = false
-		if VERSION ~= "Unknown" then
+		if H.VERSION ~= "Unknown" then
 			local body = ntHttpGet("https://api.github.com/repos/vertxxy-1/Xyro/contents/version.txt")
 			local txt = body and ntFromAPI(body)
 			if txt then
 				local latest = txt:gsub("%s+", "")
-				if latest ~= "" and latest ~= VERSION and H.notify then
+				if latest ~= "" and latest ~= H.VERSION and H.notify then
 					H.notify({
 						title = "Xyro",
-						text = "update available: " .. latest .. " (running " .. VERSION .. ") - re-execute the loadstring",
+						text = "update available: " .. latest .. " (running " .. H.VERSION .. ") - re-execute the loadstring",
 						kind = "info",
 					})
 				end
@@ -15330,7 +15344,7 @@ end
 -- blacklisted account cooperating.
 -- ============================================================================
 if H.BLACKLISTED then
-	pcall(fbBlacklistNotice, H.BLACKLIST_REASON or "")
+	pcall(H.blacklistNotice, H.BLACKLIST_REASON or "")
 	pcall(function()
 		if _G.ScriptHubCleanup then
 			_G.ScriptHubCleanup()
