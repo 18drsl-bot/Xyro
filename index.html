@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r11</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r12</span>
 		<span class="chip" id="tokenChip" title="token status">no token</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules now (through the API when one is configured, otherwise straight from GitHub)">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -1050,16 +1050,49 @@ function fileToDataURI(file) {
 	});
 }
 
-async function fileToBlobURL(file) {
+/* Where a picked file would live: media/<sha1>.<ext>, the same name the repo
+   and the API's /media route already use. Contents-addressed, so the same
+   picture always lands on the same name - which is what makes the reuse check
+   below possible at all. */
+async function mediaNameFor(file) {
 	const buf = await file.arrayBuffer();
 	const hash = await crypto.subtle.digest("SHA-1", buf);
 	const name = [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, "0")).join("");
 	const ext = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "") || "png";
-	const path = "media/" + name + "." + ext;
+	return { buf, path: "media/" + name + "." + ext };
+}
+
+/* Is this exact file already being served? Asking costs one HEAD and needs NO
+   token, and it is the difference between a rule that references a 1.3 MB PNG
+   and one that embeds it: an embedded copy is re-downloaded by every player on
+   every refresh (15s), and decoded in Lua each time, so one embedded
+   background is enough to make every tag in the server feel slow. The API's own
+   media route is asked first (same origin, always current); jsDelivr is the
+   fallback for a page with no API configured. */
+async function mediaAlreadyServed(path) {
+	const urls = [];
+	if (NT_BASE) urls.push(NT_BASE + "/media/" + path.slice("media/".length));
+	urls.push("https://cdn.jsdelivr.net/gh/" + REPO + "@main/" + path);
+	for (const u of urls) {
+		try {
+			const res = await fetch(u, { method: "HEAD", cache: "no-store" });
+			if (res.ok) return true;
+		} catch (_) {
+			/* unreachable candidate - try the next one */
+		}
+	}
+	return false;
+}
+
+async function fileToBlobURL(file) {
+	const { buf, path } = await mediaNameFor(file);
 	const rawURL = "https://cdn.jsdelivr.net/gh/" + REPO + "@main/" + path; // fast global edge instead of raw.githubusercontent
+	// already in the repo? then its URL is instantly valid - and this needs no
+	// token, so the common case (re-picking an image you already uploaded) stops
+	// falling into the base64 branch below
+	if (await mediaAlreadyServed(path)) return rawURL;
 	const token = getToken();
 	if (!token) throw Object.assign(new Error("no token"), { code: "notoken" });
-	// file already in the repo? then its URL is instantly valid
 	const head = await fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, { headers: { Authorization: "Bearer " + token } });
 	if (head.ok) return rawURL;
 	if (head.status !== 404) throw new Error("github said " + head.status);
@@ -1109,7 +1142,15 @@ function wireFilePicker(fileInputId, btnId, urlInputId, mediaKey) {
 					$(urlInputId).value = uri;
 					edMedia[mediaKey] = true;
 					btn.textContent = "embedded";
-					toast("No token connected - embedded as base64 (heavier publish). Connect a token to upload instead.", "info", 8);
+					/* Say what embedding actually costs, because it is not a cosmetic
+					   choice: the rules document is fetched by every player every
+					   refreshSeconds (15s by default), so this image is re-downloaded
+					   and Lua-decoded by everyone, forever. The size decides whether
+					   that is a rounding error or the reason tags feel slow. */
+					const kb = Math.round(uri.length / 1024);
+					toast("No token connected - embedded as base64, adding " + kb + " KB to EVERY player's download every refresh. " +
+						"Connect a token to upload it to media/ instead, or publish it once with a token so this exact file is reused from then on.",
+						kb > 64 ? "err" : "info", 12);
 				} catch (_) {
 					btn.textContent = "Choose file";
 					toast("Could not read that file", "err");

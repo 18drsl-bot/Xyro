@@ -291,5 +291,26 @@ ok("both sides accept the same key shapes",
 ok("the script refuses a blacklisted account instead of only hiding its tag",
 	/function fbIsBlacklisted/.test(lua) && /H\.blacklistShutdown/.test(lua) && /is on the Xyro blacklist, so the script will not run here/.test(lua), "");
 
+/* --- tag artwork: three sides, one route ------------------------------- */
+
+/* The editor asks HEAD /media/<file> to decide whether a picture is already
+   being served, and that answer is what keeps it from embedding base64 into
+   the rules. If the Worker only answered GET, the probe would 405, the editor
+   would fall through to the embed branch, and nothing would look broken - the
+   rules would simply get heavier again and every player would pay for it on
+   every refresh. That is exactly how a 1.29 MB image ended up inside a 1.72 MB
+   rules document while the same file already sat in media/. */
+ok("the editor asks the media route whether a file is already served",
+	/mediaAlreadyServed/.test(html) && html.includes('method: "HEAD"'), "");
+ok("and the Worker answers HEAD on that route",
+	/media && \(req\.method === "GET" \|\| req\.method === "HEAD"\)/.test(worker), "");
+ok("a HEAD reply carries no body",
+	worker.includes('if (req.method === "HEAD") return new Response(null'), "");
+ok("the script maps repo media onto that same route instead of a CDN",
+	/function ntApplyImage/.test(lua) && lua.includes("H.ntApiUrl(file, query)"), "");
+ok("no rule in the shipped file carries an inline image",
+	JSON.stringify(file).length < 256 * 1024 && !/data:image\//.test(JSON.stringify(file)),
+	JSON.stringify(file).length + " bytes");
+
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);

@@ -1176,8 +1176,12 @@ async function cached(env, ctx, url, ttl, contentType, produce) {
 		   TTL, and outlives the deploy that fixed it. An empty body is never
 		   legitimate here: the rules file and every piece of artwork have bytes.
 		   A miss just re-fetches and re-caches, which is what we want. */
-		const cachedLength = Number(hit && hit.headers.get("content-length"));
-		if (hit && !(cachedLength === 0)) return hit;
+		/* Only an EXPLICIT zero is a poisoned entry. Number(null) is 0, so a cached
+		   response that simply carries no content-length header was read as an
+		   empty body and skipped - quietly disabling the cache for that route
+		   rather than merely refusing one bad entry. */
+		const lenHeader = hit ? hit.headers.get("content-length") : null;
+		if (hit && !(lenHeader !== null && Number(lenHeader) === 0)) return hit;
 	}
 	const out = await produce();
 	const spec = out && typeof out === "object" && !ArrayBuffer.isView(out) && !(out instanceof ArrayBuffer) && "body" in out
@@ -1377,7 +1381,31 @@ async function setBlacklist(env, who, reason, remove) {
 			.then(() => "written to the staff node too")
 			.catch(err => "failed: " + (err && err.message ? err.message : err));
 	}
-	return json(env, { ok: true, who, action: remove ? "removed" : "blocked", store: "worker database", staff_node: mirror });
+	/* Report the state the script will actually SEE, not the operation that was
+	   attempted. An entry can also live in the Firebase staff node, which this
+	   Worker can only edit with a credential it may not have - so a delete that
+	   removes the row here leaves the account blacklisted anyway, and answering
+	   "removed" would be a lie the editor then repeats to you. Reading the merged
+	   map back is the only honest answer, and it costs one small read. */
+	let still = false;
+	if (remove) {
+		try {
+			const left = await blacklistMap(env);
+			still = Object.prototype.hasOwnProperty.call(left, who);
+		} catch (err) {
+			console.error("[blacklist] could not confirm the removal:", err && err.message ? err.message : err);
+		}
+	}
+	return json(env, {
+		ok: !still,
+		who,
+		action: remove ? (still ? "still blocked" : "removed") : "blocked",
+		store: "worker database",
+		staff_node: mirror,
+		error: still
+			? "this account is also in the Firebase staff node, and editing that needs a database credential (FB_SECRET, or a service account) - the entry there still blocks them. Remove it in the console, or set FB_SECRET and retry: api/README.md section 4"
+			: undefined,
+	});
 }
 
 async function handle(req, env, ctx) {
@@ -1433,8 +1461,15 @@ async function handle(req, env, ctx) {
 	   whitelisted by shape (one path segment, known extension) because it is
 	   concatenated onto a repo path - `..` never gets the chance to matter. */
 	const media = path.match(/^\/media\/([A-Za-z0-9_.-]{1,80})$/);
-	if (media && req.method === "GET") {
-		return serveMedia(env, ctx, url, media[1]);
+	if (media && (req.method === "GET" || req.method === "HEAD")) {
+		const res = await serveMedia(env, ctx, url, media[1]);
+		/* HEAD exists so the editor can ask "is this artwork already served?"
+		   with no token and no download. That question is what stops it from
+		   embedding a megabyte of base64 into the rules just because no repo
+		   token happens to be connected - see mediaAlreadyServed in index.html.
+		   A HEAD response must carry no body, so the headers ride an empty one. */
+		if (req.method === "HEAD") return new Response(null, { status: res.status, headers: res.headers });
+		return res;
 	}
 	/* the script itself, served from here when a client prefers it: this is what
 	   makes the kill switch able to cut a loader off at the source */

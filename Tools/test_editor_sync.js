@@ -521,6 +521,23 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("the editor reads the rules through the API when one is configured", /async function hostedRules\(opts\)/.test(script) && script.includes('NT_BASE + "/nametags"'), "");
 	ok("and gets tag artwork from the same origin", /function mediaURL\(file\)/.test(script) && script.includes('NT_BASE + "/media/"'), "");
 	ok("no hardcoded jsDelivr media URL is left in the editor", !/cdn\.jsdelivr\.net\/gh\/vertxxy-1\/Xyro@main\/media/.test(script), "");
+
+	/* The bug this locks out: one rule carried a 1.29 MB PNG as a base64 data
+	   URI even though the identical file was already in media/, taking the rules
+	   document to 1.72 MB. Every player re-downloads that document every
+	   refreshSeconds, so the embedding was paid for by everyone, forever. The
+	   editor only embedded because the no-token path returned early - it never
+	   asked whether the file was already being served, a question that needs no
+	   token at all. */
+	const blobFn = script.slice(script.indexOf("async function fileToBlobURL"), script.indexOf("function wireFilePicker"));
+	ok("picking a file reuses an already-uploaded copy before embedding base64",
+		/async function mediaAlreadyServed\(path\)/.test(script) && blobFn.includes("await mediaAlreadyServed(path)"), "");
+	ok("and asks that question before it even looks for a token",
+		blobFn.indexOf("await mediaAlreadyServed(path)") < blobFn.indexOf("const token = getToken()"), "");
+	ok("the reuse check reads the API's own media route when one is configured",
+		/mediaAlreadyServed[\s\S]{0,500}NT_BASE \+ "\/media\//.test(script), "");
+	ok("embedding reports what it costs every player, not just that it happened",
+		/adding " \+ kb \+ " KB to EVERY player's download every refresh/.test(script), "");
 	ok("a publish does not purge a CDN the API clients never read", /if \(!NT_BASE\) \{/.test(script) && /the API serves it, so every client is current/.test(script), "");
 	ok("publishing prefers the API whenever a key is saved", script.includes("if (getOwnerKey() && NT_BASE) {") && /async function publishThroughApi\(\)/.test(script), "");
 	ok("the API publish sends the blob sha, so a stale write is refused rather than clobbering",

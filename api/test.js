@@ -94,6 +94,7 @@ function newDb(opts = {}) {
 		rev: () => state.rev,
 		set(body, rev) { state.body = body; state.rev = rev; },
 		setRows(rows) { opts.rows = rows; },
+		rows: () => opts.rows || [],
 		writes: () => opts.writes || [],
 		binding: {
 			prepare(sql) {
@@ -112,7 +113,22 @@ function newDb(opts = {}) {
 					},
 					async run() {
 						if (opts.failRead) throw new Error("D1_ERROR: no such table: rules");
-						if (/blacklist/i.test(sql)) { opts.writes = opts.writes || []; opts.writes.push({ sql, args }); return { meta: { changes: 1 } }; }
+						/* The blacklist writes are APPLIED to opts.rows, not merely recorded.
+						   The Worker reads the merged list back after an unblock so it can
+						   report what the script will actually see, so a mock that ignored
+						   the delete would make that read-back meaningless - and would let a
+						   real "still blocked" regression pass as success. */
+						if (/blacklist/i.test(sql)) {
+							opts.writes = opts.writes || [];
+							opts.writes.push({ sql, args });
+							opts.rows = opts.rows || [];
+							if (/^\s*DELETE/i.test(sql)) opts.rows = opts.rows.filter(r => r.who !== args[0]);
+							else if (/^\s*INSERT/i.test(sql)) {
+								opts.rows = opts.rows.filter(r => r.who !== args[0]);
+								opts.rows.push({ who: args[0], reason: args[1] });
+							}
+							return { meta: { changes: 1 } };
+						}
 						const body = args[0];
 						const expected = Number(args[args.length - 1]);
 						if (state.body == null) { state.body = body; state.rev = 1; return { meta: { changes: 1 } }; }
@@ -807,6 +823,28 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	json = await body(res);
 	ok("unblocking deletes from the same store", res.status === 200 && json.action === "removed" && /DELETE FROM blacklist/.test(blDb.writes().slice(-1)[0].sql), JSON.stringify(json));
 
+	/* An entry can live in BOTH places, and the Worker can only edit the staff
+	   node with a credential it may not have. Deleting the row here then leaves
+	   the account blacklisted either way, so answering "removed" would be a lie
+	   the editor repeats - you would click Unblock, see "unblocked", and wonder
+	   why they are still refused in game. Read back and say what is true. */
+	store = { staff: { blacklist: { phantom: "blocked in the console" } } };
+	blDb.setRows([{ who: "phantom", reason: "blocked in the console" }]);
+	res = await call("/blacklist/phantom", { method: "DELETE", env: BL, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("an unblock the staff node would undo is not reported as removed",
+		!json.ok && json.action === "still blocked", res.status + " " + JSON.stringify(json));
+	ok("...and it names the copy that is still blocking them", /staff node/.test(json.error || ""), json.error);
+	/* the row itself is gone, so the next attempt (with a credential) is a plain
+	   delete of the one copy that is left */
+	ok("...having still deleted its own row", blDb.rows().every(r => r.who !== "phantom"), JSON.stringify(blDb.rows()));
+	/* and once the staff node no longer has it, the same call reports success */
+	store = { staff: {} };
+	res = await call("/blacklist/phantom", { method: "DELETE", env: BL, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("with only its own copy left, the same unblock reports success",
+		json.ok === true && json.action === "removed", JSON.stringify(json));
+
 	// the push key is not enough: blocking is an owner action
 	res = await call("/blacklist/griefer", { method: "POST", body: "x", env: { ...BL, XYRO_PUBLISH_KEY: "publisher" }, headers: { "x-api-key": "publisher" } });
 	ok("the publish-only key still cannot block", res.status === 403, "got " + res.status);
@@ -981,6 +1019,64 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("preflight is 204 with CORS", res.status === 204 && res.headers.get("access-control-allow-origin") === "*", "got " + res.status);
 	res = await call("/nope");
 	ok("unknown path is 404", res.status === 404);
+
+	/* --- tag artwork, and the file that actually ships --------------------- */
+	/* Three failures came out of one image: a rule embedded a 1.29 MB PNG as a
+	   base64 data URI while the SAME file already sat in media/, which took the
+	   rules document to 1.72 MB. Every client re-downloads that document every
+	   refreshSeconds (15s default) and re-decodes it in Lua, so one embedded
+	   background makes every tag in the server feel slow. Nothing in the suite
+	   ever looked at the file that ships, which is why it survived a review.
+
+	   These read the real nametags.json rather than a fixture, so the guard is
+	   about what players actually receive. */
+	const shippedPath = path.join(__dirname, "..", "nametags.json");
+	const shippedRules = JSON.parse(fs.readFileSync(shippedPath, "utf8"));
+	const inlined = [];
+	const walkRules = (node, where) => {
+		if (typeof node === "string") {
+			if (/^data:[^,]*;base64,/i.test(node)) inlined.push(where + " = " + Math.round(node.length / 1024) + " KB");
+			return;
+		}
+		if (node && typeof node === "object") for (const k of Object.keys(node)) walkRules(node[k], where + "." + k);
+	};
+	walkRules(shippedRules.tags, "tags");
+	let biggestBytes = 0;
+	const walkBytes = node => {
+		if (typeof node === "string") {
+			if (/^data:[^,]*;base64,/i.test(node)) biggestBytes = Math.max(biggestBytes, node.length);
+			return;
+		}
+		if (node && typeof node === "object") for (const k of Object.keys(node)) walkBytes(node[k]);
+	};
+	walkBytes(shippedRules);
+	ok("no rule embeds a large base64 image (embedding is re-downloaded by every player)",
+		biggestBytes <= 32768, "biggest embedded value: " + biggestBytes + " bytes" + (inlined.length ? " - " + inlined.join(", ") : ""));
+	const shippedBytes = fs.statSync(shippedPath).size;
+	ok("the shipped rules stay small (fetched by every client every refresh)",
+		shippedBytes <= 256 * 1024, shippedBytes + " bytes");
+	ok("rule artwork is referenced by URL, not carried in the document",
+		(shippedRules.tags || []).every(t => [t.image, t.bgImage].every(v => !v || !/^data:image\//i.test(v))),
+		(shippedRules.tags || []).map(t => [t.image, t.bgImage].filter(v => /^data:image\//i.test(v || "")).length).join(","));
+	/* and every media URL a rule names must be a file the repo actually has,
+	   or the badge renders as nothing with no error anywhere */
+	const named = new Set();
+	for (const t of shippedRules.tags || []) {
+		for (const v of [t.image, t.bgImage]) {
+			const m = typeof v === "string" && v.match(/\/media\/([A-Za-z0-9_.-]+)$/);
+			if (m) named.add(m[1]);
+		}
+	}
+	const missing = [...named].filter(f => !fs.existsSync(path.join(__dirname, "..", "media", f)));
+	ok("every media file the rules reference exists in the repo", missing.length === 0, missing.join(", "));
+
+	/* HEAD on the artwork route: the editor asks "is this file already served?"
+	   with no token, and that answer is what keeps it from embedding base64. */
+	res = await call("/media/seal_founder.png", { method: "HEAD" });
+	ok("HEAD /media answers without a body", res.status === 200 && (await res.text()) === "", res.status);
+	ok("...and still carries the art's content type", /image\/png/.test(res.headers.get("content-type") || ""), res.headers.get("content-type"));
+	res = await call("/media/nope.png", { method: "HEAD" });
+	ok("HEAD /media of a missing file is a 404, not a silent ok", res.status === 404, res.status);
 
 	console.log("\n" + pass + " passed, " + failures.length + " failed");
 	process.exit(failures.length ? 1 : 0);

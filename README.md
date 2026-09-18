@@ -113,7 +113,9 @@ always) · `showDistance` · `showHealth` · `showBox` (pill background on/off) 
 the script re-checks for published changes, 10–300, default 15)
 
 Tags render as plain billboard UI, so **any executor works** — no Drawing API needed.
-Icons support PNG/JPG/GIF by URL, asset id, or base64 `data:` URI - **GIFs fully animate** (decoded frame-by-frame in script, since Roblox only shows a GIF's first frame). Rules also take `bgImage` (URL or data URI) to fill the pill background; the editor's **Choose file** buttons upload images to `media/` in this repo (base64-embeds them without a token).
+Icons support PNG/JPG/GIF by URL, asset id, or base64 `data:` URI - **GIFs fully animate** (decoded frame-by-frame in script, since Roblox only shows a GIF's first frame). Rules also take `bgImage` (URL or data URI) to fill the pill background; the editor's **Choose file** buttons upload images to `media/` in this repo.
+
+**Reference artwork, do not embed it.** A rule that carries a base64 `data:` URI is re-downloaded by *every* player on *every* refresh (`refreshSeconds`, 15s by default) and re-decoded in Lua each time, so one embedded background is enough to make every tag in the server feel slow - a single 1.29 MB PNG took `nametags.json` to 1.72 MB before this was caught. Wrapping a file in a `data:` URI splits it into 4/3 of its size as printable text as well. **Choose file** now checks whether that exact picture is *already* served at `media/<sha1>.<ext>` and reuses that URL, which needs no GitHub token; it only falls back to embedding when the file is genuinely new and no token is connected, and it tells you how many KB that adds to every player's download. `api/test.js` fails the build if the shipped rules carry a large inline image or reference a `media/` file that does not exist.
 
 The editor is a web page - nothing runs on your PC; publish straight from it. Two
 
