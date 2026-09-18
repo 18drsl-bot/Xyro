@@ -2,6 +2,9 @@
 //
 //   node Tools/test_live_api.js                     # against api.json's url
 //   node Tools/test_live_api.js https://host        # against any deployment
+//   node Tools/test_live_api.js --publish           # also commit the live rules
+//                                                   # (a no-op commit: proves the
+//                                                   # write path, changes nothing)
 //
 // api/test.js proves the Worker's logic against a mocked database and repo.
 // This proves the thing that is actually on the internet: that the deploy
@@ -33,7 +36,8 @@ const group = name => console.log("\n== " + name + " ==");
 const timeIt = async fn => { const t = Date.now(); const r = await fn(); return { r, ms: Date.now() - t }; };
 
 (async () => {
-	const arg = process.argv[2];
+	// only an actual URL is a URL - otherwise `--publish` would be read as the host
+	const arg = (process.argv[2] || "").startsWith("http") ? process.argv[2] : "";
 	let base = arg;
 	let key = "";
 	if (!base) {
@@ -207,18 +211,32 @@ const timeIt = async fn => { const t = Date.now(); const r = await fn(); return 
 			console.log("     check route said: " + check.status + " " + (checkBody.error || JSON.stringify(checkBody)));
 		}
 
-		/* the write guard, proved without a write */
-		const put = await fetch(base + "/nametags", {
-			method: "PUT",
-			headers: { "x-api-key": ownerKey, "content-type": "application/json" },
-			body: gotText, // exactly what is already published: a no-op even if it landed
-		});
+		/* The write guard. With no GH_TOKEN this is safe by construction - the
+		   route answers 503 before it ever calls GitHub - so it runs by default.
+		   With a token, proving the write means actually committing, so that only
+		   happens when asked for: a checker that quietly writes to your repo is
+		   not a checker anyone should run casually. The body is the rules that
+		   are already live, so the commit it makes is a no-op either way. */
 		if (!canPublish) {
+			const put = await fetch(base + "/nametags", {
+				method: "PUT",
+				headers: { "x-api-key": ownerKey, "content-type": "application/json" },
+				body: gotText,
+			});
 			ok("a publish is refused for the missing token BEFORE it writes anything", put.status === 503, "got " + put.status + " (expected 503, which happens before any GitHub call)");
+		} else if (!process.argv.includes("--publish")) {
+			note("the write path was not exercised - re-run with --publish to commit the rules that are already live (one empty commit); nothing is written without it");
 		} else {
-			ok("a no-op publish of the live rules is accepted", put.status === 200, "got " + put.status + " " + (await put.text()).slice(0, 120));
+			const put = await fetch(base + "/nametags", {
+				method: "PUT",
+				headers: { "x-api-key": ownerKey, "content-type": "application/json" },
+				body: gotText, // exactly what is published: the commit changes nothing
+			});
+			const putBody = await put.json().catch(() => ({}));
+			ok("a publish of the live rules is accepted", put.status === 200 && putBody.ok === true, "got " + put.status + " " + JSON.stringify(putBody).slice(0, 140));
 			const after = await (await fetch(base + "/nametags?fresh=1")).text();
 			ok("...and the file still holds exactly the same rules", after === gotText, "the no-op publish changed the file");
+			ok("...and the publish cleared its own cache (the read above was fresh)", after === gotText);
 		}
 	}
 
