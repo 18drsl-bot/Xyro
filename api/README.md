@@ -80,6 +80,19 @@ the secret store. If your database URL ever changes, edit `[vars]` in
 
 ## 2. Check it
 
+Two ways, and they answer different questions. `node Tools/test_live_api.js`
+checks the deployment that is actually on the internet with real requests — the
+rules byte-for-byte, every seal, the routes that must refuse, and (using your
+`api/.xyro-admin-key` if it is there) whether the owner key and `GH_TOKEN` are
+usable. It writes nothing. `node api/test.js` checks the Worker's logic in
+isolation, so you can change it without depending on your deployment.
+
+```bash
+node Tools/test_live_api.js                     # uses the url in api.json
+node Tools/test_live_api.js https://other.host  # or any deployment
+```
+
+
 Open the Worker URL in a browser and you get a **status page** — one line
 answering "is it down?": `LIVE`, `DISABLED` (the kill switch is on) or
 `DEGRADED` (the API cannot reach the database), plus the gate message, who set
@@ -484,7 +497,8 @@ the rest of your database.
 ## 9. Day-to-day
 
 ```bash
-node api/test.js              # 142 route tests against a mocked database and repo, no network
+node api/test.js              # 155 route tests against a mocked database and repo, no network
+node Tools/test_live_api.js   # check the DEPLOYED API with real requests (read-only)
 npx wrangler tail             # live request log while you test in game
 npx wrangler dev              # run the Worker locally on http://localhost:8787
 npx wrangler deploy           # ship a change

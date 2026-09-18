@@ -811,7 +811,7 @@ async function checkPublishReady(env) {
 		return json(env, {
 			ok: false,
 			reason: "no_gh_token",
-			error: "the Worker has no GH_TOKEN, so it cannot publish - set that secret and redeploy (api/README.md section 7)",
+			error: "the Worker has no GH_TOKEN, so it cannot publish - run: npx wrangler secret put GH_TOKEN (a secret needs no redeploy; see api/README.md section 7)",
 		}, 503);
 	}
 	const ref = repoRef(env);
