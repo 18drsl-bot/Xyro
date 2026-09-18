@@ -227,7 +227,13 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 
 	ok("the publish verifies itself against the API", script.includes("const landed = check ? canonJSON(asConfig(check.config)) === canonJSON(wanted) : null;") && script.includes('status("published, but GitHub'), "");
 	ok("a verified publish says so", script.includes('status("published and checked against the file"'), "");
-	ok("the build chip is bumped so a cached page is recognisable", /build: api-r3/.test(html), "chip text");
+	/* the chip is how a cached page gets spotted, so it must be a build id rather
+	   than a literal anyone forgets to bump. Asserting "api-r3" here only meant
+	   this file had to be edited on every bump - assert the SHAPE, and that it is
+	   at least the revision that introduced the sync fix. */
+	const chip = (html.match(/build: (api-r\d+)/) || [])[1];
+	ok("the build chip is a build id so a cached page is recognisable",
+		!!chip && Number(chip.replace("api-r", "")) >= 3, "chip text: " + chip);
 	ok("load() checks the API", /const json = await fetchConfig\(\{ checkApi: true, report: true \}\)/.test(script), "");
 	ok("the periodic poll stays off the API budget when there is no token", script.includes("!!getToken() || !!opts.checkApi || !raw"), "");
 
