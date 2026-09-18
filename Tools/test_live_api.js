@@ -158,11 +158,23 @@ const timeIt = async fn => { const t = Date.now(); const r = await fn(); return 
 
 	/* ------------------------------------------------------- the edge cache */
 	group("the edge cache");
+	/* Interleaved A/B with a median, not one sample each. A single sample is
+	   dominated by whatever the connection happened to cost - the first request
+	   after an idle period pays DNS and TLS setup and can read 300ms while every
+	   later one is 40ms, which says nothing about the cache. Alternating also
+	   cancels any drift in the network between the two halves. */
 	await fetch(base + "/nametags");
-	const warm = await timeIt(() => fetch(base + "/nametags"));
-	const cold = await timeIt(() => fetch(base + "/nametags?fresh=1"));
-	console.log("     warm /nametags " + warm.ms + "ms · fresh /nametags?fresh=1 " + cold.ms + "ms (always upstream)");
-	ok("a repeat read is cheap, so clients are not hammering GitHub", warm.ms <= cold.ms || warm.ms < 150, warm.ms + "ms vs " + cold.ms + "ms");
+	const warm = [], cold = [];
+	for (let i = 0; i < 5; i++) {
+		warm.push((await timeIt(() => fetch(base + "/nametags"))).ms);
+		cold.push((await timeIt(() => fetch(base + "/nametags?fresh=1"))).ms);
+	}
+	const median = a => a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)];
+	const warmMed = median(warm), coldMed = median(cold);
+	console.log("     cached   /nametags         " + warm.join(" ") + " ms (median " + warmMed + ")");
+	console.log("     upstream /nametags?fresh=1 " + cold.join(" ") + " ms (median " + coldMed + ")");
+	ok("a repeat read is served from the edge cache, not refetched upstream",
+		warmMed <= coldMed || warmMed < 120, "medians " + warmMed + "ms vs " + coldMed + "ms");
 
 	/* --------------------------------------------------------- publishing */
 	group("publishing through the API");
