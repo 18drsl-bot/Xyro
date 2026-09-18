@@ -110,6 +110,8 @@ global.fetch = async (url, init) => {
 		return new Response(JSON.stringify({ access_token: "sa-token-" + tokenCalls, expires_in: 3600 }), { status: 200 });
 	}
 	if (u.hostname === "api.github.com") {
+		const auth = (init && init.headers && (init.headers.authorization || init.headers.Authorization)) || "";
+		if (auth === "Bearer bad-token") return new Response('{"message":"Bad credentials"}', { status: 401 });
 		const name = decodeURIComponent(u.pathname.replace("/repos/vertxxy-1/Xyro/contents/", ""));
 		if (method === "PUT") {
 			if (githubConflict) return new Response('{"message":"nametags.json does not match " + "' + githubSha + '"}', { status: 409 });
@@ -484,6 +486,43 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("health says publishing is off without a repo token", /unavailable/.test(json.nametags.publish || ""), json.nametags.publish);
 	json = await body(await call("/health", { env: { GH_TOKEN: "gh-read-token" } }));
 	ok("health says publishing is on with one", /PUT \/nametags/.test(json.nametags.publish || ""), json.nametags.publish);
+
+	/* --- publishing from the editor: the sha, the check, the lesser key --- */
+
+	/* the editor needs the blob sha to publish safely, and a browser can only
+	   read a custom header when the response exposes it */
+	res = await call("/nametags?fresh=1", { env: { GH_TOKEN: "gh-read-token" } });
+	ok("a token-backed read carries the blob sha", !!res.headers.get("x-xyro-sha"), String(res.headers.get("x-xyro-sha")));
+	ok("the sha header is readable cross-origin", /x-xyro-sha/.test(res.headers.get("access-control-expose-headers") || ""), res.headers.get("access-control-expose-headers"));
+	res = await call("/nametags?fresh=1");
+	ok("with no repo token there is simply no sha to send back", !res.headers.get("x-xyro-sha"), String(res.headers.get("x-xyro-sha")));
+
+	// POST /nametags/check is the editor's "Save & test"
+	res = await call("/nametags/check", { method: "POST", env: WITH_KEYS });
+	ok("the publish check needs the owner key", res.status === 403, "got " + res.status);
+	res = await call("/nametags/check", { method: "POST", env: { ...WITH_KEYS, XYRO_ADMIN_KEY: "" } });
+	ok("and fails closed with no publish key configured", res.status === 503, "got " + res.status);
+	res = await call("/nametags/check", { method: "POST", env: WITH_KEYS, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("it names the missing repo token instead of a generic failure", res.status === 503 && json.reason === "no_gh_token" && /GH_TOKEN/.test(json.error || ""), res.status + " " + JSON.stringify(json));
+	res = await call("/nametags/check", { method: "POST", env: OWNER, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("with everything in place it reports the current file sha", res.status === 200 && json.ok === true && json.sha === githubSha, res.status + " " + JSON.stringify(json));
+	res = await call("/nametags/check", { method: "POST", env: { ...WITH_KEYS, GH_TOKEN: "bad-token" }, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("a token GitHub refuses is reported, not hidden", res.status === 502 && json.reason === "github" && /Contents: Read and write/.test(json.error || ""), res.status + " " + JSON.stringify(json));
+
+	// a lesser key that can publish and nothing else
+	const PUBLISHER = { XYRO_ADMIN_KEY: "owner", XYRO_PUBLISH_KEY: "publisher", GH_TOKEN: "gh-write-token" };
+	githubPuts.length = 0;
+	res = await call("/nametags", { method: "PUT", body: '{"options":{},"tags":[]}', env: PUBLISHER, headers: { "x-api-key": "publisher" } });
+	ok("XYRO_PUBLISH_KEY can publish", res.status === 200 && (await body(res)).ok === true, "got " + res.status);
+	res = await call("/nametags", { method: "PUT", body: '{"options":{},"tags":[]}', env: PUBLISHER, headers: { "x-api-key": "sekret" } });
+	ok("...but the client key still cannot", res.status === 403, "got " + res.status);
+	res = await call("/gate/off", { method: "POST", body: "nope", env: PUBLISHER, headers: { "x-api-key": "publisher" } });
+	ok("and it cannot trip the kill switch", res.status === 403, "got " + res.status);
+	json = await body(await call("/health", { env: PUBLISHER }));
+	ok("health mentions the publish-only key", /publish-only key/.test(json.nametags.publish || ""), json.nametags.publish);
 
 	/* --- failure modes -------------------------------------------------- */
 	dbDenied = true;

@@ -128,12 +128,15 @@ const gh = {
    both of these, so the test drives them the way a deploy would. */
 let apiJson = '{"api":{"url":"","key":""}}';
 let apiDown = false;
+let apiNoToken = false; // a Worker deployed without GH_TOKEN: reads fine, writes 503
+let apiPuts = 0; // publishes that went through the API (not GitHub)
+const OWNER_KEY = "owner-secret";
 
 const calls = [];
 global.fetch = async (url, init) => {
 	const u = new URL(url);
 	const method = (init && init.method) || "GET";
-	calls.push({ url: u, method });
+	calls.push({ url: u, method, headers: init && init.headers, body: init && init.body });
 	if (u.hostname === "api.github.com") {
 		if (u.pathname.endsWith("/contents/nametags.json")) {
 			if (method === "PUT") {
@@ -152,7 +155,22 @@ global.fetch = async (url, init) => {
 	}
 	if (u.hostname === "api.example") {
 		if (apiDown) return new Response('{"error":"boom"}', { status: 500 });
-		if (u.pathname === "/nametags") return new Response(text(gh.file), { status: 200 });
+		const apiKey = (init && init.headers && init.headers["x-api-key"]) || "";
+		if (u.pathname === "/nametags/check") {
+			if (apiKey !== OWNER_KEY) return new Response('{"error":"forbidden: this route needs the owner key"}', { status: 403 });
+			if (apiNoToken) return new Response('{"ok":false,"reason":"no_gh_token","error":"the Worker has no GH_TOKEN"}', { status: 503 });
+			return new Response(JSON.stringify({ ok: true, sha: gh.sha() }), { status: 200 });
+		}
+		if (u.pathname === "/nametags") {
+			if (method === "PUT") {
+				if (apiKey !== OWNER_KEY) return new Response('{"error":"forbidden: this route needs the owner key"}', { status: 403 });
+				if (apiNoToken) return new Response('{"error":"publishing through the API needs GH_TOKEN"}', { status: 503 });
+				// the Worker commits the body verbatim, and drops its cache
+				gh.file = JSON.parse(init.body);
+				return new Response(JSON.stringify({ ok: true, sha: "api-sha-" + ++apiPuts }), { status: 200 });
+			}
+			return new Response(text(gh.file), { status: 200, headers: { "x-xyro-sha": gh.sha() } });
+		}
 		if (u.pathname.startsWith("/media/")) {
 			return new Response("PNG:" + u.pathname.split("/").pop(), { status: 200, headers: { "content-type": "image/png" } });
 		}
@@ -319,7 +337,56 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("...while artwork still comes from the reachable API", /^https:\/\/api\.example\/media\//.test(el("edBadgeCheck").src), el("edBadgeCheck").src);
 	apiDown = false;
 
-	/* --- 6. structural invariants --------------------------------------- */
+	/* --- 6. publishing through the API with an owner key ----------------- */
+
+	apiJson = '{"api":{"url":"https://api.example","key":"pub-key"}}';
+	localStorage.setItem("xyro_owner_key", OWNER_KEY);
+	localStorage.setItem("xyro_token", "github_pat_test"); // both available: the API must win
+	calls.length = 0;
+	apiPuts = 0;
+	const apiPub = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle();
+	ok("with a key saved the chip promises the API route", el("tokenChip").textContent === "publish: API", el("tokenChip").textContent);
+	ok("...and the owner card reports the key", el("ownerState").textContent === "key saved", el("ownerState").textContent);
+
+	const shaAtReadTime = gh.sha();
+	const githubPutsBefore = gh.puts;
+	apiPub.cfg = { options: { ...apiPub.cfg.options, size: 61 }, tags: apiPub.cfg.tags.map(t => (t.match === "*" ? { ...t, label: "via api" } : t)) };
+	await apiPub.publish();
+	const putCall = calls.find(c => c.url.hostname === "api.example" && c.method === "PUT");
+	ok("Publish went to the API, not GitHub", !!putCall && gh.puts === githubPutsBefore, "api puts " + apiPuts + ", github puts " + (gh.puts - githubPutsBefore));
+	ok("...carrying the owner key", !!putCall && putCall.headers && putCall.headers["x-api-key"] === OWNER_KEY, JSON.stringify(putCall && putCall.headers));
+	ok("...and the sha of the file it read, so a stale write is refused rather than clobbering",
+		!!putCall && putCall.url.searchParams.get("sha") === shaAtReadTime, putCall && putCall.url.search);
+	ok("the file holds the change", gh.file.options.size === 61 && gh.file.tags.some(t => t.label === "via api"), JSON.stringify(gh.file.options));
+	ok("the editor kept it", apiPub.cfg.options.size === 61, String(apiPub.cfg.options.size));
+	ok("the sha comes back from the API", apiPub.liveSha === "api-sha-1", String(apiPub.liveSha));
+	ok("a publish guard was armed for its own echo", !!apiPub.publishGuard, "");
+	ok("and the status says which route published it", /published through the API/.test(el("status").textContent), el("status").textContent);
+
+	// Save & test: a refused key must not be kept
+	calls.length = 0;
+	el("ownerKey").value = "wrong-key";
+	await el("saveOwner").onclick();
+	ok("Save & test asks the Worker's check route", calls.some(c => c.url.pathname === "/nametags/check" && c.method === "POST"), calls.map(c => c.method + " " + c.url.pathname).join(", "));
+	ok("a refused owner key is not saved", localStorage.getItem("xyro_owner_key") === OWNER_KEY && /refused that key/.test(el("status").textContent), el("status").textContent);
+
+	// a Worker that cannot publish should say so rather than fail silently
+	apiNoToken = true;
+	el("ownerKey").value = OWNER_KEY;
+	await el("saveOwner").onclick();
+	ok("a Worker without GH_TOKEN explains what is missing", /cannot publish/.test(el("status").textContent) && /GH_TOKEN/.test(el("status").textContent), el("status").textContent);
+	ok("...and still keeps the key, so it works the moment GH_TOKEN is set", localStorage.getItem("xyro_owner_key") === OWNER_KEY, "");
+
+	// an API that can read but not write: the GitHub token still gets it done
+	apiPub.cfg = { options: { ...apiPub.cfg.options, size: 77 }, tags: apiPub.cfg.tags };
+	const putsBeforeFallback = gh.puts;
+	await apiPub.publish();
+	ok("an API that cannot publish falls back to the GitHub token", gh.puts === putsBeforeFallback + 1 && gh.file.options.size === 77, "github puts " + (gh.puts - putsBeforeFallback) + ", size " + gh.file.options.size);
+	apiNoToken = false;
+	localStorage.removeItem("xyro_owner_key");
+
+	/* --- 7. structural invariants --------------------------------------- */
 
 	ok("the publish verifies itself against the API", script.includes("const landed = check ? canonJSON(asConfig(check.config)) === canonJSON(wanted) : null;") && script.includes('status("published, but GitHub'), "");
 	ok("a verified publish says so", script.includes('status("published and checked against the file"'), "");
@@ -336,6 +403,11 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("and gets tag artwork from the same origin", /function mediaURL\(file\)/.test(script) && script.includes('NT_BASE + "/media/"'), "");
 	ok("no hardcoded jsDelivr media URL is left in the editor", !/cdn\.jsdelivr\.net\/gh\/vertxxy-1\/Xyro@main\/media/.test(script), "");
 	ok("a publish does not purge a CDN the API clients never read", /if \(!NT_BASE\) \{/.test(script) && /the API serves it, so every client is current/.test(script), "");
+	ok("publishing prefers the API whenever a key is saved", script.includes("if (getOwnerKey() && NT_BASE) {") && /async function publishThroughApi\(\)/.test(script), "");
+	ok("the API publish sends the blob sha back", script.includes('remote.sha ? "?sha=" + encodeURIComponent(remote.sha)'), "");
+	ok("and proves itself with a read-back, like the GitHub path", /const landed = check \? canonJSON\(asConfig\(check\)\)/.test(script), "");
+	ok("the owner key has its own card, input and test button", html.includes('id="ownerCard"') && html.includes('id="ownerKey"') && html.includes('id="saveOwner"') && html.includes('id="forgetOwner"'), "");
+	ok("the owner key is a separate credential from the GitHub token", /const LS_OWNER = "/.test(script) && !/localStorage\.setItem\(LS_TOKEN, v\);[\s\S]{0,80}LS_OWNER/.test(script), "");
 
 	console.log("\n" + (failures.length ? failures.length + " FAILED" : pass + " checks passed") + (failures.length ? " (" + pass + " passed)" : ""));
 	process.exit(failures.length ? 1 : 0);

@@ -207,6 +207,25 @@ ok("the editor tries the API before raw/CDN for a read",
 ok("and waits for api.json before the first read, so boot is not a GitHub read",
 	/await apiReady;/.test(html) && /const apiReady = \(async function followApi\(\)/.test(html), "");
 
+/* ---------------------- publishing: the editor and the Worker agree ------ */
+
+/* The sha header is the contract that makes a publish safe: if one side renames
+   it, the editor silently publishes WITHOUT the sha and a stale tab starts
+   clobbering newer revisions again - the failure is invisible until someone
+   loses an edit. */
+ok("the API returns the blob sha as x-xyro-sha", worker.includes('"x-xyro-sha": file.sha'), "");
+ok("...and exposes it to the browser", worker.includes('"access-control-expose-headers": "x-xyro-sha'), "");
+ok("the editor reads the same header name", html.includes('res.headers.get("x-xyro-sha")'), "");
+ok("the editor sends it back as ?sha=", html.includes('"?sha=" + encodeURIComponent(remote.sha)'), "");
+ok("the Worker honours that sha (GitHub 409s a stale write)", worker.includes('url.searchParams.get("sha")') && /put\.status === 409 \? 409 : 502/.test(worker), "");
+ok("the editor asks /nametags/check before trusting a key", html.includes('"/nametags/check"') && worker.includes('path === "/nametags/check"'), "");
+ok("the Worker's check route changes nothing", /async function checkPublishReady\(env\)/.test(worker) && !/fb\(env/.test(block(worker, "async function checkPublishReady", "\n}\n\n/** PUT /nametags")), "");
+ok("a publish key is accepted besides the owner key", /function publishKeyResponse\(req, url, env\)/.test(worker) && worker.includes("env.XYRO_PUBLISH_KEY"), "");
+/* the publish-only key must NOT be a second admin key */
+ok("the publish key is not wired into the admin routes",
+	!/function adminKeyResponse[\s\S]{0,400}XYRO_PUBLISH_KEY/.test(worker),
+	"XYRO_PUBLISH_KEY leaked into adminKeyResponse");
+
 /* ---------------------------- one presence window, three implementations --- */
 
 /* If these drift, a player is "online" in one place and gone in another, and

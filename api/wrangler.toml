@@ -24,6 +24,12 @@ LOADER_FILE = "custom-loader.lua"
 #                                             # (paste the whole key file - see
 #                                             # api/README.md section 4)
 #   npx wrangler secret put FB_SECRET         # legacy alternative to the above
+#   npx wrangler secret put XYRO_PUBLISH_KEY  # optional: a lesser key that can
+#                                             # publish tag rules and nothing else.
+#                                             # Set it if you would rather the key
+#                                             # saved in the editor could not also
+#                                             # trip the kill switch or edit the
+#                                             # blacklist (api/README.md section 7).
 #   npx wrangler secret put GH_TOKEN          # fine-grained repo token with
 #                                             # Contents: Read and write. Optional:
 #                                             # it makes the tag rules read straight

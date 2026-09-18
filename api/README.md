@@ -48,11 +48,12 @@ npx wrangler secret put XYRO_ADMIN_KEY  # the OWNER key: you + your Discord bot 
 npx wrangler secret put FB_SECRET       # optional; skip if your rules are open
 ```
 
-Two more secrets are optional, and each unlocks one thing:
+Optional, and each unlocks one thing:
 
 ```bash
 npx wrangler secret put FB_SERVICE_ACCOUNT  # lets the Worker write staff/gate (section 4)
 npx wrangler secret put GH_TOKEN            # lets it read + publish nametags.json (section 7)
+npx wrangler secret put XYRO_PUBLISH_KEY    # optional lesser key: publish rules ONLY (section 7)
 ```
 
 `GH_TOKEN` is a **fine-grained GitHub token with Contents: Read and write** on
@@ -67,8 +68,11 @@ repo, so treat it as public: it can read, heartbeat and enqueue commands, and
 nothing else. `XYRO_ADMIN_KEY` never leaves your machine, and it is the only
 thing that can write the blacklist or trip the kill switch — otherwise the key
 every player can extract would also let them block a rival or shut everyone down.
+`XYRO_PUBLISH_KEY` is optional and sits between them: it can publish tag rules
+and *nothing else*, so if you would rather the key you save in a browser could
+not also shut the script down for everyone, set it and use that in the editor.
 
-`fb/worker.js` reads `FB_URL` and `RAW_REPO` from `wrangler.toml`, which is
+`api/worker.js` reads `FB_URL` and `RAW_REPO` from `wrangler.toml`, which is
 committed. That is deliberate: the database URL is already public in
 `firebase.json`, so it is not a secret — the *credential* is, and that lives in
 the secret store. If your database URL ever changes, edit `[vars]` in
@@ -395,7 +399,10 @@ maintenance everyone should still be able to read the rules.
 ### Publishing through the API (optional)
 
 Set `GH_TOKEN` (fine-grained token, **Contents: Read and write** on this repo)
-and the editor can publish without a GitHub login in the browser:
+and the tag editor can publish without a GitHub login in the browser. In the
+editor, open the **Publish through the Xyro API** card, paste your owner key and
+press **Save & test** — from then on **Publish** goes through the Worker and the
+header chip reads `publish: API`. The same thing by hand:
 
 ```bash
 curl -X PUT https://xyro-api.<you>.workers.dev/nametags \
@@ -403,16 +410,29 @@ curl -X PUT https://xyro-api.<you>.workers.dev/nametags \
   --data-binary @nametags.json
 ```
 
-* It needs **both** keys in a sense: `XYRO_ADMIN_KEY` proves it is you,
-  `GH_TOKEN` is what makes the commit possible. With no `GH_TOKEN` the route
-  answers `503` and says so rather than pretending.
-* A stale editor can send `?sha=<blob sha>`; GitHub then refuses the write with
-  `409` instead of silently overwriting a newer revision. Without it, the Worker
-  reads the current sha first — an explicit overwrite.
-* A successful publish deletes this Worker's cached copies of the rules, so the
-  next reader gets the new revision rather than up to 30 seconds of the old one.
+How the editor uses it:
+
+* **Save & test** calls `POST /nametags/check`. That route changes nothing and
+  answers the two things that actually block a publish: whether the key is
+  accepted, and whether the Worker holds a usable `GH_TOKEN`. A `503` there
+  means the key is fine but the deploy-time secret is missing, and the editor
+  keeps the key and tells you exactly that.
+* Publishing reads `GET /nametags?fresh=1` first, which returns the rules *and*
+  the blob sha as `x-xyro-sha` (exposed for the browser). It sends that sha back
+  as `?sha=`, so a tab that was open while someone else published is refused
+  with `409` and merges instead of silently overwriting the newer revision.
+* It needs `XYRO_ADMIN_KEY` **or** `XYRO_PUBLISH_KEY` — the key proves it is
+  you, `GH_TOKEN` is what makes the commit possible. With no `GH_TOKEN` the
+  route answers `503` and says so rather than pretending.
+* A successful publish commits to `nametags.json` and deletes this Worker's
+  cached copies of the rules, so the next reader gets the new revision rather
+  than up to 30 seconds of the old one. The editor then reads the file back and
+  tells you whether it landed, exactly like the GitHub path.
 * `GH_TOKEN` can write to your repo, so it belongs in the secret store and
   nowhere else — never in `wrangler.toml`, never in `api.json`.
+* The owner key *is* stored in your browser (that is what makes publishing
+  painless). Use it on your own machine; a publish-only `XYRO_PUBLISH_KEY`
+  limits what a leak of it could do.
 
 ## 8. Routes
 
@@ -429,7 +449,8 @@ curl -X PUT https://xyro-api.<you>.workers.dev/nametags \
 | `/version` | GET | if gated | `version.txt` from the repo (edge-cached 60s) |
 | `/nametags` | GET | no | the published tag rules (edge-cached 30s; `?fresh=1` bypasses) |
 | `/nametags.json` `/config` | GET | no | the same bytes under the older names |
-| `/nametags` | PUT/POST | **admin** + `GH_TOKEN` | publish the rules: commits `nametags.json`, drops the cache, returns the new sha |
+| `/nametags` | PUT/POST | **owner** + `GH_TOKEN` | publish the rules: commits `nametags.json`, drops the cache, returns the new sha |
+| `/nametags/check` | POST | **owner** | "can this Worker publish?" — proves the key and the repo token, changes nothing |
 | `/media/<file>` | GET | no | seals, the verified badge and any other tag artwork (edge-cached 300s; `?fresh=1` bypasses) |
 | `/online` | GET | if gated | presence: `{count, online[], beats{}, window}` |
 | `/staff` | GET | if gated | the whole `staff` node |
@@ -492,6 +513,9 @@ bulk of the traffic — a full lobby for an evening is far inside the free tier.
 | `/nametags` answers `502 ... is not {options, tags[]}` | The file on GitHub is not the expected shape (a half-finished edit, or the wrong file). It refuses rather than serving half a rule set to every client. |
 | `/media/...` answers `404` | The filename is missing from the repo, or its extension is not a whitelisted image/audio type. Path segments are not allowed. |
 | `503 ... needs GH_TOKEN` on `PUT /nametags` | Expected: publishing through the API is off until you set that secret. Reads are unaffected. |
+| The editor says *the API refused that key* | The saved key is neither this Worker's `XYRO_ADMIN_KEY` nor its `XYRO_PUBLISH_KEY`. Paste the right one, or forget it and use a GitHub token. |
+| The editor says *the Worker still cannot publish* | The key is accepted; `GH_TOKEN` is missing on the Worker. `npx wrangler secret put GH_TOKEN` (no redeploy needed) and press Save & test again. |
+| A publish comes back `409` | Someone else published while your tab was open. Nothing was overwritten — the editor refreshes so you can merge. |
 | Tag changes take up to 30s to reach running clients | The Worker's edge cache. `?fresh=1` on a manual read bypasses it, and publishing through the API clears it outright. |
 | Script footer says `mode firebase` while you expect `api` | Three API calls in a row failed and the client demoted itself to the direct path. The footer also names the reason (`transport.lastPollErr`). |
 | Editor still shows the old live-users behaviour | `index.html` is edge-cached by GitHub Pages for ~10 minutes — hard-refresh (Ctrl+Shift+R). |

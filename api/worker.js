@@ -34,7 +34,8 @@
  *      GET    /nametags                      -> the published tag rules
  *      GET    /nametags.json, /config        -> aliases for the same bytes
  *      GET    /media/<file>                  -> seals, verified badge, artwork
- *      PUT    /nametags                      (admin key + GH_TOKEN) publish them
+ *      PUT    /nametags                      (owner key + GH_TOKEN) publish them
+ *      POST   /nametags/check                (owner key) can this Worker publish?
  *    The rules are public and ungated on purpose (the editor has no key, and
  *    the file is public in the repo anyway); publishing is owner-only, and a
  *    stale editor can send ?sha= so GitHub rejects it rather than clobbering a
@@ -140,6 +141,10 @@ function corsHeaders(env) {
 		"access-control-allow-headers": "content-type,x-api-key",
 		"access-control-allow-methods": "GET,PUT,POST,DELETE,OPTIONS",
 		"access-control-max-age": "86400",
+		// a browser can only READ a custom header if it is exposed. The editor
+		// needs x-xyro-sha to publish safely (it goes back as ?sha= so GitHub
+		// refuses a stale write instead of overwriting a newer revision).
+		"access-control-expose-headers": "x-xyro-sha,x-xyro-source,x-xyro-bytes",
 	};
 }
 
@@ -608,7 +613,7 @@ ${row("Players running now", String(online))}
 ${version ? row("Script version", esc(version)) : ""}
 ${row("Reads", env.XYRO_KEY ? "key required" : "open")}
 ${row("Nametags", `served here \u00b7 <a href="/nametags">/nametags</a> + <code>/media/*</code>`)}
-${row("Publishing tags", env.GH_TOKEN ? `${dot(true)}through this API (admin key required)` : `${dot(false)}unavailable - set GH_TOKEN`)}
+${row("Publishing tags", env.GH_TOKEN ? `${dot(true)}through this API ${env.XYRO_PUBLISH_KEY ? "(publish-only key set)" : "(owner key)"}` : `${dot(false)}unavailable - set GH_TOKEN`)}
 <footer>
 Machine-readable: <a href="/health">/health</a> \u00b7 script: <code>/script</code> \u00b7 loader to hand out: <code>/loader</code> \u00b7 tag rules: <a href="/nametags">/nametags</a> \u00b7 this page refreshes every 30s
 </footer>
@@ -724,7 +729,15 @@ async function serveNametags(env, ctx, url) {
 		if (!parsed || !Array.isArray(parsed.tags) || !parsed.options || typeof parsed.options !== "object") {
 			throw new ApiError(502, NAMETAGS_FILE + " is not {options, tags[]} (served " + body.length + " bytes)");
 		}
-		return body;
+		// The blob sha, when the read went through the GitHub API: the editor
+		// sends it back on a publish so a stale tab cannot clobber a newer
+		// revision. Absent on the raw path, which is why `PUT` falls back to
+		// reading the current sha itself.
+		return {
+			body,
+			contentType: "application/json; charset=utf-8",
+			headers: file.sha ? { "x-xyro-sha": file.sha } : {},
+		};
 	});
 }
 
@@ -767,6 +780,67 @@ function toBase64(bytes) {
 		bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
 	}
 	return btoa(bin);
+}
+
+/** Owner-or-publisher key check for the nametag write routes.
+ *
+ *  The ADMIN key always works. A second, lesser secret - XYRO_PUBLISH_KEY -
+ *  also works, and can do *only* this: publishing tag rules. That exists
+ *  because the admin key also trips the kill switch and edits the blacklist,
+ *  and this key ends up saved in a browser; if you would rather a leaked
+ *  browser key could not shut the script down for everyone, set
+ *  XYRO_PUBLISH_KEY and put that in the editor instead. */
+function publishKeyResponse(req, url, env) {
+	const supplied = keyOf(req, url);
+	if (env.XYRO_ADMIN_KEY && safeEqual(supplied, env.XYRO_ADMIN_KEY)) return null;
+	if (env.XYRO_PUBLISH_KEY && safeEqual(supplied, env.XYRO_PUBLISH_KEY)) return null;
+	if (!env.XYRO_ADMIN_KEY && !env.XYRO_PUBLISH_KEY) {
+		return json(env, { error: "no publish key configured - set XYRO_ADMIN_KEY (owner) or XYRO_PUBLISH_KEY (publish only)" }, 503);
+	}
+	return json(env, { error: "forbidden: this route needs the owner key" }, 403);
+}
+
+/** POST /nametags/check - the editor's "Save & test" for the owner key.
+ *
+ *  Changes nothing. It answers two questions a key check alone cannot: is this
+ *  key accepted, and can this Worker actually reach the repo with its own
+ *  GH_TOKEN. A fine-grained token that is read-only passes the read below and
+ *  fails at publish time - the message says so rather than pretending. */
+async function checkPublishReady(env) {
+	if (!env.GH_TOKEN) {
+		return json(env, {
+			ok: false,
+			reason: "no_gh_token",
+			error: "the Worker has no GH_TOKEN, so it cannot publish - set that secret and redeploy (api/README.md section 7)",
+		}, 503);
+	}
+	const ref = repoRef(env);
+	try {
+		const res = await fetch("https://api.github.com/repos/" + ref.owner + "/" + ref.repo + "/contents/" + NAMETAGS_FILE +
+			"?ref=" + ref.branch + "&t=" + Date.now(), {
+			headers: {
+				authorization: "Bearer " + env.GH_TOKEN,
+				accept: "application/vnd.github+json",
+				"user-agent": "xyro-api",
+			},
+		});
+		if (!res.ok) {
+			return json(env, {
+				ok: false,
+				reason: "github",
+				error: "GitHub refused this Worker's GH_TOKEN (" + res.status + ") - it needs Contents: Read and write on " + ref.owner + "/" + ref.repo,
+			}, 502);
+		}
+		const data = await res.json();
+		return json(env, {
+			ok: true,
+			sha: data && data.sha ? data.sha : "",
+			bytes: data && data.size ? data.size : 0,
+			note: "a read-only token gets this far and is refused on the first publish",
+		});
+	} catch (err) {
+		return json(env, { ok: false, reason: "network", error: "could not reach GitHub: " + (err && err.message ? err.message : String(err)) }, 502);
+	}
 }
 
 /** PUT /nametags - publish the rules THROUGH this Worker, so the editor no
@@ -843,7 +917,11 @@ async function publishNametags(env, req, url) {
 }
 
 /** Edge-cached GET. Cloudflare's cache is keyed on the URL, and `?fresh=1`
- *  bypasses it entirely (raw GitHub alone edge-caches for minutes). */
+ *  bypasses it entirely (raw GitHub alone edge-caches for minutes).
+ *
+ *  produce() may return the body directly, or `{ body, contentType, headers }`
+ *  when the response needs headers only it can know (the nametags route adds
+ *  the blob sha that way). */
 async function cached(env, ctx, url, ttl, contentType, produce) {
 	const fresh = url.searchParams.has("fresh");
 	const canCache = typeof caches !== "undefined" && caches.default && !fresh;
@@ -852,10 +930,14 @@ async function cached(env, ctx, url, ttl, contentType, produce) {
 		const hit = await caches.default.match(cacheKey);
 		if (hit) return hit;
 	}
-	const body = await produce();
-	const res = new Response(body, {
+	const out = await produce();
+	const spec = out && typeof out === "object" && !ArrayBuffer.isView(out) && !(out instanceof ArrayBuffer) && "body" in out
+		? out
+		: { body: out };
+	const res = new Response(spec.body, {
 		headers: {
-			"content-type": contentType,
+			"content-type": spec.contentType || contentType,
+			...(spec.headers || {}),
 			...corsHeaders(env),
 			"cache-control": fresh ? "no-store" : "public, max-age=" + ttl,
 		},
@@ -864,7 +946,7 @@ async function cached(env, ctx, url, ttl, contentType, produce) {
 		// Storing the response itself (not a clone) is fine - the caller gets the
 		// same bytes, and the copy in the cache is keyed by path alone, so the
 		// key never leaks into a shared cache entry.
-		ctx.waitUntil(caches.default.put(cacheKey, new Response(body, res)));
+		ctx.waitUntil(caches.default.put(cacheKey, new Response(spec.body, res)));
 	}
 	return res;
 }
@@ -892,7 +974,10 @@ async function health(env, url) {
 			rules: "GET /nametags (aliases /nametags.json, /config)",
 			media: "GET /media/<file>",
 			read_source: env.GH_TOKEN ? "github api (never cached)" : "raw, cache-busted",
-			publish: env.GH_TOKEN ? "PUT /nametags with the admin key" : "unavailable (set GH_TOKEN)",
+			publish: env.GH_TOKEN
+				? (env.XYRO_PUBLISH_KEY ? "PUT /nametags (owner key or publish-only key)" : "PUT /nametags (owner key)")
+				: "unavailable (set GH_TOKEN)",
+			check: "POST /nametags/check (owner key)",
 		},
 	});
 }
@@ -991,8 +1076,14 @@ async function handle(req, env, ctx) {
 	if ((path === "/nametags" || path === "/nametags.json" || path === "/config") && req.method === "GET") {
 		return serveNametags(env, ctx, url);
 	}
+	if (path === "/nametags/check" && (req.method === "POST" || req.method === "GET")) {
+		const denied = publishKeyResponse(req, url, env);
+		if (denied) return denied;
+		return checkPublishReady(env);
+	}
 	if (path === "/nametags" && (req.method === "PUT" || req.method === "POST")) {
-		const denied = adminKeyResponse(req, url, env);
+		// the admin key OR the publish-only key - see publishKeyResponse
+		const denied = publishKeyResponse(req, url, env);
 		if (denied) return denied;
 		if (writeThrottled(req)) return json(env, { error: "too many writes, slow down" }, 429);
 		return publishNametags(env, req, url);

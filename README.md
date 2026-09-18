@@ -121,7 +121,10 @@ your PC; publish straight from that page.
 It reads the rules and the tag artwork through the **Xyro API** when one is
 configured (`GET /nametags`, `GET /media/<file>`), which is the file rather than a
 CDN's memory of it - so "the site does not match nametags.json" cannot happen from a
-stale cache, and no GitHub token or rate-limit budget is involved. With no `api.json`
+stale cache, and no GitHub token or rate-limit budget is involved. With a publish key
+saved in the **Publish through the Xyro API** card, **Publish** writes through your
+Worker too: no GitHub login, a stale tab is refused instead of clobbering a newer
+revision, and the Worker drops its cache as part of the write. With no `api.json`
 it falls back to the Contents API (never cached) and treats the raw copy as a hint
 only. After a publish it reads the file back and says so - "published and checked
 against the file (sha abc1234)" - and if GitHub reports something different it says

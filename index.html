@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r6</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r7</span>
 		<span class="chip" id="tokenChip" title="token status">no token</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules now (through the API when one is configured, otherwise straight from GitHub)">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -387,6 +387,29 @@
 		<div class="row" style="margin-top:12px">
 			<button id="saveToken" class="ghost">Save &amp; test</button>
 			<button id="forgetToken" class="subtle">Forget</button>
+		</div>
+	</div>
+
+	<div class="card" id="ownerCard">
+		<h2><span class="hl">Publish through the Xyro API</span> <span class="chip" id="ownerState">not set</span></h2>
+		<label>Owner key &mdash; the Worker's <b>XYRO_ADMIN_KEY</b>, or a publish-only <b>XYRO_PUBLISH_KEY</b></label>
+		<div class="tokenwrap">
+			<input id="ownerKey" type="password" placeholder="paste the key here, then Save &amp; test" autocomplete="off">
+			<button class="subtle" id="ownerPeek" title="show/hide">&#128065;</button>
+		</div>
+		<div class="hint">
+			With a key saved, <b>Publish</b> writes through your Cloudflare Worker instead of GitHub: no GitHub
+			login in the browser, no API rate limit, and the Worker drops its own cache as part of the write, so the
+			change is live at once. It also refuses a stale publish (someone else editing meanwhile) instead of
+			overwriting them. The Worker needs one deploy-time secret for this: <b>GH_TOKEN</b>, a fine-grained repo
+			token with <b>Contents: Read and write</b> &mdash; see <b>api/README.md</b> section 7.<br>
+			The admin key can also trip the kill switch and edit the blacklist, and this one lives in your browser.
+			If you would rather it could do nothing but publish, set a separate <b>XYRO_PUBLISH_KEY</b> on the Worker
+			and paste that here instead. Either way it is a password: use it on your own machine.
+		</div>
+		<div class="row" style="margin-top:12px">
+			<button id="saveOwner" class="ghost">Save &amp; test</button>
+			<button id="forgetOwner" class="subtle">Forget</button>
 		</div>
 	</div>
 
@@ -612,6 +635,10 @@ const REPO = "vertxxy-1/Xyro";
 const PATH = "nametags.json";
 const API = "https://api.github.com/repos/" + REPO + "/contents/" + PATH;
 const LS_TOKEN = "xyro_token";
+/* the key that lets this page publish through the API instead of GitHub. It is
+   the Worker's owner key (or a publish-only key), so unlike the GitHub token it
+   is worth treating as a password - see the card that sets it. */
+const LS_OWNER = "xyro_owner_key";
 const LS_DRAFT = "xyro_draft_v2";
 const RAW = "https://raw.githubusercontent.com/" + REPO + "/main/" + PATH;
 /* live players now come from Firebase (here/<username> = unix seconds), the
@@ -661,6 +688,7 @@ const apiReady = (async function followApi() {
 		FB_STAFF = base + "/staff.json" + key;
 		console.info("[xyro] nametags, live users + staff via the Xyro API:", base);
 		applyMediaHosts();
+		refreshKeyChip(); // the chip says which route Publish will take, so it needs the base
 	} catch {}
 })();
 
@@ -689,6 +717,7 @@ function toast(msg, kind, secs) {
 }
 function status(msg, cls) { const s = $("status"); s.textContent = msg; s.className = cls || ""; }
 function getToken() { return localStorage.getItem(LS_TOKEN) || ""; }
+function getOwnerKey() { return localStorage.getItem(LS_OWNER) || ""; }
 
 function deepCopy(o) { return JSON.parse(JSON.stringify(o)); }
 function sameJSON(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
@@ -1415,13 +1444,28 @@ async function pollUsers() {
 setInterval(pollUsers, 20000);
 pollUsers();
 
-/* ---------- token ---------- */
+/* ---------- token + owner key ---------- */
+/* One place that decides what Publish will do, so the chip can never disagree
+   with the button: the API when a key is saved and an API is configured, else
+   GitHub with the token, else nothing. */
+function publishRoute() {
+	if (getOwnerKey() && NT_BASE) return "api";
+	if (getToken()) return "github";
+	return "none";
+}
+function refreshKeyChip() {
+	const hasKey = !!getOwnerKey();
+	$("ownerState").textContent = hasKey ? "key saved" : "not set";
+	$("ownerState").className = "chip" + (hasKey ? " on" : "");
+	const route = publishRoute();
+	$("tokenChip").textContent = route === "api" ? "publish: API" : route === "github" ? "publish: GitHub" : "no publish key";
+	$("tokenChip").className = "chip" + (route === "none" ? "" : " on");
+}
 function refreshTokenChip() {
 	const has = !!getToken();
-	$("tokenChip").textContent = has ? "token saved" : "no token";
-	$("tokenChip").className = "chip" + (has ? " on" : "");
 	$("tokenState").textContent = has ? "connected" : "not connected";
 	$("tokenState").className = "chip" + (has ? " on" : "");
+	refreshKeyChip();
 }
 $("peek").onclick = () => {
 	const f = $("token");
@@ -1465,7 +1509,64 @@ $("forgetToken").onclick = () => {
 	refreshTokenChip();
 	status("token forgotten", "info");
 };
-$("tokenChip").onclick = () => $("tokenCard").scrollIntoView({ behavior: "smooth" });
+$("tokenChip").onclick = () => $(publishRoute() === "api" ? "ownerCard" : "tokenCard").scrollIntoView({ behavior: "smooth" });
+
+$("ownerPeek").onclick = () => {
+	const f = $("ownerKey");
+	f.type = f.type === "password" ? "text" : "password";
+};
+/* Save & test asks the Worker (POST /nametags/check): it changes nothing and
+   answers the two things that actually block a publish - is the key accepted,
+   and does the Worker have a repo token at all. */
+$("saveOwner").onclick = async () => {
+	const v = $("ownerKey").value.trim();
+	if (!v) { toast("Paste the owner key first", "err"); return; }
+	if (!NT_BASE) {
+		status("no API is configured (api.json has no url) - there is nothing to publish through", "err");
+		toast("Set api.json's url first - see api/README.md", "err", 10);
+		return;
+	}
+	status("testing the owner key...", "info");
+	try {
+		const res = await fetch(stamp(NT_BASE + "/nametags/check" + (NT_KEY ? "?key=" + encodeURIComponent(NT_KEY) : "")), {
+			method: "POST",
+			headers: { "x-api-key": v },
+		});
+		const out = await res.json().catch(() => ({}));
+		if (res.status === 403) {
+			status("the API refused that key", "err");
+			toast("Wrong key. It has to match XYRO_ADMIN_KEY or XYRO_PUBLISH_KEY on the Worker.", "err", 12);
+			return;
+		}
+		if (res.status === 503) {
+			/* keep it: the key may be fine, the Worker just cannot publish yet */
+			localStorage.setItem(LS_OWNER, v);
+			$("ownerKey").value = "";
+			refreshKeyChip();
+			status("key saved - the Worker still cannot publish: " + (out.error || "set GH_TOKEN"), "err");
+			toast("Key saved. The Worker needs GH_TOKEN before it can publish (api/README.md section 7).", "err", 14);
+			return;
+		}
+		if (!res.ok || !out.ok) {
+			status("the API said: " + (out.error || res.status), "err");
+			toast("Could not verify publishing: " + (out.error || res.status), "err", 12);
+			return;
+		}
+		localStorage.setItem(LS_OWNER, v);
+		$("ownerKey").value = "";
+		refreshKeyChip();
+		status("owner key accepted - Publish now writes through the API" + (out.sha ? " (file " + String(out.sha).slice(0, 7) + ")" : ""), "ok");
+		toast("Ready - Publish goes through your API from now on", "ok");
+		refreshLive(false, { checkApi: true });
+	} catch (e) {
+		status("network error while testing the key: " + e, "err");
+	}
+};
+$("forgetOwner").onclick = () => {
+	localStorage.removeItem(LS_OWNER);
+	refreshKeyChip();
+	status(getToken() ? "owner key forgotten - Publish falls back to your GitHub token" : "owner key forgotten", "info");
+};
 
 /* ---------- load / publish ---------- */
 /* READING is raw-first: raw.githubusercontent carries no sha, but it is fresh
@@ -1741,11 +1842,124 @@ function mergeRemote(base, mine, theirs) {
 	return { options: mine.options || theirs.options, tags: out };
 }
 
+/* ---------- publishing through the API ---------- */
+/* Returns true when it handled the click - published, or stopped with a reason
+   the user needs to read - and false only when the API cannot publish at all
+   (no GH_TOKEN on the Worker, or it is unreachable), so the caller can fall
+   back to the GitHub token path. The whole point of the API route is that a
+   publish cannot be "undone" by a cache: the Worker drops its cached copy as
+   part of the write, so the very next reader - including this tab's own
+   verification - gets the new revision. */
+async function publishThroughApi() {
+	const ownerKey = getOwnerKey();
+	if (!ownerKey || !NT_BASE) return false;
+	if (live && sameJSON(cfg, live)) { toast("Nothing to publish - no changes"); return true; }
+	status("publishing through the API...", "info");
+	const keyQS = NT_KEY ? "&key=" + encodeURIComponent(NT_KEY) : "";
+	const readRules = async () => {
+		const res = await fetch(stamp(NT_BASE + "/nametags?fresh=1" + keyQS), { cache: "no-store" });
+		if (!res.ok) throw new Error("api " + res.status);
+		return { config: await res.json(), sha: res.headers.get("x-xyro-sha") || "" };
+	};
+	try {
+		/* One fresh read gives both the file and the blob sha the write needs.
+		   ?fresh=1 walks past the Worker's 30s edge cache, so this really is
+		   what is published right now. */
+		let remote;
+		try {
+			remote = await readRules();
+		} catch (e) {
+			status("the API could not read the rules (" + (e && e.message ? e.message : e) + ")", "err");
+			return !getToken();
+		}
+		if (live && !sameJSON(remote.config, live)) {
+			cfg = mergeRemote(live, cfg, remote.config);
+			renderOptions();
+			renderAll();
+			toast("Someone published while you were editing - your publish was merged with the latest rules", "info", 9);
+		}
+		if (sameJSON(cfg, remote.config)) {
+			live = deepCopy(cfg);
+			saveDraft();
+			$("draftBtn").classList.add("hidden");
+			status("nothing to publish - the file already has everything", "ok");
+			return true;
+		}
+		const beforePublish = deepCopy(live || { options: {}, tags: [] });
+		const wanted = { options: cfg.options, tags: cfg.tags };
+		if (!confirm("Publish through the API?\n\n" + publishSummary() +
+			"\n\nThe Worker commits it and drops its cache, so every client gets it within seconds.")) {
+			status("publish cancelled", "info");
+			return true;
+		}
+		/* ?sha= is what makes this safe against a concurrent publish: GitHub
+		   refuses a write whose sha is stale instead of overwriting it */
+		const putURL = stamp(NT_BASE + "/nametags" + (remote.sha ? "?sha=" + encodeURIComponent(remote.sha) : ""));
+		const put = await fetch(putURL, {
+			method: "PUT",
+			headers: { "x-api-key": ownerKey, "content-type": "application/json" },
+			body: JSON.stringify(wanted, null, "\t") + "\n",
+		});
+		if (put.status === 503) {
+			status("the API cannot publish yet - set GH_TOKEN on the Worker (api/README.md section 7)", "err");
+			return !getToken();
+		}
+		if (put.status === 403) {
+			status("the API refused the owner key", "err");
+			toast("That key is not accepted - check it against XYRO_ADMIN_KEY (or XYRO_PUBLISH_KEY) on the Worker.", "err", 12);
+			return true;
+		}
+		if (put.status === 409) {
+			status("someone else published while you were editing", "err");
+			toast("The file moved on before your publish landed, so nothing was overwritten. Refreshing to merge.", "err", 12);
+			await refreshLive(false, { checkApi: true });
+			return true;
+		}
+		if (!put.ok) {
+			const err = await put.json().catch(() => ({}));
+			const msg = err.error || ("status " + put.status);
+			status("publish failed: " + msg, "err");
+			toast("Publish failed: " + msg, "err", 12);
+			return true;
+		}
+		const done = await put.json().catch(() => ({}));
+		if (done && done.sha) liveSha = done.sha;
+		live = deepCopy(cfg);
+		publishGuard = { replaced: beforePublish, wrote: deepCopy(wanted), until: Date.now() + CDN_WINDOW_MS };
+		saveDraft();
+		$("draftBtn").classList.add("hidden");
+		renderAll();
+		/* prove it, exactly like the GitHub path: the Worker deleted its cached
+		   copy during the write, so this read is the file itself */
+		const check = await readRules().then(r => r.config).catch(() => null);
+		const landed = check ? canonJSON(asConfig(check)) === canonJSON(wanted) : null;
+		if (landed === false) {
+			status("published, but the file reads back differently - open nametags.json and check", "err");
+			toast("The API accepted the publish but the file does not match. Reload (Ctrl+Shift+R) before assuming it landed.", "err", 16);
+		} else {
+			status("published through the API" + (liveSha ? " (sha " + String(liveSha).slice(0, 7) + ")" : "") + " - every client is current within ~30s", "ok");
+			toast("Published - the API serves it now", "ok", 5);
+		}
+		return true;
+	} catch (e) {
+		status("network error while publishing through the API: " + e, "err");
+		return !getToken();
+	}
+}
+
 $("publishBtn").onclick = async () => {
+	/* the API first when a key is saved and one is configured - no GitHub login,
+	   no rate limit, and the write clears the cache that would otherwise serve
+	   the old rules for another 30 seconds */
+	if (getOwnerKey() && NT_BASE) {
+		const handled = await publishThroughApi();
+		if (handled || !getToken()) return;
+		toast("Publishing through the API is unavailable - falling back to your GitHub token", "info", 10);
+	}
 	const token = getToken();
 	if (!token) {
-		toast("Connect a token first", "err");
-		$("tokenCard").scrollIntoView({ behavior: "smooth" });
+		toast(NT_BASE ? "Save an owner key to publish through the API, or connect a GitHub token" : "Connect a token first", "err", 8);
+		$(NT_BASE ? "ownerCard" : "tokenCard").scrollIntoView({ behavior: "smooth" });
 		return;
 	}
 	if (live && sameJSON(cfg, live)) { toast("Nothing to publish - no changes"); return; }
