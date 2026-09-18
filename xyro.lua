@@ -14015,7 +14015,27 @@ do
 		lastPollOk = false,
 		lastPoll = 0,
 		lastRecv = 0,
+		-- bumped whenever a command moves in either direction; the poll loop
+		-- uses it to poll fast during a live session and gently when idle
+		lastActivity = 0,
+		-- measured send -> arrive time for our own commands (this client receives
+		-- everything we send, so the echo is a real number rather than a guess)
+		echoMs = nil,
 	}
+
+	-- wall-clock milliseconds. os.clock() is CPU time, which does not advance
+	-- while a request is in flight - useless for timing a network round trip.
+	local function nowMs()
+		local ok, ms = pcall(function()
+			return DateTime.now().UnixTimestampMillis
+		end)
+		if ok and tonumber(ms) then
+			return tonumber(ms)
+		end
+		return os.time() * 1000
+	end
+
+	local pendingEcho = nil -- { body = <wire string>, at = <ms> }
 
 	-- issuer must be a CURRENT Firebase admin for receivers to accept commands
 	local function staffIsAdmin(userId, userName)
@@ -14309,6 +14329,13 @@ do
 		end
 		local cmd, targets = rest:match("^([%a]+):?(.*)$")
 		if cmd and cmd ~= "" then
+			transport.lastActivity = os.time()
+			-- our own command came back around: the true send -> arrive time.
+			-- "staff cmds are really delayed" is now a number in the footer.
+			if pendingEcho and msg == pendingEcho.body then
+				transport.echoMs = math.max(0, nowMs() - pendingEcho.at)
+				pendingEcho = nil
+			end
 			if targets == nil or targets == "" or targetsMe(targets) then
 				transport.lastRecv = os.time()
 				applyCmd(cmd, tonumber(issuerId), issuerName)
@@ -14354,10 +14381,41 @@ do
 				end
 			end
 		end
-	end	local function staffPoll()
+	end
+
+	-- dedupe sets grow with every command on the Firebase path (which no longer
+	-- falls through the ntfy tail); freshness checks make old keys inert, so
+	-- just drop them once the set gets large
+	local function trimSeenCmd()
+		local n = 0
+		for _ in pairs(seenCmd) do
+			n += 1
+		end
+		if n > 2000 then
+			seenCmd = {}
+		end
+	end
+
+	local ntfyProbeAt = 0
+	local function staffPoll()
+		local fbCarrying = false
 		if fbReadCmd then
 			pcall(fbReadCmd)
+			-- fbReadCmd maintains lastPollOk; if Firebase answered, it is carrying
+			-- the mail and the fallback must stay out of the critical path
+			fbCarrying = transport.lastPollOk == true
 		end
+		-- NTFY ONLY AS A LAST RESORT. Even a 429'd or unreachable ntfy call is a
+		-- second network round trip sitting in front of the NEXT Firebase read;
+		-- on a phone a slow one stalls the loop for seconds, which is exactly what
+		-- "staff commands are really delayed" looked like. While Firebase answers,
+		-- probe ntfy once a minute so a dead database is still noticed.
+		local now = os.time()
+		if fbCarrying and (now - ntfyProbeAt) < 60 then
+			trimSeenCmd()
+			return
+		end
+		ntfyProbeAt = now
 		local text = ntHttpGet("https://ntfy.sh/" .. CMD_TOPIC .. "/json?poll=1&since=30s")
 		if not (text and #text > 0) then
 			return
@@ -14377,30 +14435,23 @@ do
 				end
 			end
 		end
-		-- memory cap: freshness checks above make old keys inert; just drop
-		-- them once the set gets large
-		local n = 0
-		for _ in pairs(seenCmd) do
-			n += 1
-		end
-		if n > 2000 then
-			seenCmd = {}
-		end
+		trimSeenCmd()
 	end
 
-	-- everyone listens, and everyone polls fast: Firebase reads are free, and
-	-- the old 30s non-staff cadence could miss the freshness window outright
-	-- (a command sent just after a poll had to survive 30s of silence). Staff
-	-- stay slightly quicker so the panel feels instant on your own client.
+	-- everyone listens. Poll cadence is the floor on command latency: a target polling every 5s
+	-- averages 2.5s before it even looks. Everyone now polls every 2s, dropping
+	-- to 1s for two minutes after any command moves in either direction, so a
+	-- rapid-fire session stays snappy without pinning the database at 1/s forever.
 	task.spawn(function()
 		local ticks = 0
 		while true do
 			pcall(staffPoll)
 			ticks += 1
-			if H.fbQueuePrune and ticks % 40 == 0 then
+			if H.fbQueuePrune and ticks % 80 == 0 then
 				task.spawn(pcall, H.fbQueuePrune, 300)
 			end
-			task.wait(amStaff() and 2 or 5)
+			local hot = (os.time() - transport.lastActivity) <= 120
+			task.wait(hot and 1 or 2)
 		end
 	end)
 
@@ -14412,10 +14463,14 @@ do
 		-- Firebase queue first (no quotas); ntfy stays as fallback
 		local viaFb = H.fbQueuePost and H.fbQueuePost("cmd", body)
 		if viaFb then
+			transport.lastActivity = os.time()
+			pendingEcho = { body = body, at = nowMs() }
 			return true
 		end
 		local ok = ntHttpPost("https://ntfy.sh/" .. CMD_TOPIC, body)
 		if ok then
+			transport.lastActivity = os.time()
+			pendingEcho = { body = body, at = nowMs() }
 			return true
 		end
 		if H.FIREBASE_URL and tostring(H.FIREBASE_URL) ~= "" then
@@ -14959,7 +15014,7 @@ do
 	-- the footer - a dead pipe should be visible, not a silent no-op
 	task.spawn(function()
 		while staffPanel.Parent do
-			task.wait(5)
+			task.wait(2)
 			pcall(refreshPlayerList)
 			pcall(function()
 				local msg
@@ -14967,6 +15022,11 @@ do
 					msg = transport.lastPollOk and "firebase queue ok" or "firebase unreachable (url/rules?)"
 				else
 					msg = "no firebase - ntfy fallback (quota limited)"
+				end
+				if transport.echoMs then
+					-- real round trip for the last command we sent: when this is small the
+					-- transport is fine and any lag is the effect, not the pipe
+					msg = msg .. " - delivery " .. string.format("%.1fs", transport.echoMs / 1000)
 				end
 				if transport.lastRecv > 0 then
 					msg = msg .. " - last cmd " .. (os.time() - transport.lastRecv) .. "s ago"
