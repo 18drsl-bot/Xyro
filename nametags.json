@@ -21,8 +21,8 @@
 		"userBoxStroke": "",
 		"clickTeleport": true,
 		"seeThroughWalls": true,
-		"collapseFar": false,
-		"collapseDistance": 0,
+		"collapseFar": true,
+		"collapseDistance": 60,
 		"collapsedIcon": 40,
 		"refreshSeconds": 15
 	},

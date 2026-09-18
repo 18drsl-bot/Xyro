@@ -8612,12 +8612,29 @@ local function ntTextWidth(text, size, font)
 	return math.max(24, #text * size * 0.55)
 end
 
--- bumped every time a published option set is applied. The per-player render
--- caches below key off it, so "the config changed" is distinguishable from
--- "nothing changed" without rebuilding any strings.
+-- One fingerprint of every current option value. ntApplyOptions runs on
+-- EVERY successful fetch (every refreshSeconds - 15s by default) and the
+-- revision below forces every tag in the server to rebuild, so bumping it
+-- unconditionally would rebuild all of them every 15 seconds for nothing.
+-- Building the fingerprint from ntOpts itself also means a future option
+-- cannot be forgotten here.
+local function ntOptFingerprint()
+	local parts = {}
+	for k, v in pairs(ntOpts) do
+		parts[#parts + 1] = k .. "=" .. tostring(v)
+	end
+	table.sort(parts)
+	return table.concat(parts, ";")
+end
+
+-- bumped only when a published option set actually CHANGED something. The
+-- per-player render caches key off it, so "the config changed" is
+-- distinguishable from "nothing changed" without comparing any strings.
 local ntOptRev = 0
 
 local function ntApplyOptions(o)
+	-- snapshot before the writes below; compared again at the end
+	local optBefore = ntOptFingerprint()
 	ntOpts.size = math.clamp(tonumber(o.size) or 15, 8, 48)
 	ntOpts.userSize = math.clamp(tonumber(o.userSize) or 10, 8, 24)
 	ntOpts.height = math.clamp(tonumber(o.height) or 48, 28, 96)
@@ -8652,7 +8669,10 @@ local function ntApplyOptions(o)
 	-- how often rules are re-checked, seconds (floor of 10 keeps the
 	-- fetch chain polite even if someone publishes a silly value)
 	NT_FETCH_EVERY = math.clamp(tonumber(o.refreshSeconds) or 15, 10, 300)
-	ntOptRev += 1
+	-- only a real change bumps the revision (see ntOptFingerprint)
+	if ntOptFingerprint() ~= optBefore then
+		ntOptRev += 1
+	end
 end
 
 -- your tag is saved to disk after every successful fetch and re-applied
@@ -9018,6 +9038,14 @@ local function ntSignature(plr, rule)
 		tostring(plr.UserId),
 		tostring(plr.DisplayName),
 		tostring(plr.Name),
+		-- the options revision. A pill captures option values at BUILD time
+		-- (textColor, userColor, collapseDistance/collapsedIcon and friends), and
+		-- this signature used to omit several of them - so publishing a new
+		-- collapse distance or text colour left every existing tag unchanged
+		-- until something else forced a rebuild (a respawn or a re-execute).
+		-- The revision is bumped only when a publish really changed a value, so
+		-- including it here cannot cause a rebuild stampede.
+		tostring(ntOptRev),
 	}, "|")
 end
 
@@ -10544,6 +10572,15 @@ connect(RunService.RenderStepped, function(dt)
 		return
 	end
 	ntCamPos = cam.CFrame.Position -- read once per frame, not once per player
+	-- ZOOM-OUT DETECTION: how far the camera sits from YOUR OWN head. Past the
+	-- collapse distance the whole scene reads as "zoomed out", so every tag
+	-- drops to its icon - which is what zooming the camera out is expected to
+	-- do. Per-player distance alone only collapsed whoever happened to be far
+	-- away, so zooming out looked like nothing happened.
+	local myHead = player.Character and ntAttachPartCached(player.Character)
+	local zoomOut = ntOpts.collapseDistance > 0
+		and myHead ~= nil
+		and (ntCamPos - myHead.Position).Magnitude > ntOpts.collapseDistance
 	-- ONE tag rebuild per frame: a fetch that changes every rule used to
 	-- rebuild all tags inside a single frame, colliding several pure-Lua
 	-- GIF decodes into one game-killing freeze
@@ -10608,7 +10645,9 @@ connect(RunService.RenderStepped, function(dt)
 					-- the full pill expands again until the mouse moves off it
 					-- (screen-space check: a raycast would false-positive on sky).
 					-- Includes self: zoom out and your pill collapses to the icon too
-					local wantCollapsed = ntOpts.collapseDistance > 0 and o.collapsed ~= nil and dist > ntOpts.collapseDistance
+					local wantCollapsed = ntOpts.collapseDistance > 0
+						and o.collapsed ~= nil
+						and (dist > ntOpts.collapseDistance or zoomOut)
 					local hoverOpen = false
 					-- HOVER FIX: the check used to run only while COLLAPSED, so the
 					-- tick after it expanded the guard skipped the check, the pill

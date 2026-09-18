@@ -88,7 +88,7 @@ put exact names above the `*` catch-all.
 always) · `showDistance` · `showHealth` · `showBox` (pill background on/off) ·
 `onlyScriptUsers` (tags require presence — set false to tag everyone matching) ·
 `pillColor` / `pillTransparency` (defaults for rules without `bg`) · `font` ·
-`textColor` · `userColor` · `clickTeleport` (click a pill to teleport to that player — works both full-size and collapsed) · `collapseFar` / `collapseDistance` / `collapsedIcon` (far tags shrink to just the avatar icon, which still click-teleports; hovering the mouse near the icon expands the full pill while it's on screen) ·`staffOnly` (when true, only Xyro staff get tags at all — non-staff see nothing, cache nothing) · `refreshSeconds` (how often
+`textColor` · `userColor` · `clickTeleport` (click a pill to teleport to that player — works both full-size and collapsed) · `collapseFar` / `collapseDistance` / `collapsedIcon` (icon-only mode: a tag past `collapseDistance` studs shrinks to just its icon, and zooming the camera out past that many studs from your own character collapses every tag so you see only icons. Icons still click-teleport, and hovering the mouse near one expands the full pill while it's on screen. `0` disables it entirely) ·`staffOnly` (when true, only Xyro staff get tags at all — non-staff see nothing, cache nothing) · `refreshSeconds` (how often
 the script re-checks for published changes, 10–300, default 15)
 
 Tags render as plain billboard UI, so **any executor works** — no Drawing API needed.
