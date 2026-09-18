@@ -1,7 +1,7 @@
 {
 	"api": {
-		"_comment": "Xyro API - the Cloudflare Worker in api/ (see api/README.md). Paste your Worker URL here to route the staff list, the command queue and presence through it, so the database secret stays server-side and the database rules can be closed to the public. An empty url keeps the direct Firebase behaviour. The key is sent by clients and is public by design - it gates reads; the database credential never leaves the Worker.",
-		"url": "",
-		"key": ""
+		"_comment": "Xyro API - the Cloudflare Worker in api/ (see api/README.md). Clients route the staff list, the command queue, presence and the kill switch through it, so the database credential stays server-side and the database rules can stay closed to the public. An empty url keeps the direct Firebase behaviour - set it back to \"\" to roll everything back to the database. This key is PUBLIC by design: it only reads and heartbeats. The owner key (XYRO_ADMIN_KEY) is what writes the blacklist and trips the kill switch, and it never goes in the repo.",
+		"url": "https://xyro-api.xyroapi.workers.dev",
+		"key": "xyroontop"
 	}
 }
