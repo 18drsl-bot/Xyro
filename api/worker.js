@@ -30,16 +30,24 @@
  *    Only these three nodes are proxied. The Worker is deliberately NOT a
  *    generic database proxy: anything else in the database stays unreachable.
  *
- * 2. FRIENDLY routes for the site, the Discord bot and humans:
+ * 2. NAMETAG routes - the tag system hosted here instead of on GitHub's CDN:
+ *      GET    /nametags                      -> the published tag rules
+ *      GET    /nametags.json, /config        -> aliases for the same bytes
+ *      GET    /media/<file>                  -> seals, verified badge, artwork
+ *      PUT    /nametags                      (admin key + GH_TOKEN) publish them
+ *    The rules are public and ungated on purpose (the editor has no key, and
+ *    the file is public in the repo anyway); publishing is owner-only, and a
+ *    stale editor can send ?sha= so GitHub rejects it rather than clobbering a
+ *    newer revision.
+ *
+ * 3. FRIENDLY routes for the site, the Discord bot and humans:
  *      GET    /                               -> status page for humans
  *      GET    /health                        -> config self-report (JSON)
  *      GET    /version                       -> version.txt from the repo
- *      GET    /config                        -> nametags.json from the repo
  *      GET    /staff                         -> the staff object
  *      GET    /blacklist                     -> just the blacklist map
  *      POST   /blacklist/<who>               (key required) body = reason text
- *      DELETE /blacklist/<who>               (key required)
- *      GET    /online                        -> { count, online[], beats{} }
+ *      DELETE /blacklist/<who>               (key required) *   GET    /online                        -> { count, online[], beats{} }
  *
  * Auth - TWO keys, deliberately
  * ----------------------------
@@ -90,10 +98,12 @@
  * a database credential of its own - FB_SERVICE_ACCOUNT (preferred), the split
  * FB_CLIENT_EMAIL + FB_PRIVATE_KEY, or the legacy FB_SECRET. Without one the
  * route answers 403 and says exactly that, and `npx wrangler deploy` is not the
- * fix - the credential is. See api/README.md section 5.
+ * fix - the credential is. See api/README.md section 4.
  */
 
 const NODES = new Set(["staff", "cmd", "here"]);
+/** The tag rule file behind GET /nametags, and what PUT /nametags commits. */
+const NAMETAGS_FILE = "nametags.json";
 
 /** A presence beat is "online" while it is newer than this (seconds).
  *
@@ -317,7 +327,7 @@ function databaseCredential(env) {
 	if (saCreds(env)) return "service account";
 	// set but unusable: report it as a service account, with the reason alongside
 	if (env.FB_SERVICE_ACCOUNT || env.FB_CLIENT_EMAIL) return "service account (unusable)";
-	return "anonymous - reads only; the kill switch needs a credential (api/README.md section 5)";
+	return "anonymous - reads only; the kill switch needs a credential (api/README.md section 4)";
 }
 
 async function fbAuthSuffix(env) {
@@ -349,7 +359,7 @@ function fbErrorHint(env, reason) {
 		// saCreds above may have just set this, so it is read afterwards on purpose
 		return " - and " + held + " this Worker holds was refused too: " + (saLastError || "check that it belongs to this database");
 	}
-	return " - this database refuses anonymous writes to it. Set FB_SERVICE_ACCOUNT (api/README.md section 5) to give the Worker an owner credential, or trip the kill switch in the Firebase console instead.";
+	return " - this database refuses anonymous writes to it. Set FB_SERVICE_ACCOUNT (api/README.md section 4) to give the Worker an owner credential, or trip the kill switch in the Firebase console instead.";
 }
 
 class ApiError extends Error {
@@ -597,8 +607,10 @@ ${row("Database", `${dot(dbOk)}${dbOk ? "connected" : esc(dbError || "unreachabl
 ${row("Players running now", String(online))}
 ${version ? row("Script version", esc(version)) : ""}
 ${row("Reads", env.XYRO_KEY ? "key required" : "open")}
+${row("Nametags", `served here \u00b7 <a href="/nametags">/nametags</a> + <code>/media/*</code>`)}
+${row("Publishing tags", env.GH_TOKEN ? `${dot(true)}through this API (admin key required)` : `${dot(false)}unavailable - set GH_TOKEN`)}
 <footer>
-Machine-readable: <a href="/health">/health</a> \u00b7 script: <code>/script</code> \u00b7 loader to hand out: <code>/loader</code> \u00b7 this page refreshes every 30s
+Machine-readable: <a href="/health">/health</a> \u00b7 script: <code>/script</code> \u00b7 loader to hand out: <code>/loader</code> \u00b7 tag rules: <a href="/nametags">/nametags</a> \u00b7 this page refreshes every 30s
 </footer>
 </div></body></html>`;
 
@@ -609,13 +621,225 @@ Machine-readable: <a href="/health">/health</a> \u00b7 script: <code>/script</co
 
 /* ------------------------------------------------------------- repo files */
 
+const DEFAULT_RAW_REPO = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main";
+
 async function repoFile(env, name, bust) {
-	const raw = (env.RAW_REPO || "https://raw.githubusercontent.com/vertxxy-1/Xyro/main").replace(/\/+$/, "");
+	const raw = (env.RAW_REPO || DEFAULT_RAW_REPO).replace(/\/+$/, "");
 	const res = await fetch(raw + "/" + name + (bust ? "?t=" + Date.now() : ""), {
 		cf: { cacheTtl: 30, cacheEverything: true },
 	});
 	if (!res.ok) throw new ApiError(502, "repo file " + name + " returned " + res.status);
 	return await res.text();
+}
+
+/* --------------------------------------------- repo content (the nametags) */
+
+/** The repo this Worker reads from, as owner/repo/branch. Derived from RAW_REPO
+ *  so a fork only has to set that one var. */
+function repoRef(env) {
+	const raw = (env.RAW_REPO || DEFAULT_RAW_REPO).replace(/\/+$/, "");
+	const m = raw.match(/^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)$/);
+	return m ? { owner: m[1], repo: m[2], branch: m[3] } : { owner: "vertxxy-1", repo: "Xyro", branch: "main" };
+}
+
+/** Bytes of one repo file, from the freshest source available.
+ *
+ *  GH_TOKEN (optional) switches reads to the GitHub contents API: it is never
+ *  CDN-cached, and its rate limit is per ACCOUNT rather than per IP - which
+ *  matters here, because every client of this Worker shares Cloudflare's egress
+ *  addresses and the anonymous 60/hour bucket is useless at that scale.
+ *
+ *  Without it we read raw.githubusercontent with a unique cache-buster on every
+ *  fetch - not only on `?fresh=1`. That matters: a plain `<raw>/nametags.json`
+ *  is cached by GitHub's own edge for minutes, so a Worker cache miss could
+ *  still pick up the revision before the one you just published, and then cache
+ *  THAT for another 30 seconds. jsDelivr is deliberately never used: its edge
+ *  has served days-stale copies even after a "successful" purge, which is how
+ *  the game and the editor ended up disagreeing about the rules.
+ *
+ *  Returns { bytes, sha, source } - `sha` is only known on the API path. */
+async function repoBytes(env, name, bust) {
+	const ref = repoRef(env);
+	if (env.GH_TOKEN) {
+		try {
+			const api = "https://api.github.com/repos/" + ref.owner + "/" + ref.repo + "/contents/" + name +
+				"?ref=" + ref.branch + (bust ? "&t=" + Date.now() : "");
+			const res = await fetch(api, {
+				headers: {
+					authorization: "Bearer " + env.GH_TOKEN,
+					accept: "application/vnd.github+json",
+					"user-agent": "xyro-api",
+				},
+			});
+			if (res.ok) {
+				const envelope = await res.json();
+				if (envelope && typeof envelope.content === "string") {
+					const bin = atob(envelope.content.replace(/\s/g, ""));
+					const bytes = new Uint8Array(bin.length);
+					for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+					return { bytes, sha: envelope.sha || "", source: "github-api" };
+				}
+			} else if (res.status === 404) {
+				throw new ApiError(404, "no such repo file: " + name);
+			}
+		} catch (err) {
+			if (err instanceof ApiError) throw err;
+			/* otherwise fall through to raw - a token hiccup must not take the
+			   nametags offline */
+		}
+	}
+	// always bust: an uncached URL is what makes GitHub's edge hand back the
+	// current file rather than its own few-minute-old copy
+	const raw = (env.RAW_REPO || DEFAULT_RAW_REPO).replace(/\/+$/, "") + "/" + name + "?t=" + Date.now();
+	const res = await fetch(raw, { cf: { cacheTtl: 0 } });
+	if (res.status === 404) throw new ApiError(404, "no such repo file: " + name);
+	if (!res.ok) throw new ApiError(502, "repo file " + name + " returned " + res.status);
+	return { bytes: new Uint8Array(await res.arrayBuffer()), sha: "", source: "raw" };
+}
+
+/** GET /nametags (aliases /nametags.json and /config) - the published tag
+ *  rules, from one origin, with no token, no GitHub rate limit and no CDN
+ *  between the file and the client.
+ *
+ *  Deliberately NOT key-gated, for the same reason /loader is not: the rules
+ *  are public in the repo anyway, the tag editor is a public page, and the one
+ *  thing a key here would break is the editor's ability to show you what is
+ *  actually published. The gate does not cut this off either - everyone should
+ *  be able to read the rules the maintenance message is written in.
+ *
+ *  Edge-cached briefly (30s) so a polling client costs almost nothing, with
+ *  `?fresh=1` for the two callers who must not see a cache: opening the editor
+ *  and the script's manual refresh. */
+async function serveNametags(env, ctx, url) {
+	const fresh = url.searchParams.has("fresh");
+	return cached(env, ctx, url, fresh ? 0 : 30, "application/json; charset=utf-8", async () => {
+		const file = await repoBytes(env, NAMETAGS_FILE, fresh);
+		const body = new TextDecoder("utf-8").decode(file.bytes);
+		let parsed = null;
+		try {
+			parsed = JSON.parse(body);
+		} catch {
+			parsed = null;
+		}
+		if (!parsed || !Array.isArray(parsed.tags) || !parsed.options || typeof parsed.options !== "object") {
+			throw new ApiError(502, NAMETAGS_FILE + " is not {options, tags[]} (served " + body.length + " bytes)");
+		}
+		return body;
+	});
+}
+
+/** Content types the media route will serve. A whitelist, not a guess: this
+ *  route reads a repo path, so an unexpected extension is refused rather than
+ *  passed through as an opaque blob. */
+const MEDIA_TYPES = {
+	png: "image/png",
+	jpg: "image/jpeg",
+	jpeg: "image/jpeg",
+	gif: "image/gif",
+	webp: "image/webp",
+	svg: "image/svg+xml",
+	mp3: "audio/mpeg",
+};
+
+/** GET /media/<file> - the seals, the verified badge and any other tag artwork,
+ *  served from the same origin as the rules.
+ *
+ *  This is the half that used to ride jsDelivr, whose edge could hold a stale
+ *  copy for days; a seal that does not update reads as "my badge colour is
+ *  wrong", which is impossible to debug from inside the game. Long cache is
+ *  safe because these files are immutable once named, and `?fresh=1` overrides
+ *  it for the editor's previews. */
+async function serveMedia(env, ctx, url, name) {
+	const ext = (name.match(/\.([A-Za-z0-9]+)$/) || [])[1];
+	const type = ext ? MEDIA_TYPES[ext.toLowerCase()] : null;
+	if (!type) throw new ApiError(404, "unsupported media type: " + name);
+	const fresh = url.searchParams.has("fresh");
+	return cached(env, ctx, url, fresh ? 0 : 300, type, async () => {
+		const file = await repoBytes(env, "media/" + name, fresh);
+		return file.bytes;
+	});
+}
+
+/** base64 for the contents API, chunked so a large file cannot blow the stack. */
+function toBase64(bytes) {
+	let bin = "";
+	for (let i = 0; i < bytes.length; i += 0x8000) {
+		bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+	}
+	return btoa(bin);
+}
+
+/** PUT /nametags - publish the rules THROUGH this Worker, so the editor no
+ *  longer needs a GitHub login in the browser.
+ *
+ *  Owner-only (the admin key) and it needs GH_TOKEN: a fine-grained token with
+ *  Contents: Read and write on the repo. Both halves matter - the admin key is
+ *  what proves it is you, the token is what makes the commit possible.
+ *
+ *  A stale editor must not silently clobber a newer revision, so a caller may
+ *  send `?sha=`; GitHub then rejects the write with 409 if the file moved on.
+ *  Without a sha we read the current one first, which is an explicit overwrite.
+ *  Finally the cached copy is dropped, or the next reader would be handed the
+ *  revision we just replaced - the exact "it will not keep my changes" bug. */
+async function publishNametags(env, req, url) {
+	if (!env.GH_TOKEN) {
+		return json(env, {
+			error: "publishing through the API needs GH_TOKEN (a repo token with Contents: Read and write) - see api/README.md",
+		}, 503);
+	}
+	const bodyText = await req.text();
+	if (bodyText.length > 262144) return json(env, { error: "rules too large (max 256 KB)" }, 413);
+	let parsed = null;
+	try {
+		parsed = JSON.parse(bodyText);
+	} catch {
+		parsed = null;
+	}
+	if (!parsed || !Array.isArray(parsed.tags) || !parsed.options || typeof parsed.options !== "object") {
+		return json(env, { error: 'rules must be {"options":{...},"tags":[...]}' }, 400);
+	}
+
+	const ref = repoRef(env);
+	const base = "https://api.github.com/repos/" + ref.owner + "/" + ref.repo + "/contents/" + NAMETAGS_FILE;
+	const headers = {
+		authorization: "Bearer " + env.GH_TOKEN,
+		accept: "application/vnd.github+json",
+		"user-agent": "xyro-api",
+	};
+	let sha = url.searchParams.get("sha") || "";
+	if (!sha) {
+		try {
+			const cur = await fetch(base + "?ref=" + ref.branch + "&t=" + Date.now(), { headers });
+			if (cur.ok) {
+				const curJson = await cur.json();
+				if (curJson && curJson.sha) sha = curJson.sha;
+			}
+		} catch {
+			/* the PUT below reports whatever is really wrong */
+		}
+	}
+	const put = await fetch(base, {
+		method: "PUT",
+		headers: { ...headers, "content-type": "application/json" },
+		body: JSON.stringify({
+			message: "Publish nametags via the Xyro API",
+			content: toBase64(new TextEncoder().encode(bodyText)),
+			branch: ref.branch,
+			...(sha ? { sha } : {}),
+		}),
+	});
+	const out = await put.json().catch(() => ({}));
+	if (!put.ok) {
+		const detail = out && out.message ? ": " + out.message : "";
+		return json(env, { error: "github " + put.status + detail }, put.status === 409 ? 409 : 502);
+	}
+	const newSha = out && out.content && out.content.sha ? out.content.sha : "";
+	if (typeof caches !== "undefined" && caches.default) {
+		for (const alias of ["/nametags", "/nametags.json", "/config"]) {
+			await caches.default.delete(new Request(url.origin + alias)).catch(() => {});
+		}
+	}
+	return json(env, { ok: true, sha: newSha, bytes: bodyText.length });
 }
 
 /** Edge-cached GET. Cloudflare's cache is keyed on the URL, and `?fresh=1`
@@ -664,6 +888,12 @@ async function health(env, url) {
 		nodes: [...NODES],
 		presence_window: PRESENCE_WINDOW,
 		queue_ttl: QUEUE_TTL,
+		nametags: {
+			rules: "GET /nametags (aliases /nametags.json, /config)",
+			media: "GET /media/<file>",
+			read_source: env.GH_TOKEN ? "github api (never cached)" : "raw, cache-busted",
+			publish: env.GH_TOKEN ? "PUT /nametags with the admin key" : "unavailable (set GH_TOKEN)",
+		},
 	});
 }
 
@@ -754,8 +984,25 @@ async function handle(req, env, ctx) {
 	if (path === "/version") {
 		return cached(env, ctx, url, 60, "text/plain; charset=utf-8", () => repoFile(env, "version.txt", url.searchParams.has("fresh")));
 	}
-	if (path === "/config") {
-		return cached(env, ctx, url, 60, "application/json; charset=utf-8", () => repoFile(env, "nametags.json", url.searchParams.has("fresh")));
+	/* the nametags themselves: the rules and every piece of tag artwork, from
+	   this origin. /config stays as an alias - it is what the status page, the
+	   docs and the first cut of the editor already point at, and it is the same
+	   file, so there is no second thing to keep in step. */
+	if ((path === "/nametags" || path === "/nametags.json" || path === "/config") && req.method === "GET") {
+		return serveNametags(env, ctx, url);
+	}
+	if (path === "/nametags" && (req.method === "PUT" || req.method === "POST")) {
+		const denied = adminKeyResponse(req, url, env);
+		if (denied) return denied;
+		if (writeThrottled(req)) return json(env, { error: "too many writes, slow down" }, 429);
+		return publishNametags(env, req, url);
+	}
+	/* tag artwork: seals, the verified badge, backgrounds. The filename is
+	   whitelisted by shape (one path segment, known extension) because it is
+	   concatenated onto a repo path - `..` never gets the chance to matter. */
+	const media = path.match(/^\/media\/([A-Za-z0-9_.-]{1,80})$/);
+	if (media && req.method === "GET") {
+		return serveMedia(env, ctx, url, media[1]);
 	}
 	/* the script itself, served from here when a client prefers it: this is what
 	   makes the kill switch able to cut a loader off at the source */

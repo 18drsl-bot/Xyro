@@ -171,6 +171,42 @@ ok("...and the correction names itself in the source line", /api \(corrected a s
 ok("a failed confirmation still applies the copy (fail open)", /if fromApi and fromApi ~= text then/.test(lua), "");
 ok("the source is reported to the user", /" via " \.\. ntLastSource/.test(lua), "");
 
+/* ------------------- one nametag ingress, three implementations ----------- */
+
+/* The rules and the tag artwork are hosted by the API now, and all three sides
+   have to name the SAME paths on it. The failure this guards against is quiet:
+   one component keeps reading a CDN, so the game and the editor disagree about
+   a tag that was changed, and every report of it sounds like "the website does
+   not match the game" again. */
+ok("the API serves the rules at /nametags", /NAMETAGS_FILE = "nametags\.json"/.test(worker) && worker.includes('path === "/nametags"'), "");
+ok("the API serves the artwork at /media/<file>", worker.includes("serveMedia(env, ctx, url, media[1])"), "");
+ok("the API keeps its edge-cache escape hatch", worker.includes('url.searchParams.has("fresh")'), "");
+ok("the API never fetches from jsDelivr", !/["'`]https?:\/\/[^"'`]*jsdelivr/i.test(worker), "jsDelivr is back in the Worker");
+
+ok("the script asks the API for the rules", lua.includes('H.ntApiUrl("nametags"'), "");
+ok("...and for the artwork", lua.includes('H.ntApiUrl("media/" .. file'), "");
+ok("every seal and badge URL goes through that one builder", !!block(lua, "local function ntMediaUrl", "\nend") && /ntMediaUrl\("seal_" \.\. badgeRank/.test(lua) && /ntMediaUrl\("verified_seal_blue\.png"/.test(lua), "");
+ok("no separate seal URL base survives to drift from it", !/NT_SEAL_URL_BASE/.test(lua) && !/NT_BADGE_URL/.test(lua), "");
+
+/* order matters: the API has to be TRIED before the CDN fallbacks, or a stale
+   edge copy wins on a client that could have had the file */
+const ntFetchBlock = block(lua, "local function ntFetch(manual)", "\nlocal function ntRuleFor");
+ok("the script tries the API before any CDN fallback",
+	ntFetchBlock.indexOf('H.ntApiUrl("nametags"') >= 0 &&
+		ntFetchBlock.indexOf('H.ntApiUrl("nametags"') < ntFetchBlock.indexOf("NT_FALLBACK_URL") &&
+		ntFetchBlock.indexOf("NT_FALLBACK_URL") < ntFetchBlock.indexOf("NT_RAW_URL"),
+	"API at " + ntFetchBlock.indexOf('H.ntApiUrl("nametags"') + ", raw at " + ntFetchBlock.indexOf("NT_FALLBACK_URL") + ", cdn at " + ntFetchBlock.indexOf("NT_RAW_URL"));
+
+ok("the editor asks the API for the rules", html.includes('NT_BASE + "/nametags"'), "");
+ok("...and for the artwork", html.includes('NT_BASE + "/media/"'), "");
+ok("no hardcoded CDN media URL is left in the editor", !/cdn\.jsdelivr\.net\/gh\/vertxxy-1\/Xyro@main\/media/.test(html), "");
+const fetchBlock = block(html, "async function fetchConfig(opts)", "\nfunction load()");
+ok("the editor tries the API before raw/CDN for a read",
+	fetchBlock.indexOf("hostedRules") >= 0 && fetchBlock.indexOf("hostedRules") < fetchBlock.indexOf("rawConfig()"),
+	"hosted at " + fetchBlock.indexOf("hostedRules") + ", raw at " + fetchBlock.indexOf("rawConfig()"));
+ok("and waits for api.json before the first read, so boot is not a GitHub read",
+	/await apiReady;/.test(html) && /const apiReady = \(async function followApi\(\)/.test(html), "");
+
 /* ---------------------------- one presence window, three implementations --- */
 
 /* If these drift, a player is "online" in one place and gone in another, and

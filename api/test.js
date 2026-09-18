@@ -61,12 +61,23 @@ const REPO_FILES_BASE = {
 	"/vertxxy-1/Xyro/main/custom-loader.lua": '-- Xyro loader\nlocal API = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main"\nlocal KEY = "stale-in-repo"\nprint("body")\n',
 	"/vertxxy-1/Xyro/main/loadstring.lua": '-- the other loader\nlocal API = "whatever"\nlocal KEY = "whatever"\n',
 	"/vertxxy-1/Xyro/main/version.txt": "0.8.11\n",
-	"/vertxxy-1/Xyro/main/nametags.json": JSON.stringify({ options: { collapseFar: true }, tags: [{ label: "FOUNDER" }] }),
+	// stand-in for a real seal: only its bytes and content type matter here
+	"/vertxxy-1/Xyro/main/media/seal_founder.png": "\u0089PNG\r\nseal-pixels",
+	"/vertxxy-1/Xyro/main/media/verified_seal_blue.png": "\u0089PNG\r\nverified-seal-pixels",
 };
 function repoFile(pathname) {
 	if (pathname === "/vertxxy-1/Xyro/main/xyro.lua") return scriptTruncated ? "-- cut off\nreturn" : FAKE_SCRIPT;
+	// the rules are mutable here: publishing through the API must change what
+	// the next reader gets, and a corrupt file must be caught rather than served
+	if (pathname === "/vertxxy-1/Xyro/main/nametags.json") return nametagsFixture;
 	return REPO_FILES_BASE[pathname];
 }
+
+/* the nametag system: the rules the API hosts, plus the repo-side token path */
+let nametagsFixture = JSON.stringify({ options: { collapseFar: true }, tags: [{ label: "FOUNDER" }] });
+let githubSha = "sha-1";
+let githubConflict = false; // simulate GitHub refusing a stale publish (409)
+const githubPuts = [];
 
 global.fetch = async (url, init) => {
 	const u = new URL(url);
@@ -97,6 +108,20 @@ global.fetch = async (url, init) => {
 		tokenCalls++;
 		if (tokenDenied) return new Response('{"error":"invalid_grant","error_description":"Invalid JWT"}', { status: 400 });
 		return new Response(JSON.stringify({ access_token: "sa-token-" + tokenCalls, expires_in: 3600 }), { status: 200 });
+	}
+	if (u.hostname === "api.github.com") {
+		const name = decodeURIComponent(u.pathname.replace("/repos/vertxxy-1/Xyro/contents/", ""));
+		if (method === "PUT") {
+			if (githubConflict) return new Response('{"message":"nametags.json does not match " + "' + githubSha + '"}', { status: 409 });
+			const payload = JSON.parse(init.body);
+			githubPuts.push({ name, payload });
+			if (name === "nametags.json") nametagsFixture = Buffer.from(payload.content, "base64").toString("utf8");
+			githubSha = "sha-" + (githubPuts.length + 1);
+			return new Response(JSON.stringify({ content: { sha: githubSha } }), { status: 200 });
+		}
+		const body = repoFile("/vertxxy-1/Xyro/main/" + name);
+		if (body === undefined) return new Response('{"message":"Not Found"}', { status: 404 });
+		return new Response(JSON.stringify({ sha: githubSha, content: Buffer.from(body, "utf8").toString("base64") }), { status: 200 });
 	}
 	if (u.hostname === "raw.githubusercontent.com") {
 		const body = repoFile(u.pathname);
@@ -370,6 +395,96 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	const rawCall = calls.find(c => c.url.hostname === "raw.githubusercontent.com");
 	ok("?fresh=1 bypasses every cache (cache-buster reaches raw)", /[?&]t=\d+/.test(rawCall.url.search), rawCall.url.href);
 
+	/* --- the nametag system, hosted here --------------------------------- */
+	nametagsFixture = JSON.stringify({ options: { height: 44 }, tags: [{ label: "FOUNDER" }, { label: "HR" }] });
+	res = await call("/nametags");
+	json = await body(res);
+	ok("GET /nametags serves the published rules", res.status === 200 && json.tags.length === 2, JSON.stringify(json));
+	ok("/nametags is JSON", /application\/json/.test(res.headers.get("content-type") || ""), res.headers.get("content-type"));
+	res = await call("/nametags.json", { env: WITH_KEYS });
+	ok("/nametags.json is the same file and needs no key", res.status === 200 && (await body(res)).tags.length === 2, "got " + res.status);
+	res = await call("/config");
+	ok("/config is still the same bytes", (await body(res)).tags.length === 2, "");
+
+	// tag artwork: the half that used to ride jsDelivr's edge
+	res = await call("/media/seal_founder.png");
+	const sealBytes = new Uint8Array(await res.arrayBuffer());
+	ok("GET /media/<file> serves a seal from this origin", res.status === 200 && /image\/png/.test(res.headers.get("content-type") || "") && sealBytes.length > 4, "status " + res.status + " type " + res.headers.get("content-type"));
+	res = await call("/media/verified_seal_blue.png");
+	ok("the verified badge is served too", res.status === 200 && /image\/png/.test(res.headers.get("content-type") || ""), "got " + res.status);
+	res = await call("/media/nope.exe");
+	ok("an unknown media extension is refused, not passed through", res.status === 404, "got " + res.status);
+	res = await call("/media/missing_seal.png");
+	ok("a missing media file is a 404, not a 502", res.status === 404, "got " + res.status);
+	res = await call("/media/%2e%2e%2fworker.js");
+	ok("a media name that is not one plain segment never reaches a repo path", res.status === 404, "got " + res.status);
+
+	// a corrupt rules file must be loud: a client that applies half of it draws
+	// the wrong tags for everyone
+	nametagsFixture = "{ this is not json";
+	res = await call("/nametags?fresh=1");
+	json = await body(res);
+	ok("a corrupt nametags.json is a loud 502", res.status === 502 && /nametags\.json/.test(json.error || ""), res.status + " " + JSON.stringify(json));
+	nametagsFixture = JSON.stringify({ options: { height: 44 }, tags: [{ label: "FOUNDER" }] });
+
+	// Buster on EVERY upstream read, not only ?fresh=1: without it GitHub's own
+	// edge answers with a few-minute-old copy, and this Worker would then cache
+	// that - i.e. the rules would arrive stale on a cache miss too.
+	calls.length = 0;
+	await call("/nametags");
+	const plainRaw = calls.find(c => c.url.hostname === "raw.githubusercontent.com");
+	ok("a repo read is cache-busted even without ?fresh=1", !!plainRaw && /[?&]t=\d+/.test(plainRaw.url.search), plainRaw && plainRaw.url.href);
+
+	/* --- publishing the nametags through the API ------------------------- */
+	const OWNER = { ...WITH_KEYS, GH_TOKEN: "gh-write-token" };
+	res = await call("/nametags", { method: "PUT", body: '{"options":{},"tags":[]}' });
+	ok("PUT /nametags fails closed with no owner key configured", res.status === 503, "got " + res.status);
+	res = await call("/nametags", { method: "PUT", body: '{"options":{},"tags":[]}', env: WITH_KEYS });
+	ok("PUT /nametags without a key is refused", res.status === 403, "got " + res.status);
+	res = await call("/nametags", { method: "PUT", body: '{"options":{},"tags":[]}', env: WITH_KEYS, headers: { "x-api-key": "wrong" } });
+	ok("PUT /nametags with the client key is still refused", res.status === 403, "got " + res.status);
+	res = await call("/nametags", { method: "PUT", body: '{"options":{},"tags":[]}', env: WITH_KEYS, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("PUT /nametags says exactly which secret is missing", res.status === 503 && /GH_TOKEN/.test(json.error || ""), res.status + " " + JSON.stringify(json));
+
+	calls.length = 0;
+	githubPuts.length = 0;
+	res = await call("/nametags", {
+		method: "PUT",
+		body: JSON.stringify({ options: { height: 50 }, tags: [{ label: "HELLO" }] }),
+		env: OWNER,
+		headers: { "x-api-key": "owner" },
+	});
+	json = await body(res);
+	ok("PUT /nametags commits and returns the new sha", res.status === 200 && json.ok === true && json.sha === "sha-2", res.status + " " + JSON.stringify(json));
+	ok("the commit is readable in git", githubPuts.length === 1 && /nametags via the Xyro API/.test(githubPuts[0].payload.message), JSON.stringify(githubPuts.map(p => p.payload.message)));
+	ok("the commit sends the current blob sha (no blind overwrite)", githubPuts[0].payload.sha === "sha-1", githubPuts[0].payload.sha);
+	res = await call("/nametags");
+	ok("the published rules are what the next reader gets", (await body(res)).tags[0].label === "HELLO", JSON.stringify(await body(await call("/nametags"))));
+
+	res = await call("/nametags", { method: "PUT", body: '{"tags":[]}', env: OWNER, headers: { "x-api-key": "owner" } });
+	ok("a payload with no options block is refused", res.status === 400, "got " + res.status);
+	res = await call("/nametags", { method: "PUT", body: "not json", env: OWNER, headers: { "x-api-key": "owner" } });
+	ok("a payload that is not JSON at all is refused", res.status === 400, "got " + res.status);
+	githubConflict = true;
+	res = await call("/nametags", { method: "PUT", body: '{"options":{},"tags":[]}', env: OWNER, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("a publish against a moved file is a 409, not a silent clobber", res.status === 409 && /github 409/.test(json.error || ""), res.status + " " + JSON.stringify(json));
+	githubConflict = false;
+
+	// with a repo token the rules come from the never-cached contents API
+	calls.length = 0;
+	res = await call("/nametags?fresh=1", { env: { GH_TOKEN: "gh-read-token" } });
+	const hosts = calls.map(c => c.url.hostname);
+	ok("with GH_TOKEN the rules come from the GitHub API", hosts.includes("api.github.com") && !hosts.includes("raw.githubusercontent.com"), hosts.join(", "));
+	ok("...and still parse as the rules", res.status === 200 && (await body(res)).tags[0].label === "HELLO", "got " + res.status);
+
+	json = await body(await call("/health"));
+	ok("health names the nametag routes", json.nametags && /\/nametags/.test(json.nametags.rules || "") && /\/media/.test(json.nametags.media || ""), JSON.stringify(json.nametags));
+	ok("health says publishing is off without a repo token", /unavailable/.test(json.nametags.publish || ""), json.nametags.publish);
+	json = await body(await call("/health", { env: { GH_TOKEN: "gh-read-token" } }));
+	ok("health says publishing is on with one", /PUT \/nametags/.test(json.nametags.publish || ""), json.nametags.publish);
+
 	/* --- failure modes -------------------------------------------------- */
 	dbDenied = true;
 	res = await call("/staff.json");
@@ -498,6 +613,10 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("it refreshes itself", page.includes('http-equiv="refresh"'));
 	res = await call("/status");
 	ok("/status is the same page", /text\/html/.test(res.headers.get("content-type") || ""));
+	ok("the status page points at the hosted tag rules", page.includes('href="/nametags"') && page.includes("/media/*"), "");
+	res = await call("/", { env: { GH_TOKEN: "gh-read-token" } });
+	const tokenPage = await res.text();
+	ok("and says publishing runs through the API once GH_TOKEN is set", /through this API/.test(tokenPage), "");
 
 	// the gate message is admin input: it must never become live markup
 	store = { staff: { gate: { enabled: false, message: '<img src=x onerror=alert(1)>down', by: "probe" } } };

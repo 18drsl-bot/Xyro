@@ -124,6 +124,11 @@ const gh = {
 	sha() { return shaOf(text(this.file)); },
 };
 
+/* the repo's api.json, and whether the API it points at is up. The editor reads
+   both of these, so the test drives them the way a deploy would. */
+let apiJson = '{"api":{"url":"","key":""}}';
+let apiDown = false;
+
 const calls = [];
 global.fetch = async (url, init) => {
 	const u = new URL(url);
@@ -145,8 +150,16 @@ global.fetch = async (url, init) => {
 		}
 		return new Response('{"message":"not found"}', { status: 404 });
 	}
+	if (u.hostname === "api.example") {
+		if (apiDown) return new Response('{"error":"boom"}', { status: 500 });
+		if (u.pathname === "/nametags") return new Response(text(gh.file), { status: 200 });
+		if (u.pathname.startsWith("/media/")) {
+			return new Response("PNG:" + u.pathname.split("/").pop(), { status: 200, headers: { "content-type": "image/png" } });
+		}
+		if (u.pathname.endsWith(".json")) return new Response("{}", { status: 200 });
+	}
 	if (u.hostname === "raw.githubusercontent.com") {
-		if (u.pathname.endsWith("/api.json")) return new Response('{"api":{"url":"","key":""}}', { status: 200 });
+		if (u.pathname.endsWith("/api.json")) return new Response(apiJson, { status: 200 });
 		if (u.pathname.endsWith("/nametags.json")) {
 			if (gh.cdn) gh.cdnMisses++;
 			return new Response(gh.cdn || text(gh.file), { status: 200 });
@@ -170,6 +183,7 @@ const factory = new Function(
 	"  get publishGuard(){return publishGuard;}, get liveSha(){return liveSha;}," +
 	"  refreshLive: refreshLive, publish: () => $(\"publishBtn\").onclick(), canonJSON: canonJSON, asConfig: asConfig," +
 	"  renderPreview: renderPreview, renderEditorPreview: renderEditorPreview, editorTag: editorTag," +
+	"  mediaURL: mediaURL, get rulesSource(){return rulesSource;}," +
 	"  openEditor: openEditor, closeEditor: closeEditor," +
 	"  toasts: () => $(\"toasts\").children.map(t => t.textContent)," +
 	"};"
@@ -186,6 +200,10 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 
 	ok("boot loads the published rules", api.live && api.live.tags.length === 2, JSON.stringify(api.live && api.live.tags));
 	ok("the token is honoured, so the file sha is known", typeof api.liveSha === "string" && api.liveSha.length > 0, String(api.liveSha));
+	api.renderEditorPreview();
+	ok("with no API configured the rules and the badge come from GitHub/jsDelivr as before",
+		/loaded from GitHub/.test(el("status").textContent) && /cdn\.jsdelivr\.net\/gh\/vertxxy-1\/Xyro@main\/media\//.test(el("edBadgeCheck").src),
+		el("status").textContent + " | " + el("edBadgeCheck").src);
 
 	// now the CDN starts handing back the PREVIOUS revision
 	gh.cdn = text({ options: { size: 99, pillColor: "#0000BD" }, tags: [{ match: "*", label: "old cached copy" }] });
@@ -265,7 +283,43 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("...and the mini preview shows the global colour", colorOf("edLabel") === "#123456", colorOf("edLabel"));
 	api.closeEditor();
 
-	/* --- 5. structural invariants --------------------------------------- */
+	/* --- 5. the API hosts the rules and the badge artwork --------------- */
+
+	/* with api.json pointing somewhere, the editor must read the nametags from
+	   the API and never touch raw.githubusercontent (or jsDelivr) for them */
+	apiJson = '{"api":{"url":"https://api.example","key":"pub-key"}}';
+	gh.file.tags[0].rank = "founder"; // so the mini preview has a ranked badge
+	gh.file.tags[0].badge = true; // ...and the badge actually shows
+	calls.length = 0;
+	const hosted = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle();
+	ok("with an API configured the rules come from it", calls.some(c => c.url.hostname === "api.example" && c.url.pathname === "/nametags"), calls.map(c => c.url.hostname + c.url.pathname).join(", "));
+	ok("...and the CDN is not consulted for the rules at all", !calls.some(c => c.url.hostname === "raw.githubusercontent.com" && c.url.pathname.endsWith("/nametags.json")), calls.map(c => c.url.hostname).join(", "));
+	ok("the hosted read carries the public key", calls.some(c => c.url.pathname === "/nametags" && c.url.searchParams.get("key") === "pub-key"), "");
+	ok("opening the editor reads past the API's own cache (?fresh=1)", calls.some(c => c.url.pathname === "/nametags" && c.url.searchParams.has("fresh")), "");
+	ok("the rules really loaded from there", hosted.live && hosted.live.tags.length === 2, JSON.stringify(hosted.live && hosted.live.tags));
+	ok("the status line names the source", /loaded from the Xyro API/.test(el("status").textContent), el("status").textContent);
+	ok("nothing points at jsDelivr any more", !calls.some(c => c.url.hostname === "cdn.jsdelivr.net"), calls.map(c => c.url.hostname).join(", "));
+
+	hosted.openEditor(0); // a ranked rule: that rank's seal, from the API
+	ok("a ranked rule's badge comes from the API", el("edBadgeCheck").src === "https://api.example/media/seal_founder.png", el("edBadgeCheck").src);
+	hosted.openEditor(1); // a rule with no rank - the official blue seal
+	ok("an unranked rule uses the API's verified badge", el("edBadgeCheck").src === "https://api.example/media/verified_seal_blue.png", el("edBadgeCheck").src);
+	hosted.closeEditor();
+
+	/* and when the API is down, the editor is exactly as it was before */
+	apiDown = true;
+	calls.length = 0;
+	const offline = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle();
+	ok("an unreachable API falls back to the old GitHub path", offline.live && offline.live.tags.length === 2 && calls.some(c => c.url.hostname === "raw.githubusercontent.com" && c.url.pathname.endsWith("/nametags.json")), JSON.stringify(offline.live && offline.live.tags));
+	ok("...and says where those rules came from", /loaded from GitHub/.test(el("status").textContent), el("status").textContent);
+	// the API itself is reachable, so the artwork still comes from it - only the
+	// rules read failed, and the CDN would be the wrong answer for that
+	ok("...while artwork still comes from the reachable API", /^https:\/\/api\.example\/media\//.test(el("edBadgeCheck").src), el("edBadgeCheck").src);
+	apiDown = false;
+
+	/* --- 6. structural invariants --------------------------------------- */
 
 	ok("the publish verifies itself against the API", script.includes("const landed = check ? canonJSON(asConfig(check.config)) === canonJSON(wanted) : null;") && script.includes('status("published, but GitHub'), "");
 	ok("a verified publish says so", script.includes('status("published and checked against the file"'), "");
@@ -278,6 +332,10 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 		!!chip && Number(chip.replace("api-r", "")) >= 3, "chip text: " + chip);
 	ok("load() checks the API", /const json = await fetchConfig\(\{ checkApi: true, report: true \}\)/.test(script), "");
 	ok("the periodic poll stays off the API budget when there is no token", script.includes("!!getToken() || !!opts.checkApi || !raw"), "");
+	ok("the editor reads the rules through the API when one is configured", /async function hostedRules\(opts\)/.test(script) && script.includes('NT_BASE + "/nametags"'), "");
+	ok("and gets tag artwork from the same origin", /function mediaURL\(file\)/.test(script) && script.includes('NT_BASE + "/media/"'), "");
+	ok("no hardcoded jsDelivr media URL is left in the editor", !/cdn\.jsdelivr\.net\/gh\/vertxxy-1\/Xyro@main\/media/.test(script), "");
+	ok("a publish does not purge a CDN the API clients never read", /if \(!NT_BASE\) \{/.test(script) && /the API serves it, so every client is current/.test(script), "");
 
 	console.log("\n" + (failures.length ? failures.length + " FAILED" : pass + " checks passed") + (failures.length ? " (" + pass + " passed)" : ""));
 	process.exit(failures.length ? 1 : 0);

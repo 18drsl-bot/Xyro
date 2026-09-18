@@ -48,6 +48,20 @@ npx wrangler secret put XYRO_ADMIN_KEY  # the OWNER key: you + your Discord bot 
 npx wrangler secret put FB_SECRET       # optional; skip if your rules are open
 ```
 
+Two more secrets are optional, and each unlocks one thing:
+
+```bash
+npx wrangler secret put FB_SERVICE_ACCOUNT  # lets the Worker write staff/gate (section 4)
+npx wrangler secret put GH_TOKEN            # lets it read + publish nametags.json (section 7)
+```
+
+`GH_TOKEN` is a **fine-grained GitHub token with Contents: Read and write** on
+this repo. With it, the tag rules are read straight from the never-cached
+GitHub API (so no 60-per-hour IP limit applies at Cloudflare's shared egress)
+and `PUT /nametags` can publish for you. Without it, reads fall back to
+`raw.githubusercontent` with a cache-buster — still fresh, just less
+authoritative — and publishing simply stays unavailable.
+
 The two keys are separate on purpose. `XYRO_KEY` is in `api.json` in a public
 repo, so treat it as public: it can read, heartbeat and enqueue commands, and
 nothing else. `XYRO_ADMIN_KEY` never leaves your machine, and it is the only
@@ -349,7 +363,58 @@ Worker — but cannot reach the database, and rotating `XYRO_KEY`
 (`npx wrangler secret put XYRO_KEY`) invalidates every extracted copy at once.
 That is the property the direct-to-database setup can never have.
 
-## 7. Routes
+## 7. The nametags, hosted here
+
+The tag system is the one part of this project that lived entirely on someone
+else's CDN: the rules on `raw.githubusercontent`, the seals on jsDelivr. That is
+what produced the two bugs that were hardest to explain — *"the editor will not
+keep my changes"* (a stale CDN copy arriving right after a publish and being
+mistaken for the file) and *"my badge colour is wrong"* (an edge that had not
+let go of an old seal yet). Both are the same shape: a cache answering a
+question about the file.
+
+So the Worker hosts all of it now, on your own domain:
+
+| What | Where | Freshness |
+|---|---|---|
+| the rules | `GET /nametags` | 30s edge cache, `?fresh=1` for a guaranteed read |
+| the seals and badge | `GET /media/seal_founder.png`, `/media/verified_seal_blue.png` | 300s (the files are immutable once named), `?fresh=1` to override |
+| publishing | `PUT /nametags` | commits to `nametags.json` and drops the cache immediately |
+
+The script and the editor both use it: with `api.json` present, the game reads
+the rules and every piece of tag artwork from this one origin, and the editor
+reads them through it too (a first load included). `raw.githubusercontent` and
+jsDelivr survive only as the fallback for a setup with no `api.json`, which is
+also why the editor still works if you never deploy any of this.
+
+Nothing here is key-gated, deliberately: the rules are public in the repo, the
+editor is a public page, and a key would only stop *you* from seeing what is
+actually published. The kill switch does not cut this off either — during
+maintenance everyone should still be able to read the rules.
+
+### Publishing through the API (optional)
+
+Set `GH_TOKEN` (fine-grained token, **Contents: Read and write** on this repo)
+and the editor can publish without a GitHub login in the browser:
+
+```bash
+curl -X PUT https://xyro-api.<you>.workers.dev/nametags \
+  -H "x-api-key: YOUR_XYRO_ADMIN_KEY" -H "content-type: application/json" \
+  --data-binary @nametags.json
+```
+
+* It needs **both** keys in a sense: `XYRO_ADMIN_KEY` proves it is you,
+  `GH_TOKEN` is what makes the commit possible. With no `GH_TOKEN` the route
+  answers `503` and says so rather than pretending.
+* A stale editor can send `?sha=<blob sha>`; GitHub then refuses the write with
+  `409` instead of silently overwriting a newer revision. Without it, the Worker
+  reads the current sha first — an explicit overwrite.
+* A successful publish deletes this Worker's cached copies of the rules, so the
+  next reader gets the new revision rather than up to 30 seconds of the old one.
+* `GH_TOKEN` can write to your repo, so it belongs in the secret store and
+  nowhere else — never in `wrangler.toml`, never in `api.json`.
+
+## 8. Routes
 
 | Route | Method | Key | Purpose |
 |---|---|---|---|
@@ -362,7 +427,10 @@ That is the property the direct-to-database setup can never have.
 | `/script` | GET | if gated | the script itself, `403` while the gate is off |
 | `/loader` | GET | no | the loader you hand out (`LOADER_FILE`, default `custom-loader.lua`), `403` while the gate is off |
 | `/version` | GET | if gated | `version.txt` from the repo (edge-cached 60s) |
-| `/config` | GET | if gated | `nametags.json` (edge-cached 60s; `?fresh=1` bypasses) |
+| `/nametags` | GET | no | the published tag rules (edge-cached 30s; `?fresh=1` bypasses) |
+| `/nametags.json` `/config` | GET | no | the same bytes under the older names |
+| `/nametags` | PUT/POST | **admin** + `GH_TOKEN` | publish the rules: commits `nametags.json`, drops the cache, returns the new sha |
+| `/media/<file>` | GET | no | seals, the verified badge and any other tag artwork (edge-cached 300s; `?fresh=1` bypasses) |
 | `/online` | GET | if gated | presence: `{count, online[], beats{}, window}` |
 | `/staff` | GET | if gated | the whole `staff` node |
 | `/blacklist` | GET | if gated | just the blacklist map |
@@ -392,10 +460,10 @@ Only `staff`, `cmd` and `here` are proxied. The Worker is **not** a generic
 database proxy — any other path is a 404, so a leaked URL cannot be used to walk
 the rest of your database.
 
-## 8. Day-to-day
+## 9. Day-to-day
 
 ```bash
-node api/test.js              # 106 route tests against a mocked database, no network
+node api/test.js              # 142 route tests against a mocked database and repo, no network
 npx wrangler tail             # live request log while you test in game
 npx wrangler dev              # run the Worker locally on http://localhost:8787
 npx wrangler deploy           # ship a change
@@ -405,7 +473,7 @@ Free plan limits: **100,000 requests/day**, and this Worker makes one database
 call per node read (never more). Presence polling every 2s per player is the
 bulk of the traffic — a full lobby for an evening is far inside the free tier.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Cause |
 |---|---|
@@ -421,5 +489,9 @@ bulk of the traffic — a full lobby for an evening is far inside the free tier.
 | Admin route is `403` but reads work fine | Same cause: reads are allowed anonymously, only writes need the credential. |
 | `502 ... Permission denied` | Rules refusing a *read* — publish rules that let an owner (the credential) through, or unset them. |
 | `502 database unreachable` | `FB_URL` in `wrangler.toml` is wrong, or the database is paused. |
+| `/nametags` answers `502 ... is not {options, tags[]}` | The file on GitHub is not the expected shape (a half-finished edit, or the wrong file). It refuses rather than serving half a rule set to every client. |
+| `/media/...` answers `404` | The filename is missing from the repo, or its extension is not a whitelisted image/audio type. Path segments are not allowed. |
+| `503 ... needs GH_TOKEN` on `PUT /nametags` | Expected: publishing through the API is off until you set that secret. Reads are unaffected. |
+| Tag changes take up to 30s to reach running clients | The Worker's edge cache. `?fresh=1` on a manual read bypasses it, and publishing through the API clears it outright. |
 | Script footer says `mode firebase` while you expect `api` | Three API calls in a row failed and the client demoted itself to the direct path. The footer also names the reason (`transport.lastPollErr`). |
 | Editor still shows the old live-users behaviour | `index.html` is edge-cached by GitHub Pages for ~10 minutes — hard-refresh (Ctrl+Shift+R). |

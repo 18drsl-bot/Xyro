@@ -8673,6 +8673,28 @@ local function capitalize(s)
 	return s == "" and s or (s:sub(1, 1):upper() .. s:sub(2))
 end
 
+-- The Xyro API (api/worker.js) hosts the tag system: GET /nametags serves the
+-- published rules and GET /media/<file> serves every seal and badge. When the
+-- API is configured the game reads from ONE origin - no GitHub rate limit, no
+-- jsDelivr edge (which has served days-stale seals, and a stale seal reads as
+-- "the badge colour is wrong"), and one cache to reason about instead of three.
+-- Returns nil with no API configured, so direct-Firebase setups keep the old
+-- GitHub chain untouched. The key always rides along: executors' game:HttpGet
+-- cannot set headers, which is exactly why the API accepts ?key=.
+H.ntApiUrl = function(path, query)
+	if type(H.API_URL) ~= "string" or H.API_URL == "" then
+		return nil
+	end
+	local url = H.API_URL .. "/" .. path
+	if type(query) == "string" and query ~= "" then
+		url = url .. (query:sub(1, 1) == "?" and query or "?" .. query)
+	end
+	if H.API_KEY and H.API_KEY ~= "" then
+		url = url .. (url:find("?", 1, true) and "&" or "?") .. "key=" .. H.HS:UrlEncode(H.API_KEY)
+	end
+	return url
+end
+
 -- Website nametags: rules live in nametags.json in this repo (vertxxy-1/Xyro),
 -- edited on github.com or the tag-editor site and fetched live by the game.
 -- Two-line pill design: avatar icon + display name + @username, custom fonts,
@@ -8686,11 +8708,10 @@ local NT_API_URL = "https://api.github.com/repos/vertxxy-1/Xyro/contents/nametag
 local NT_ACCENT = Color3.fromRGB(108, 128, 255)
 
 -- The REAL Roblox verified checkmark (blue scalloped seal + white check),
--- served from the repo for EVERY badge:true rule - not just staff. Rank
--- tints still override the color for staff tiers; without a rank everyone
+-- served by the API (or the repo) for EVERY badge:true rule - not just staff.
+-- Rank tints still override the color for staff tiers; without a rank everyone
 -- gets the official-blue seal. Tinted builds (via getcustomasset) and the
 -- rank PNGs stay as the colored path; this is the always-works fallback.
-local NT_BADGE_URL = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/verified_seal_blue.png"
 local NT_BADGE_GLYPH = ""
 pcall(function()
 	NT_BADGE_GLYPH = utf8.char(0xE000)
@@ -9089,14 +9110,30 @@ local function ntFromAPI(jsonBody)
 end
 
 local function ntFetch(manual)
-	-- priority: GitHub API on manual fetches (never stale, always the
-	-- published truth). Periodic fetches go raw.githubusercontent FIRST
-	-- (fresh within seconds of a push) and double-check via the API every
-	-- NT_API_EVERY_Nth round. jsDelivr is LAST RESORT only: its edge has
-	-- served a days-stale copy even after a "successful" purge, so the
-	-- CDN must never be trusted as the primary source again.
+	-- priority: the Xyro API first - it serves the published rules from a
+	-- single origin, edge-cached for 30s, with the one-request ?fresh=1 escape
+	-- hatch for a manual refresh. Everything below is the FALLBACK for a setup
+	-- with no api.json: GitHub's contents API when we can afford it (never
+	-- cached), then raw with a cache-buster, then jsDelivr last - its edge has
+	-- served a days-stale copy even after a "successful" purge, so it must
+	-- never be trusted as a primary source.
 	local text = nil
-	if manual then
+	local apiTagUrl = H.ntApiUrl and H.ntApiUrl("nametags", manual and "fresh=1" or nil)
+	if apiTagUrl then
+		local body = ntHttpGet(apiTagUrl)
+		-- validate before trusting it: a 403/404/HTML error page is a string
+		-- too, and applying half of it would blank everyone's tags
+		if type(body) == "string" and body ~= "" then
+			local okA, cfgA = pcall(function()
+				return H.HS:JSONDecode(body)
+			end)
+			if okA and type(cfgA) == "table" and type(cfgA.tags) == "table" then
+				text = body
+				ntLastSource = "api"
+			end
+		end
+	end
+	if not text and manual then
 		text = ntFromAPI(ntHttpGet(NT_API_URL) or "")
 		if text then
 			ntLastSource = "api"
@@ -9848,10 +9885,19 @@ local NT_SEAL_MASK = {
 	"0000000000000000000000000000",
 }
 local NT_SEAL_TINTS = {} -- [rank] = asset uri (false = build failed)
--- pre-tinted seals served from the repo (jsDelivr edge). The in-engine tint
--- stays as backup; on executors where getcustomasset refuses rewritten files
--- the fallback keeps the real verified-seal artwork instead of a plain check.
-local NT_SEAL_URL_BASE = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/seal_"
+-- pre-tinted seals. The in-engine tint stays as backup; on executors where
+-- getcustomasset refuses rewritten files the fallback keeps the real
+-- verified-seal artwork instead of a plain check.
+-- ONE place that decides where tag artwork comes from: the API when it is
+-- configured (same origin as the rules), jsDelivr only for a setup that has no
+-- API to talk to.
+local function ntMediaUrl(file, query)
+	local viaApi = H.ntApiUrl and H.ntApiUrl("media/" .. file, query)
+	if viaApi then
+		return viaApi
+	end
+	return "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/" .. file .. (query or "")
+end
 local function ntSealAsset(rank)
 	if NT_SEAL_TINTS[rank] ~= nil then
 		return NT_SEAL_TINTS[rank] or nil
@@ -10109,9 +10155,21 @@ local function ntDataFromUri(url)
 end
 
 local function ntApplyImage(img, url)
-	-- serve repo media from jsDelivr's edge instead of raw.githubusercontent
-	-- (faster worldwide, same file)
-	url = url:gsub("^https://raw%.githubusercontent%.com/([%w%-%_%.]+)/([%w%-%_%.]+)/main/", "https://cdn.jsdelivr.net/gh/%1/%2@main/")
+	-- Repo media through the API when it is configured: same origin as the
+	-- rules, and no jsDelivr edge that can hold a stale seal for days. A custom
+	-- URL from a rule (someone's own background, an rbxassetid) is untouched.
+	local file, query = url:match("^https://raw%.githubusercontent%.com/[^/]+/[^/]+/[^/]+/(media/[^?]+)(.*)$")
+	if not file then
+		file, query = url:match("^https://cdn%.jsdelivr%.net/gh/[^/]+/[^/]+@[^/]+/(media/[^?]+)(.*)$")
+	end
+	local viaApi = file and H.ntApiUrl and H.ntApiUrl(file, query)
+	if viaApi then
+		url = viaApi
+	else
+		-- no API configured: the old behaviour, jsDelivr's edge instead of
+		-- raw.githubusercontent (faster worldwide, same file)
+		url = url:gsub("^https://raw%.githubusercontent%.com/([%w%-%_%.]+)/([%w%-%_%.]+)/main/", "https://cdn.jsdelivr.net/gh/%1/%2@main/")
+	end
 	if url:match("^%d+$") then
 		url = "rbxassetid://" .. url
 	end
@@ -10432,13 +10490,13 @@ local function ntBuild(plr, rule)
 		local sealBuster = "?v=14"
 		local sealUrl = nil
 		if badgeRank and badgeTint then
-			-- RANK TINT: the repo's pre-tinted PNG first - the same network
-			-- pipeline that renders the blue seal everywhere - so in-game
-			-- colors always match the tag editor preview. (The in-engine
-			-- tinted build stays as the stage-2 backup below.)
-			sealUrl = NT_SEAL_URL_BASE .. badgeRank .. ".png" .. sealBuster
+			-- RANK TINT: the pre-tinted PNG first - the same network pipeline
+			-- that renders the blue seal everywhere - so in-game colors always
+			-- match the tag editor preview. (The in-engine tinted build stays
+			-- as the stage-2 backup below.)
+			sealUrl = ntMediaUrl("seal_" .. badgeRank .. ".png", sealBuster)
 		else
-			sealUrl = NT_BADGE_URL .. sealBuster
+			sealUrl = ntMediaUrl("verified_seal_blue.png", sealBuster)
 		end
 		b.Text = ""
 		task.spawn(function()

@@ -63,10 +63,12 @@ running the script never get tagged). The current design: avatar icon + display 
 row + `@username` row on a dark rounded pill, visible through walls, with live health
 and distance, click-to-teleport, and the game's default overhead name hidden.
 
-`nametags.json` controls everything. The game reads it straight from raw GitHub (fresh
-within seconds of a publish) and double-checks via the GitHub API every ~60s, so a stale
-CDN can never delay your updates. It re-fetches automatically every 15 seconds, or run
-`!nametagsfetch` for instant reload.
+`nametags.json` controls everything, and **the API hosts it**: with `api.json` set,
+the game reads the rules from `GET /nametags` and every seal and badge from
+`GET /media/<file>` on your own Worker (`api/README.md` section 7), so no GitHub CDN or
+jsDelivr edge sits between a publish and a client. Without an API configured it falls
+back to raw GitHub and double-checks via the GitHub API every ~60s, exactly as before.
+It re-fetches automatically every 15 seconds, or run `!nametagsfetch` for instant reload.
 
 ```json
 {
@@ -116,13 +118,16 @@ Icons support PNG/JPG/GIF by URL, asset id, or base64 `data:` URI - **GIFs fully
 The editor is **GitHub-hosted only**: https://vertxxy-1.github.io/Xyro/ — nothing runs on
 your PC; publish straight from that page.
 
-It asks the **Contents API** (never cached) what the file says, and treats the
-raw CDN copy as a hint only, so "the site does not match nametags.json" cannot
-happen from a stale cache. After a publish it reads the file back and says so -
-"published and checked against the file (sha abc1234)" - and if GitHub reports
-something different it says that instead of claiming success. The header chip
-(`build: api-r3`) names the build the page is actually running, so if a hard
-refresh (Ctrl+Shift+R) is needed you can see it.
+It reads the rules and the tag artwork through the **Xyro API** when one is
+configured (`GET /nametags`, `GET /media/<file>`), which is the file rather than a
+CDN's memory of it - so "the site does not match nametags.json" cannot happen from a
+stale cache, and no GitHub token or rate-limit budget is involved. With no `api.json`
+it falls back to the Contents API (never cached) and treats the raw copy as a hint
+only. After a publish it reads the file back and says so - "published and checked
+against the file (sha abc1234)" - and if GitHub reports something different it says
+that instead of claiming success. The header chip (`build: api-r6`) names the build
+the page is actually running, so if a hard refresh (Ctrl+Shift+R) is needed you can
+see it.
 
 ## Firebase staff list
 

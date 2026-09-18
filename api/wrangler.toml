@@ -24,6 +24,14 @@ LOADER_FILE = "custom-loader.lua"
 #                                             # (paste the whole key file - see
 #                                             # api/README.md section 4)
 #   npx wrangler secret put FB_SECRET         # legacy alternative to the above
+#   npx wrangler secret put GH_TOKEN          # fine-grained repo token with
+#                                             # Contents: Read and write. Optional:
+#                                             # it makes the tag rules read straight
+#                                             # from the never-cached GitHub API and
+#                                             # turns on PUT /nametags (api/README.md
+#                                             # section 7). Without it, reads fall
+#                                             # back to cache-busted raw and
+#                                             # publishing stays unavailable.
 #
 # Watch requests and errors live while testing:
 #   npx wrangler tail

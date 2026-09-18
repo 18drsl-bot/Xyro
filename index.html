@@ -360,9 +360,9 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r5</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r6</span>
 		<span class="chip" id="tokenChip" title="token status">no token</span>
-		<button class="subtle" id="refreshBtn" title="pull the latest published rules from GitHub now">&#8635; refresh</button>
+		<button class="subtle" id="refreshBtn" title="pull the latest published rules now (through the API when one is configured, otherwise straight from GitHub)">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
 			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
 			nametags.json
@@ -566,7 +566,7 @@
 						<label><input id="fType" type="checkbox"> typewriter name reveal</label>
 					</div>
 				</div>
-				<div class="mini-stage"><span class="badge mini" id="edBadge"><img id="edImg" alt="" class="hidden"><span id="edLabel">?</span><img id="edBadgeCheck" alt="" class="vseal" style="display:none" src="https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/verified_seal_blue.png"><span class="ubox plain" id="edUbox"><span id="edUser">@user</span></span></span></div>
+				<div class="mini-stage"><span class="badge mini" id="edBadge"><img id="edImg" alt="" class="hidden"><span id="edLabel">?</span><img id="edBadgeCheck" alt="" class="vseal" style="display:none"><span class="ubox plain" id="edUbox"><span id="edUser">@user</span></span></span></div>
 				<div class="eactions">
 					<button class="subtle" id="edCancel">Cancel</button>
 					<button class="ghost" id="edDelete" style="border-color:rgba(255,93,93,.45);color:var(--danger)">Delete rule</button>
@@ -628,7 +628,25 @@ const PRESENCE_WINDOW = 75;
 /* cache-buster that works whether or not the URL already carries ?key=... */
 const stamp = u => u + (u.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
 
-(async function followApi() {
+/* ---------- where the tags come from ---------- */
+/* The API hosts the nametag system: GET /nametags is the rules file and
+   GET /media/<file> is every seal and the verified badge. Reading them from
+   there is the difference between "what the file says" and "what a CDN thinks
+   it said" - and it needs no GitHub token and no rate-limit budget, because
+   the Worker does that part. Empty NT_BASE (no api.json) keeps the old GitHub
+   path exactly as it was, so the editor works either way. */
+let NT_BASE = "";
+let NT_KEY = "";
+const CDN_MEDIA = "https://cdn.jsdelivr.net/gh/" + REPO + "@main/media/";
+function mediaURL(file) { return (NT_BASE ? NT_BASE + "/media/" : CDN_MEDIA) + file; }
+/* re-draw the mini preview once we know where the artwork lives */
+function applyMediaHosts() {
+	try { renderEditorPreview(); } catch (_) {}
+}
+
+/* the api.json lookup, exposed as a promise: load() runs at boot and must not
+   read from GitHub merely because it happens to run first */
+const apiReady = (async function followApi() {
 	try {
 		const res = await fetch("https://raw.githubusercontent.com/" + REPO + "/main/api.json?t=" + Date.now(), { cache: "no-store" });
 		if (!res.ok) return;
@@ -636,10 +654,13 @@ const stamp = u => u + (u.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
 		const api = parsed && typeof parsed === "object" ? (parsed.api || parsed) : null;
 		if (!api || typeof api.url !== "string" || !api.url.trim()) return;
 		const base = api.url.trim().replace(/\/+$/, "");
-		const key = typeof api.key === "string" && api.key ? "?key=" + encodeURIComponent(api.key) : "";
+		NT_BASE = base;
+		NT_KEY = typeof api.key === "string" ? api.key : "";
+		const key = NT_KEY ? "?key=" + encodeURIComponent(NT_KEY) : "";
 		FB_HERE = base + "/here.json" + key;
 		FB_STAFF = base + "/staff.json" + key;
-		console.info("[xyro] live users + staff via the Xyro API:", base);
+		console.info("[xyro] nametags, live users + staff via the Xyro API:", base);
+		applyMediaHosts();
 	} catch {}
 })();
 
@@ -1054,8 +1075,9 @@ function renderEditorPreview() {
 	const check = $("edBadgeCheck");
 	check.style.display = t.badge ? "" : "none";
 	const sealFile = RANK_SEALS[t.rank];
-	if (t.badge && sealFile) check.src = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/" + sealFile;
-	else check.src = "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/verified_seal_blue.png";
+	/* mediaURL: the API's /media/<file> when one is configured, jsDelivr only
+	   when there is no API to ask - same file, one origin, nothing stale */
+	check.src = mediaURL(t.badge && sealFile ? sealFile : "verified_seal_blue.png");
 	const img = $("edImg");
 	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
 		img.src = t.image; img.classList.remove("hidden");
@@ -1541,9 +1563,43 @@ function asConfig(c) {
 	return { options: (c && c.options) || {}, tags: Array.isArray(c && c.tags) ? c.tags : [] };
 }
 
+/* which source answered last - worth naming, because "the API" and "a CDN"
+   are the difference between the file and a guess at it */
+let rulesSource = "GitHub";
+
+/* the API's copy of the rules: one origin, no token needed, no rate-limit
+   budget, and ?fresh=1 walks past even its 30-second edge cache. Returns null
+   when no API is configured so the GitHub path below still runs. */
+async function hostedRules(opts) {
+	/* the first read happens at boot, before this promise settles - waiting here
+	   is what makes "the site reads the rules from the API" true on the FIRST
+	   load rather than from the first poll onwards */
+	await apiReady;
+	if (!NT_BASE) return null;
+	const qs = [];
+	if (opts && opts.fresh) qs.push("fresh=1");
+	if (NT_KEY) qs.push("key=" + encodeURIComponent(NT_KEY));
+	const res = await fetch(stamp(NT_BASE + "/nametags" + (qs.length ? "?" + qs.join("&") : "")), { cache: "no-store" });
+	if (!res.ok) throw new Error("api " + res.status);
+	const config = await res.json();
+	if (!config || typeof config.options !== "object" || !Array.isArray(config.tags)) throw new Error("api returned no rules");
+	rulesSource = "the Xyro API";
+	return { config, sha: null };
+}
+
 async function fetchConfig(opts) {
 	opts = opts || {};
+	/* PUBLISHING needs the blob sha, and only GitHub's contents API has it,
+	   so that path is unchanged */
 	if (opts.needSha) return apiConfigWhenReady(opts.onWait);
+	/* READING: the hosted copy first. It IS the file - the Worker reads it with
+	   no CDN in front - so a publish can no longer be "undone" by its own echo
+	   arriving from a cache, which was the whole "it will not keep my changes"
+	   bug. The GitHub dance below is the fallback for no api.json. */
+	let hosted = null;
+	try { hosted = await hostedRules({ fresh: !!opts.checkApi }); } catch (_) { hosted = null; }
+	if (hosted) return hosted;
+	rulesSource = "GitHub";
 	let raw = null;
 	try { raw = await rawConfig(); } catch (_) { /* fall through to the API */ }
 	/* a token makes the API free (5,000/hour) so it is consulted every time; with
@@ -1566,8 +1622,7 @@ async function fetchConfig(opts) {
 	return { config: raw.config, sha: api ? api.sha : null };
 }
 
-async function load() {
-	status("loading nametags.json from GitHub...", "info");
+async function load() {		status("loading the published tag rules...", "info");
 	try {
 		/* checkApi: an opened editor must show the file, not a CDN's idea of it */
 		const json = await fetchConfig({ checkApi: true, report: true });
@@ -1602,7 +1657,7 @@ async function load() {
 		}
 		renderOptions();
 		renderAll();
-		status(live.tags.length + " rules loaded from GitHub" + (liveSha ? " (file " + String(liveSha).slice(0, 7) + ")" : "") + ($("draftBtn").classList.contains("hidden") ? "" : " - a saved draft is available"), "");
+		status(live.tags.length + " rules loaded from " + rulesSource + (liveSha ? " (file " + String(liveSha).slice(0, 7) + ")" : "") + ($("draftBtn").classList.contains("hidden") ? "" : " - a saved draft is available"), "");
 	} catch (e) {
 		status("network error: " + e, "err");
 	}
@@ -1640,9 +1695,9 @@ async function refreshLive(sayIt, opts) {
 			$("draftBtn").classList.add("hidden");
 			renderOptions();
 			renderAll();
-			if (sayIt) { status("rules refreshed from GitHub", "ok"); toast("Updated to the latest published rules", "ok"); }
+			if (sayIt) { status("rules refreshed from " + rulesSource, "ok"); toast("Updated to the latest published rules", "ok"); }
 		} else if (sayIt) {
-			toast("Newer rules exist on GitHub - publishing will merge them in automatically", "info", 8);
+			toast("Newer rules were published - publishing will merge them in automatically", "info", 8);
 		}
 		return true;
 	} catch (_) {
@@ -1797,10 +1852,13 @@ $("publishBtn").onclick = async () => {
 		}
 		saveDraft();
 		$("draftBtn").classList.add("hidden");
-		renderAll();			/* kick the game's CDN so the update lands in seconds, not minutes.
-			   jsDelivr rate-throttles purges (~4 min windows): when throttled,
-			   RETRY until it succeeds (publish isn't "live" until the CDN moves).
-			   Players on v0.5.2+ also self-heal via the API within ~90s. */
+		renderAll();
+		/* kick the CDN so the update lands in seconds, not minutes - but ONLY
+		   when there is no API. Where the API hosts the rules the game reads the
+		   file itself, so jsDelivr is a last-resort fallback no current build
+		   touches, and purging it (plus retrying for four minutes when jsDelivr
+		   throttles) would be noise about a copy nobody reads. */
+		if (!NT_BASE) {
 			const purgeOnce = async () => {
 				try {
 					const pj = await (await fetch("https://purge.jsdelivr.net/gh/" + REPO + "@main/" + PATH)).json();
@@ -1810,7 +1868,7 @@ $("publishBtn").onclick = async () => {
 			if (!(await purgeOnce())) {
 				const waitS = 250; // just past the throttle window
 				status("published, but CDN purge throttled - retrying in " + Math.round(waitS / 60) + " min...", "info");
-				toast("Published - CDN purge throttled, auto-retrying in ~4 min (players self-heal via API within ~90s)", "info", 10);
+				toast("Published - CDN purge throttled, auto-retrying in ~4 min", "info", 10);
 				setTimeout(async () => {
 					for (let i = 0; i < 3; i++) {
 						if (await purgeOnce()) {
@@ -1819,13 +1877,15 @@ $("publishBtn").onclick = async () => {
 						}
 						await new Promise(r => setTimeout(r, 60000)); // try again each minute
 					}
-					toast("CDN purge still throttled after retries - in-game API self-heal covers it; try purge.jsdelivr.net manually later", "err", 12);
+					toast("CDN purge still throttled after retries - try purge.jsdelivr.net manually later", "err", 12);
 				}, waitS * 1000);
 			}
-			if (landed !== false) {
-				status("published and checked against the file" + (liveSha ? " (sha " + String(liveSha).slice(0, 7) + ")" : "") + " - in game in seconds, or run !nametagsfetch now", "ok");
-				toast("Published - purging CDN...", "ok", 4);
-			}
+		}
+		if (landed !== false) {
+			status("published and checked against the file" + (liveSha ? " (sha " + String(liveSha).slice(0, 7) + ")" : "") +
+				(NT_BASE ? " - the API serves it, so every client is current within ~30s" : " - in game in seconds, or run !nametagsfetch now"), "ok");
+			toast(NT_BASE ? "Published" : "Published - purging CDN...", "ok", 4);
+		}
 	} catch (e) {
 		status("network error: " + e, "err");
 	}
