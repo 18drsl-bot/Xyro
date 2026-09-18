@@ -148,7 +148,36 @@ What happens within ~20 seconds:
 * **`!gate`** in game prints the current state (staff only), and `!staffrefresh`
   applies a change on that client instantly.
 
-**Three ways to trip it.** First, curl against the API:
+**Easiest: the control command that lives next to this file.** It reads the URL
+from `api.json` and the owner key from `XYRO_ADMIN_KEY` (or `api/.xyro-admin-key`,
+which is gitignored):
+
+```bash
+node api/gate.js status                        # what the gate looks like now
+node api/gate.js off "down for 10 minutes"      # switch the script off
+node api/gate.js off "back soon" --for 10m      # ...and re-open by itself
+node api/gate.js extend 20m                     # push an open window further out
+node api/gate.js on                            # let everyone back in
+node api/gate.js warn "restarting in 10 min"     # announcement, nobody stopped
+node api/gate.js clear-warn                    # remove the announcement
+```
+
+Save the key once and every later command is a single line:
+
+```bash
+# PowerShell
+"your-admin-key" | Out-File -Encoding ascii api/.xyro-admin-key
+# bash
+echo your-admin-key > api/.xyro-admin-key
+```
+
+**`--for` is the one worth remembering.** The switch re-opens on its own when the
+window passes, so a maintenance window you forgot about cannot lock everybody out
+for a day. No cron, no reminder: the loader and every client read the same `until`
+timestamp and stop treating the gate as closed the moment it expires. The status
+page counts it down for you.
+
+Or with curl / your Discord bot:
 
 ```bash
 export ADMIN=your-xyro-admin-key
@@ -156,6 +185,9 @@ export API=https://xyro-api.you.workers.dev
 
 # stop everyone, with a message they will see
 curl -X POST "$API/gate/off" -H "x-api-key: $ADMIN" -d "down for a few minutes"
+
+# the same, with a window: back on automatically in 10 minutes
+curl -X POST "$API/gate/off?for=600" -H "x-api-key: $ADMIN" -d "down for a few minutes"
 
 # let them back in
 curl -X POST "$API/gate/on"  -H "x-api-key: $ADMIN"
@@ -175,8 +207,14 @@ Second, **your Discord bot** (the key stays on your machine) — see
 Third, the **Firebase console**: set `staff/gate/enabled` to `false` by hand.
 That works with no API deployed at all, because the loader and the script both
 know how to read the gate straight from the database when `api.json` has no url.
+Add `"until": <unix seconds>` there too if you want a window, and delete the
+node (or set `enabled: true`) to re-open.
 
-**Two deliberate design choices**, both worth knowing:
+**Three deliberate design choices**, all worth knowing:
+
+* **A window can close itself.** `until` is absolute, not a duration, so it
+  survives clock drift and a client that slept through the window: every reader
+  compares it to *its own* clock and re-opens on its own.
 
 * **A gate that cannot be read counts as ON.** If the database is down, denied or
   has no `gate` node, everyone keeps running. A database hiccup must never be able
@@ -256,8 +294,8 @@ That is the property the direct-to-database setup can never have.
 | `/health` | GET | no | the same as JSON: database, keys, and the current gate |
 | `/gate` | GET | if gated | the kill switch: `{enabled, message, warn, by, source}` |
 | `/staff/gate.json` | GET | if gated | the same thing database-shaped (this is what the script polls) |
-| `/gate` | POST | **admin** | patch `{enabled, message, warn}`; partial patches merge |
-| `/gate/off` `/gate/on` | POST | **admin** | trip / clear the switch; the body is the on-screen message |
+| `/gate` | POST | **admin** | patch `{enabled, message, warn, until, for}`; partial patches merge |
+| `/gate/off` `/gate/on` | POST | **admin** | trip / clear the switch; the body is the on-screen message, `?for=` sets a window |
 | `/script` | GET | if gated | the script itself, `403` while the gate is off |
 | `/version` | GET | if gated | `version.txt` from the repo (edge-cached 60s) |
 | `/config` | GET | if gated | `nametags.json` (edge-cached 60s; `?fresh=1` bypasses) |

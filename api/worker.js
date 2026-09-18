@@ -102,7 +102,7 @@ const ANY_KEY_RE = /^[A-Za-z0-9_]{1,32}$/;
 const MAX_CMD_BYTES = 512;
 
 /** The gate, as it reads when nothing is configured (or nothing is readable). */
-const GATE_DEFAULT = { enabled: true, message: "", warn: "", by: "", updated: 0 };
+const GATE_DEFAULT = { enabled: true, message: "", warn: "", by: "", updated: 0, until: 0, reopens_in: 0, auto_reopened: false };
 
 /* ---------------------------------------------------------------- plumbing */
 
@@ -146,8 +146,11 @@ function keyOf(req, url) {
 }
 
 function readKeyOk(req, url, env) {
-	if (!env.XYRO_KEY) return true; // unset = open reads (documented in /health)
-	return safeEqual(keyOf(req, url), env.XYRO_KEY);
+	if (!env.XYRO_KEY && !env.XYRO_ADMIN_KEY) return true; // unset = open reads (documented in /health)
+	const supplied = keyOf(req, url);
+	// the owner key reads too: a tool that holds only the admin key should not
+	// need a second key just to see the current state
+	return (env.XYRO_KEY && safeEqual(supplied, env.XYRO_KEY)) || (env.XYRO_ADMIN_KEY && safeEqual(supplied, env.XYRO_ADMIN_KEY));
 }
 
 function writeKeyResponse(req, url, env) {
@@ -296,18 +299,29 @@ function freshOnly(node, data, window) {
 
 /* ------------------------------------------------------------------- gate */
 
-/** Accepts {enabled, message, warn, by, updated}, or a bare boolean for the
- *  people who just type `false` into the Firebase console. */
+/** Accepts {enabled, message, warn, until, by, updated}, or a bare boolean for
+ *  the people who just type `false` into the Firebase console.
+ *
+ *  `until` is an absolute unix timestamp: the switch closes ITSELF when it
+ *  passes, so a forgotten maintenance window cannot lock everybody out for a
+ *  day. An expired gate reads as enabled and stops showing its stale message. */
 function normalizeGate(raw) {
 	if (raw === false) return { ...GATE_DEFAULT, enabled: false };
 	if (raw === true) return { ...GATE_DEFAULT };
 	const g = raw && typeof raw === "object" ? raw : {};
+	const now = Math.floor(Date.now() / 1000);
+	const until = Math.max(0, Math.floor(Number(g.until) || 0));
+	const expired = until > 0 && now >= until;
+	const off = g.enabled === false && !expired;
 	return {
-		enabled: g.enabled === false ? false : true, // anything unclear = live
-		message: typeof g.message === "string" ? g.message.slice(0, 300) : "",
+		enabled: !off, // anything unclear = live
+		message: off && typeof g.message === "string" ? g.message.slice(0, 300) : "",
 		warn: typeof g.warn === "string" ? g.warn.slice(0, 200) : "",
 		by: typeof g.by === "string" ? g.by.slice(0, 60) : "",
 		updated: Number(g.updated) || 0,
+		until: expired ? 0 : until,
+		reopens_in: off && until > 0 ? until - now : 0,
+		auto_reopened: expired && g.enabled === false,
 	};
 }
 
@@ -350,6 +364,14 @@ function ago(sec) {
 	return Math.floor(s / 86400) + "d ago";
 }
 
+function inFuture(sec) {
+	const s = Math.max(0, Number(sec || 0));
+	if (s < 60) return "in " + s + "s";
+	if (s < 3600) return "in " + Math.floor(s / 60) + "m";
+	if (s < 86400) return "in " + Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+	return "in " + Math.floor(s / 86400) + "d";
+}
+
 /**
  * A page for humans. `/health` stays JSON for machines; this is what you send
  * someone who asks "is it down?". It never throws: an unreachable database is
@@ -375,7 +397,7 @@ async function statusPage(env) {
 	}
 
 	const state = !gate.enabled
-		? { label: "DISABLED", color: "#e2aa3c", note: "The script is switched off for everyone." }
+		? { label: "DISABLED", color: "#e2aa3c", note: "The script is switched off for everyone." + (gate.reopens_in > 0 ? " It re-opens by itself " + inFuture(gate.reopens_in) + "." : "") }
 		: dbOk
 			? { label: "LIVE", color: "#34d399", note: "The script is up and talking to the database." }
 			: { label: "DEGRADED", color: "#e85050", note: "The API cannot reach the database. Clients keep running on what they already have." };
@@ -416,6 +438,8 @@ ${gate.message ? `<div class="msg"><b>Message</b>${esc(gate.message)}</div>` : "
 ${gate.warn ? `<div class="msg"><b>Heads up</b>${esc(gate.warn)}</div>` : ""}
 ${row("Gate", `${dot(gate.enabled)}${gate.enabled ? "open" : "switched off"} <span style=\"color:#6e6e7a\">(${esc(gate.source)})</span>`)}
 ${gate.updated ? row("Set", `${esc(ago(gate.updated))}${gate.by ? " by " + esc(gate.by) : ""}`) : ""}
+${gate.reopens_in > 0 ? row("Re-opens", esc(inFuture(gate.reopens_in))) : ""}
+${gate.auto_reopened ? row("Note", "the gate closed itself - the window you set has passed") : ""}
 ${row("Database", `${dot(dbOk)}${dbOk ? "connected" : esc(dbError || "unreachable")}`)}
 ${row("Players running now", String(online))}
 ${version ? row("Script version", esc(version)) : ""}
@@ -630,9 +654,11 @@ async function handle(req, env, ctx) {
 		if (denied) return denied;
 		if (writeThrottled(req)) return json(env, { error: "too many writes, slow down" }, 429);
 		const patch = {};
+		const forSeconds = Math.max(0, Math.floor(Number(url.searchParams.get("for")) || 0));
 		if (path === "/gate/off" || path === "/gate/on") {
 			patch.enabled = path === "/gate/on";
 			patch.message = (await req.text()).slice(0, 300);
+			if (forSeconds > 0) patch.until = Math.floor(Date.now() / 1000) + forSeconds;
 		} else {
 			const raw = await req.text();
 			let body;
@@ -645,17 +671,33 @@ async function handle(req, env, ctx) {
 			if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
 			if (typeof body.message === "string") patch.message = body.message.slice(0, 300);
 			if (typeof body.warn === "string") patch.warn = body.warn.slice(0, 200);
+			if (Number.isFinite(Number(body.until))) patch.until = Math.max(0, Math.floor(Number(body.until)));
+			if (!patch.until && Number.isFinite(Number(body.for)) && Number(body.for) > 0) {
+				patch.until = Math.floor(Date.now() / 1000) + Math.floor(Number(body.for));
+			}
 		}
-		if (patch.enabled === undefined && patch.message === undefined && patch.warn === undefined) {
+		if (patch.enabled === undefined && patch.message === undefined && patch.warn === undefined && patch.until === undefined) {
 			return json(env, { error: "send {enabled, message, warn} as JSON, or use /gate/off and /gate/on" }, 400);
 		}
 		// merge over the current gate so a partial patch keeps the other fields
 		const current = await readGate(env);
-		const next = { ...current, ...patch, by: String(req.headers.get("x-xyro-by") || "api").slice(0, 60), updated: Math.floor(Date.now() / 1000) };
-		delete next.source;
-		if (patch.enabled === true && patch.message === undefined) next.message = "";
-		await fb(env, "staff/gate", { method: "PUT", body: JSON.stringify(next) });
-		return json(env, { ok: true, gate: next });
+		const merged = { ...current, ...patch, by: String(req.headers.get("x-xyro-by") || "api").slice(0, 60), updated: Math.floor(Date.now() / 1000) };
+		if (patch.enabled === true && patch.message === undefined) merged.message = "";
+		if (patch.enabled === true && patch.until === undefined) merged.until = 0;
+		// store ONLY what a reader needs. `reopens_in`, `auto_reopened` and
+		// `source` are derived - writing them back would slowly rot the node, and
+		// returning them straight from the merge would report a re-open window
+		// as "0 seconds" on the very request that set it.
+		const stored = {
+			enabled: merged.enabled !== false,
+			message: typeof merged.message === "string" ? merged.message.slice(0, 300) : "",
+			warn: typeof merged.warn === "string" ? merged.warn.slice(0, 200) : "",
+			until: Math.max(0, Math.floor(Number(merged.until) || 0)),
+			by: merged.by,
+			updated: merged.updated,
+		};
+		await fb(env, "staff/gate", { method: "PUT", body: JSON.stringify(stored) });
+		return json(env, { ok: true, gate: { ...normalizeGate(stored), source: "database" } });
 	}
 
 	/* --- friendly routes --------------------------------------------------- */

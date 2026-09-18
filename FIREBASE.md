@@ -175,6 +175,14 @@ Use `"warn": "restarting in 10 minutes"` instead of `"enabled": false` for an
 announcement that does **not** stop anyone. Clear it by setting `"enabled": true`
 or by deleting the node.
 
+Add **`"until": <unix seconds>`** to close the gate only for a window — the
+loader and every client compare it to their own clock and re-open themselves when
+it passes, so a maintenance window you forget about cannot lock everybody out:
+
+```json
+{ "staff": { "gate": { "enabled": false, "message": "back in 10", "until": 1789700000 } } }
+```
+
 An unreadable gate counts as **enabled** on purpose: if the database is down,
 nobody gets kicked out of a running session. With the Xyro API deployed the same
 switch is controllable over HTTP with an owner-only key — see

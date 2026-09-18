@@ -1,2 +1,11 @@
 update.bat
 .gitignore
+
+# The owner key for the Xyro API (api/README.md). NEVER commit this: it is the
+# one that writes the blacklist and trips the kill switch. The client key lives
+# in api.json on purpose; this one does not.
+.xyro-admin-key
+api/.xyro-admin-key
+
+# wrangler's local state, including your Cloudflare account details
+api/.wrangler/

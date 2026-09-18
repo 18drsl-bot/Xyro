@@ -246,6 +246,51 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("/script refuses a truncated repo copy", res.status === 502 && /truncated/.test(json.error || ""), JSON.stringify(json));
 	scriptTruncated = false;
 
+	/* --- the gate's auto re-open window --------------------------------- */
+	store = { staff: { gate: { enabled: false, message: "maintenance", until: now() + 300 } } };
+	res = await call("/gate");
+	json = await body(res);
+	ok("a future `until` keeps the gate closed", json.enabled === false, JSON.stringify(json));
+	ok("...and reports how long is left", json.reopens_in > 290 && json.reopens_in <= 300, String(json.reopens_in));
+	res = await call("/");
+	const windowPage = await res.text();
+	ok("the status page shows the re-open window", windowPage.includes("Re-opens") && windowPage.includes("in 5m"), "");
+
+	store = { staff: { gate: { enabled: false, message: "maintenance", until: now() - 5 } } };
+	res = await call("/gate");
+	json = await body(res);
+	ok("a past `until` re-opens by itself", json.enabled === true && json.auto_reopened === true, JSON.stringify(json));
+	ok("a stale message stops being shown once it expires", json.message === "", JSON.stringify(json.message));
+
+	// writing a window through the API
+	store = { staff: {} };
+	res = await call("/gate", { method: "POST", body: JSON.stringify({ enabled: false, message: "brb", until: now() + 600 }), headers: { "x-api-key": "owner" }, env: WITH_KEYS });
+	json = await body(res);
+	ok("POST /gate stores an until window", json.gate.enabled === false && json.gate.until > now() && dbGet("staff/gate").until > now(), JSON.stringify(dbGet("staff/gate")));
+	res = await call("/gate", { method: "POST", body: JSON.stringify({ enabled: true }), headers: { "x-api-key": "owner" }, env: WITH_KEYS });
+	json = await body(res);
+	ok("re-enabling clears the window", json.gate.until === 0 && dbGet("staff/gate").until === 0, JSON.stringify(dbGet("staff/gate")));
+
+	res = await call("/gate/off?for=60", { method: "POST", body: "short window", env: WITH_KEYS, headers: { "x-api-key": "owner" } });
+	json = await body(res);
+	ok("/gate/off?for= sets a window", json.gate.enabled === false && json.gate.reopens_in > 50 && json.gate.reopens_in <= 60, JSON.stringify(json.gate));
+
+	// the owner key can read too (a tool holding only the admin key should not
+	// need a second key just to see the state)
+	res = await call("/staff.json", { env: WITH_KEYS, headers: { "x-api-key": "owner" } });
+	ok("the admin key can read what the client key can read", res.status === 200, "got " + res.status);
+	res = await call("/staff.json", { env: WITH_KEYS, headers: { "x-api-key": "sekret" } });
+	ok("the client key still reads", res.status === 200, "got " + res.status);
+
+	store = {};
+
+	/* --- the gate.js control CLI ---------------------------------------- */
+	const gateCli = require("./gate.js");
+	for (const [input, want] of [["10m", 600], ["1h30m", 5400], ["1h 30m", 5400], ["45s", 45], ["2", 120], ["1d", 86400], ["", 0], ["nonsense", 0]]) {
+		ok(`CLI duration ${JSON.stringify(input)} -> ${want}`, gateCli.parseDuration(input) === want, String(gateCli.parseDuration(input)));
+	}
+	ok("CLI humanize", gateCli.humanize(570) === "9m 30s" && gateCli.humanize(5400) === "1h 30m", gateCli.humanize(570));
+
 	/* --- friendly routes ------------------------------------------------ */
 	store = { staff: { admins: ["1"], blacklist: { 12345: "ban evasion" } } };
 	res = await call("/blacklist");

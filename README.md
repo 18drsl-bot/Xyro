@@ -171,6 +171,18 @@ database:
 Deploy it, set two secrets, paste the URL into **`api.json`** in the repo root —
 no Lua edits, and setting `"url": ""` again rolls the whole thing back.
 
+Once it is up, one command stops or starts the script for everyone:
+
+```bash
+node api/gate.js off "back in 10 minutes" --for 10m   # re-opens on its own
+node api/gate.js on                                   # back on
+node api/gate.js status                               # what it looks like now
+```
+
+The switch is owner-only, and `--for` means a maintenance window you forget
+about cannot lock everybody out — the loader and every running client re-open
+themselves when the window passes.
+
 → **Full walkthrough: [api/README.md](api/README.md)** — five-minute deploy, the
 complete route list, and an honest section on what a client-side key does and
 does not protect.
