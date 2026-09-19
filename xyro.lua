@@ -110,6 +110,30 @@ H.keySuffix = function(action)
 	return " [" .. k .. "]"
 end
 
+-- Click TP's key is fixed at F: there is no key to choose and no row for it in
+-- the Keys tab. Three paths can move a key around, so the rule is enforced in
+-- all three - H.setBind (every rebind), the `unbind` command, and applyConfig (a
+-- loaded config replaces the whole bind table). Each hands F back, so the key
+-- can neither be lost nor given to something else.
+local CLICK_TP_ACTION = "clicktp"
+local CLICK_TP_KEY = "F"
+
+-- Returns true when it had to take F back from something else, so the caller can
+-- say why a rebind did not land instead of appearing to do nothing.
+H.enforceClickTp = function()
+	local reclaimed = false
+	for keyName, action in pairs(H.Binds or {}) do
+		if action == CLICK_TP_ACTION and keyName ~= CLICK_TP_KEY then
+			H.Binds[keyName] = nil
+		end
+	end
+	if H.Binds[CLICK_TP_KEY] ~= nil and H.Binds[CLICK_TP_KEY] ~= CLICK_TP_ACTION then
+		reclaimed = true
+	end
+	H.Binds[CLICK_TP_KEY] = CLICK_TP_ACTION
+	return reclaimed
+end
+
 H.setBind = function(action, keyName)
 	for k, v in pairs(H.Binds) do
 		if v == action then
@@ -119,7 +143,9 @@ H.setBind = function(action, keyName)
 	if keyName then
 		H.Binds[keyName] = action
 	end
+	local tookBack = H.enforceClickTp()
 	H.refreshKeys()
+	return not tookBack
 end
 
 local COL = {
@@ -145,15 +171,16 @@ local ESPCOL = {
 	chams = Color3.fromRGB(230, 68, 68),
 }
 
--- Click TP carries no state any more: it is a plain bindable command (see
--- clickTpNow). There is nothing to enable and no key of its own to remember -
--- the bind IS the setting, so it lives in Binds with every other keybind.
+-- Click TP carries no state of its own: no enabled flag, no key to store, and
+-- no key to choose. It is a plain command (see clickTpNow) whose key is fixed at
+-- F by ENFORCEMENT below, so it ships bound and stays bound.
 
 local Binds = {
 	K = "menu",
 	C = "cframe",
 	G = "gravity",
 	X = "fly",
+	F = "clicktp", -- fixed: CLICK_TP_KEY, re-claimed by H.enforceClickTp
 }
 
 local themedRefs = {}
@@ -5150,26 +5177,12 @@ local function applyConfig(cfg)
 			end
 		end
 	end
-	-- Click TP used to be a panel with its own enabled/modifier/key, and those
-	-- were saved here. It is a plain bindable command now, so the one thing worth
-	-- carrying over is the key a player actually chose: bind `clicktp` to it,
-	-- which turns a config written before the change into a working keybind
-	-- instead of a dead key. Only for configs that had it switched ON - the
-	-- untouched default named R, and silently binding R for a feature the player
-	-- never used would teleport them the first time they pressed it.
-	local legacyClickTp = cfg.clickTp
-	if type(legacyClickTp) == "table" then
-		local ck = keyFromName(legacyClickTp.key)
-		-- An untouched config still names the old default (R): the panel wrote its
-		-- fields whether or not anyone used it. So carry the key over when the
-		-- feature was switched ON, or when the key was deliberately changed off
-		-- that default - binding R merely because a config mentions it would
-		-- teleport people the first time they pressed reload.
-		local chosen = legacyClickTp.enabled == true or (ck ~= nil and ck ~= Enum.KeyCode.R)
-		if ck and chosen and Binds[ck.Name] == nil then
-			Binds[ck.Name] = "clicktp"
-		end
-	end
+	-- the bind table above was just replaced by whatever the config carried, which
+	-- may have no F at all - or F on some other action. click TP's key is fixed, so
+	-- re-claim it after every load (same rule as H.setBind and `unbind`).
+	-- A config saved by the old panel also still carries its clickTp block; it is
+	-- simply ignored, because there is no key to carry over any more.
+	H.enforceClickTp()
 
 	if cfg.toggleKey and keyFromName(cfg.toggleKey) then
 		H.setBind("menu", cfg.toggleKey)
@@ -11598,12 +11611,11 @@ end
 -- Click TP is a keybind and nothing else.
 --
 -- It used to be a panel (openClickTp) that owned its own enabled flag, modifier
--- and key, and whose listener only ran while the panel existed. `clicktp` is
--- bindable, so it appeared in the Keys tab and in `bind list` - and pressing
--- that key ran the command, whose run opened the panel. So the one thing a
--- keybind is for, teleporting, could not happen without a window appearing
--- first. There is no window now: the keypress is the whole interaction, and the
--- bind (Keys tab, or `bind clicktp f`) is the on/off switch.
+-- and key. The command was bindable, so pressing the bound key ran it - and it
+-- opened that panel, which meant the one thing a keybind is for, teleporting,
+-- could not happen without a window appearing first. There is no window now and
+-- no key to choose either: F is the key (CLICK_TP_KEY / H.enforceClickTp), and
+-- the keypress is the whole interaction.
 local clickTpMouse = nil
 
 local function clickTpNow()
@@ -12024,10 +12036,11 @@ add{
 add{
 	name = "clicktp",
 	group = "Players",
-	help = "Teleport to wherever your cursor points - bind it to a key",
-	bindable = true,
-	-- press-to-act, so no notification (it would also be the popup this command
-	-- is deliberately not raising any more) - see the silent gate in hubRunCommand
+	help = "Teleport to wherever your cursor points (fixed key F)",
+	-- deliberately NOT bindable: its key is F, so there is no row in the Keys tab
+	-- and `bind clicktp ...` refuses. H.enforceClickTp keeps it that way.
+	-- press-to-act, so no notification (a toast on every press is a popup too,
+	-- which is the one thing this command is not supposed to raise)
 	silent = true,
 	run = clickTpNow,
 }
@@ -12131,7 +12144,11 @@ add{
 		if not kc then
 			return "unknown key: " .. keyName
 		end
-		H.setBind(spec.name, kc.Name)
+		if not H.setBind(spec.name, kc.Name) then
+			-- F is click TP's key (H.enforceClickTp took it back), so this bind did
+			-- not land - saying "bound" here would be a lie
+			return kc.Name .. " is click TP's key - pick another"
+		end
 		pcall(hubSaveConfig)
 		return "bound " .. kc.Name .. " -> " .. spec.name
 	end,
@@ -12147,8 +12164,14 @@ add{
 			return "nothing bound to that key"
 		end
 		Binds[kc.Name] = nil
+		-- click TP's key is not unbindable: the keybind IS the feature, so losing
+		-- the key would look exactly like a bug. H.enforceClickTp puts it back.
+		local reserved = H.enforceClickTp()
 		H.refreshKeys()
 		pcall(hubSaveConfig)
+		if reserved then
+			return kc.Name .. " is click TP's key - it stays bound"
+		end
 		return "unbound " .. kc.Name
 	end,
 }
@@ -13828,7 +13851,11 @@ do
 		end
 		local action = waitingAction
 		stopWaiting()
-		H.setBind(action, input.KeyCode.Name)
+		if not H.setBind(action, input.KeyCode.Name) then
+			-- the rebind did not land: F belongs to click TP. Said out loud, because
+			-- the row would otherwise just quietly keep its old key.
+			H.notify({ title = "Key reserved", text = input.KeyCode.Name .. " is click TP's key", kind = "warn", duration = 3 })
+		end
 		pcall(hubSaveConfig)
 	end)
 

@@ -645,17 +645,16 @@ if (rowConst && nameOffset && userOffset && rowPad && heightClamp) {
 
 /* ---------------------------------------------------- press-to-act commands */
 
-/* clicktp is bound to a key and repeats. It used to be a panel: pressing the
-   bound key ran the command, and the command's run opened a window - so the
-   keybind could not teleport without a popup, which is the opposite of what a
-   keybind is for. Three things have to stay true, and none of them crash when
-   they break: the press raises no window, it raises no notification either (a
-   toast on every press is a popup too), and a press aimed at nothing refuses
-   rather than teleporting to the far point Mouse.Hit reports over the sky. */
+/* clicktp is pressed, not configured. It used to be a panel: pressing the bound
+   key ran the command, and the command's run opened a window - so the keybind
+   could not teleport without a popup. Now the press is the whole interaction,
+   its key is fixed at F, and four things have to stay true. None of them crash
+   when they break - the symptom is "my key stopped doing anything". */
 const clickTpSpec = block(lua, 'name = "clicktp",', "\n}");
-ok("clicktp is still bindable", /bindable = true/.test(clickTpSpec));
+ok("clicktp has no key to choose (not bindable)", !/bindable = true/.test(clickTpSpec));
 ok("clicktp is marked silent", /silent = true/.test(clickTpSpec));
-// line comments stripped first: the note above names the panel it replaced, and
+ok("click TP ships bound to F", /^\tF = "clicktp"/m.test(lua));
+// line comments stripped first: the notes above name the panel and the key, and
 // prose should not be able to satisfy or trip a check about code
 const clickTpCode = lua.replace(/--[^\n]*/g, "");
 ok("no Click TP panel is left anywhere in the script",
@@ -668,13 +667,17 @@ ok("click TP teleports to what the cursor is on",
 ok("click TP refuses a miss instead of teleporting off the map",
 	/if not mouse or not mouse\.Target then/.test(clickTpBody));
 
-/* A config written while click TP was a panel names the key its player chose.
-   Dropping it would leave that player pressing a key that does nothing. */
-const clickTpMigrate = block(lua, "local legacyClickTp = cfg.clickTp", "\n\tif cfg.toggleKey");
-ok("a panel-era config carries its click TP key onto the bind",
-	/Binds\[ck\.Name\] = "clicktp"/.test(clickTpMigrate));
-ok("...but an untouched config does not silently bind the old default",
-	/legacyClickTp\.enabled == true or \(ck ~= nil and ck ~= Enum\.KeyCode\.R\)/.test(clickTpMigrate));
+/* Three separate paths move keys around - H.setBind, the `unbind` command, and
+   applyConfig (a loaded config replaces the whole bind table). Every one of them
+   has to hand F back, or the fixed key is only fixed until someone rebinds. */
+const enforce = block(lua, "H.enforceClickTp = function()", "\nend");
+ok("enforcement clears any other key pointing at click TP",
+	/if action == CLICK_TP_ACTION and keyName ~= CLICK_TP_KEY then/.test(enforce));
+ok("enforcement always ends with F on click TP",
+	/H\.Binds\[CLICK_TP_KEY\] = CLICK_TP_ACTION/.test(enforce));
+const enforceCalls = (lua.match(/H\.enforceClickTp\(\)/g) || []).length;
+ok("every path that moves a key calls it (setBind, unbind, applyConfig)",
+	enforceCalls >= 3, String(enforceCalls) + " call sites");
 
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);
