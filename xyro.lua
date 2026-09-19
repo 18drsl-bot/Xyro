@@ -10370,7 +10370,27 @@ local function ntBuild(plr, rule)
 	bb.Enabled = false
 	ntApplyDistanceScale(bb)
 
+	-- Pin the draw order the tag is laid out on. A BillboardGui that never sets
+	-- this keeps the legacy GLOBAL behaviour (paint by ZIndex, break ties by
+	-- hierarchy order), where something sharing a ZIndex with a descendant of
+	-- an earlier sibling is painted AFTER it - which is how the drop shadow
+	-- ended up over every bgImage. Sibling orders ZIndex among siblings, which
+	-- is what this tag's numbers (0 shadow, 1 pill and content, 10 overlays)
+	-- mean everywhere else in this function.
+	bb.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
 	-- soft drop shadow so the pill lifts off the world
+	--
+	-- Parented to bb BEFORE the pill (the two Parent lines further down are
+	-- deliberately in that order - don't swap them back). The shadow is a
+	-- 45%-opaque black rectangle the size of the pill, offset 4px down, and a
+	-- rule's bgImage shares its ZIndex band (0). Whichever of the two is LATER
+	-- in the tree covers the other under the Global behaviour above, so with
+	-- the shadow parented last it painted a grey wash straight over the
+	-- background image - every tag with one looked dimmed, with only the 4px
+	-- the shadow is offset by left at the image's real colour. Parented first,
+	-- the opaque pill/image paint over it and the shadow only shows through a
+	-- translucent pill, which is what a drop shadow is for.
 	local shadow = Instance.new("Frame")
 	shadow.Name = "Shadow"
 	shadow.Position = UDim2.fromOffset(0, 4)
@@ -10390,8 +10410,8 @@ local function ntBuild(plr, rule)
 	if not ntOpts.showBox then
 		pill.BackgroundTransparency = 1
 	end
+	shadow.Parent = bb -- FIRST child: the drop shadow has to paint behind the pill
 	pill.Parent = bb
-	shadow.Parent = bb
 	local shCorner = Instance.new("UICorner")
 	shCorner.CornerRadius = UDim.new(0.5, 0)
 	shCorner.Parent = shadow

@@ -676,5 +676,40 @@ ok("the Keys tab lists click TP with every other bindable action",
 	keysTab.length > 500 && /connect\(keyBtn\.MouseButton1Click/.test(keysTab)
 		&& /H\.setBind\(action, input\.KeyCode\.Name\)/.test(keysTab), keysTab.length + " chars");
 
+/* --------------------------------------------------- tag paint order */
+
+/* A billboard that does not set ZIndexBehavior keeps the legacy GLOBAL one:
+   paint by ZIndex, and break ties by hierarchy order. The drop shadow and a
+   rule's bgImage are both a full-size layer over the pill, both at ZIndex 0, so
+   whichever is later in the tree covers the other - parented last, the
+   45%-opaque shadow painted a grey wash over every background image (only the
+   4px it is offset by stayed at full colour). Nothing errors; only a bgImage
+   tag looks wrong, which is exactly the kind of thing that ships. */
+const tagBuild = block(lua, "local function ntBuild(plr, rule)", "\nlocal function ntRemove(plr)");
+ok("the tag builder was found", tagBuild.length > 5000, tagBuild.length + " chars");
+
+const shadowParent = tagBuild.indexOf("shadow.Parent = bb");
+const pillParent = tagBuild.indexOf("pill.Parent = bb");
+ok("the drop shadow is parented before the pill, so the pill paints over it",
+	shadowParent > 0 && pillParent > 0 && shadowParent < pillParent,
+	"shadow@" + shadowParent + " pill@" + pillParent);
+
+const zOf = name => {
+	const m = tagBuild.match(new RegExp(name + "\\.ZIndex = (\\d+)"));
+	return m ? Number(m[1]) : null;
+};
+ok("the shadow is a full-size, translucent layer (so painting late would dim the tag)",
+	/shadow\.Size = UDim2\.new\(1, 0, 1, 0\)/.test(tagBuild) && /shadow\.BackgroundTransparency = 0\.\d+/.test(tagBuild));
+ok("the shadow sits in the lowest band", zOf("shadow") === 0, String(zOf("shadow")));
+ok("the pill and its content paint above the shadow", zOf("pill") > zOf("shadow"),
+	zOf("pill") + " vs " + zOf("shadow"));
+ok("a bgImage stays under the pill's ring and text (its own band, above the shadow)",
+	zOf("bgImg") === zOf("shadow") && zOf("bgImg") < zOf("pill"),
+	"bgImg " + zOf("bgImg") + ", shadow " + zOf("shadow") + ", pill " + zOf("pill"));
+// the ladder is only a ladder if the behaviour that makes ZIndex mean
+// "among siblings" is pinned - otherwise the engine default decides the tag
+ok("the tag pins the ZIndexBehavior its layout assumes",
+	/bb\.ZIndexBehavior = Enum\.ZIndexBehavior\.Sibling/.test(tagBuild));
+
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);
