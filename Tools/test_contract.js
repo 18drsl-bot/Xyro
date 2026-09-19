@@ -428,5 +428,71 @@ ok("...and refuses instead of reporting a publish no player reads",
 ok("the bot guide explains the editor's version of the same trap",
 	/The tag editor is not exempt from this/i.test(botDoc), "");
 
+/* ------------------------------------------------ the tag's line spacing */
+
+/* Row heights used to be the fixed pair 17/12 whatever the text size. That was
+   fine at the old size-18 default, but raising the shipped Name size to 22 put a
+   22px name in a 17px row: the two lines collided by ~2px while the pill still
+   had 12px of unused padding, so "make the tag bigger" produced a tag that was
+   bigger AND cramped. The rows now derive from the text sizes.
+
+   The numbers are read OUT of the Lua rather than restated here, so editing the
+   formula changes what is checked instead of leaving this asserting something
+   about an older version of it. */
+const rowConst = lua.match(/local NAME_H, USER_H = (\d+), (\d+)/);
+const nameOffset = lua.match(/local nameRowH = math\.max\(NAME_H, math\.ceil\(nameSize \+ (\d+)\)\)/);
+const userOffset = lua.match(/local userRowH = math\.max\(USER_H, math\.ceil\(userSize \+ (\d+)\)\)/);
+const rowPad = lua.match(/if nameRowH \+ userRowH \+ (\d+) > height then/);
+const heightClamp = lua.match(/local height = math\.clamp\(tonumber\(rule\.height\) or ntOpts\.height, (\d+), (\d+)\)/);
+ok("the tag's rows are derived from the text sizes, not fixed constants",
+	!!rowConst && !!nameOffset && !!userOffset && !!rowPad && !!heightClamp,
+	"parsed: " + JSON.stringify({ rowConst: rowConst && rowConst[0], nameOffset: nameOffset && nameOffset[0] }));
+ok("...so nothing sizes a row with the bare constant any more",
+	!/0, NAME_H\)/.test(lua) && !/0, USER_H\)/.test(lua), "");
+
+if (rowConst && nameOffset && userOffset && rowPad && heightClamp) {
+	const NAME_H = Number(rowConst[1]);
+	const USER_H = Number(rowConst[2]);
+	const nOff = Number(nameOffset[1]);
+	const uOff = Number(userOffset[1]);
+	const pad = Number(rowPad[1]);
+	const hMin = Number(heightClamp[1]);
+	const hMax = Number(heightClamp[2]);
+
+	/* the layout the script builds, as arithmetic */
+	function measure(nameSize, userSize, askedHeight) {
+		const nameRowH = Math.max(NAME_H, Math.ceil(nameSize + nOff));
+		const userRowH = Math.max(USER_H, Math.ceil(userSize + uOff));
+		let height = Math.min(hMax, Math.max(hMin, askedHeight));
+		if (nameRowH + userRowH + pad > height) height = Math.min(nameRowH + userRowH + pad, 160);
+		const nameTop = Math.floor((height - (nameRowH + userRowH)) / 2);
+		const nameBottom = nameTop + nameRowH / 2 + nameSize / 2;
+		const userTop = nameTop + nameRowH + userRowH / 2 - userSize / 2;
+		return { gap: userTop - nameBottom, pad: height - (nameTop + nameRowH + userRowH), height: height };
+	}
+
+	/* every size the script allows (size 8-48, userSize 8-24, height 28-96) */
+	let worst = { gap: Infinity, at: "" };
+	let tight = 0;
+	for (let nameSize = 8; nameSize <= 48; nameSize++) {
+		for (let userSize = 8; userSize <= 24; userSize++) {
+			for (let asked = hMin; asked <= hMax; asked += 4) {
+				const m = measure(nameSize, userSize, asked);
+				if (m.gap < worst.gap) worst = { gap: m.gap, at: nameSize + "/" + userSize + " h" + asked };
+				if (m.gap < 0 || m.pad < 0) tight++;
+			}
+		}
+	}
+	ok("no legal tag size can make the name and @username lines collide",
+		tight === 0, tight + " colliding combinations; worst line gap " + worst.gap.toFixed(1) + "px at " + worst.at);
+
+	/* and the sizes actually shipped in nametags.json, which is what the answer
+	   to "make the tags bigger" was judged on */
+	const shipped = measure(Number(file.options.size) || 15, Number(file.options.userSize) || 10, Number(file.options.height) || 48);
+	ok("the shipped tag has breathing room between its two lines (" + (Number(file.options.size) || 15) + "px name)",
+		shipped.gap >= 0 && shipped.pad >= 0,
+		"line gap " + shipped.gap.toFixed(1) + "px, pill padding " + shipped.pad + "px at size " + file.options.size + "/" + file.options.userSize);
+}
+
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);

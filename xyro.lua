@@ -10288,6 +10288,19 @@ local function ntBuild(plr, rule)
 	if iconSize + 8 > height then
 		height = math.min(iconSize + 8, 160)
 	end
+	-- Row heights follow their own text instead of being fixed at 17/12. Fixed
+	-- rows were fine at the old size-18 default, but a 22px name in a 17px row
+	-- overflows and collides with the @username line by ~2px, while the pill
+	-- still had 12px of spare padding top and bottom - the tag looked bigger
+	-- AND cramped at once. At the original sizes these come out 20/12, which is
+	-- within a pixel or two of what shipped before.
+	local nameRowH = math.max(NAME_H, math.ceil(nameSize + 2))
+	local userRowH = math.max(USER_H, math.ceil(userSize + 2))
+	-- and a pair too tall to fit grows the pill, exactly like the icon rule
+	-- above, so a big text size can never spill outside its own background
+	if nameRowH + userRowH + 6 > height then
+		height = math.min(nameRowH + userRowH + 6, 160)
+	end
 
 	-- custom @line: rule.userText replaces the real @username (a leading @
 	-- is optional); blank/absent keeps the genuine @username
@@ -10406,14 +10419,14 @@ local function ntBuild(plr, rule)
 	avRing.Transparency = 0.2
 	avRing.Parent = avatar
 
-	local nameTop = math.floor((height - (NAME_H + USER_H)) / 2)
+	local nameTop = math.floor((height - (nameRowH + userRowH)) / 2)
 	local textLeft = ICON_LEFT + iconSize + TEXT_GAP
 
 	local nameRow = Instance.new("Frame")
 	nameRow.Name = "NameRow"
 	nameRow.BackgroundTransparency = 1
 	nameRow.Position = UDim2.fromOffset(textLeft, nameTop)
-	nameRow.Size = UDim2.new(1, -(textLeft + PAD_RIGHT), 0, NAME_H)
+	nameRow.Size = UDim2.new(1, -(textLeft + PAD_RIGHT), 0, nameRowH)
 	nameRow.Parent = pill
 
 	local name = Instance.new("TextLabel")
@@ -10424,10 +10437,10 @@ local function ntBuild(plr, rule)
 		-- badge) and truncate at the pill edge - the background always spans
 		-- exactly what the text shows
 		name.AutomaticSize = Enum.AutomaticSize.None
-		name.Size = UDim2.new(1, badgeW > 0 and -(badgeW + 8) or 0, 0, NAME_H)
+		name.Size = UDim2.new(1, badgeW > 0 and -(badgeW + 8) or 0, 0, nameRowH)
 	else
 		name.AutomaticSize = Enum.AutomaticSize.X
-		name.Size = UDim2.fromOffset(math.ceil(nameW + 4), NAME_H)
+		name.Size = UDim2.fromOffset(math.ceil(nameW + 4), nameRowH)
 	end
 	name.Font = font
 	name.TextSize = nameSize
@@ -10443,7 +10456,7 @@ local function ntBuild(plr, rule)
 		b.Name = "Badge"
 		b.BackgroundTransparency = 1
 		b.AnchorPoint = Vector2.new(0, 0.5)
-		b.Size = UDim2.fromOffset(badgeW, NAME_H)
+		b.Size = UDim2.fromOffset(badgeW, nameRowH)
 		b.Font = Enum.Font.GothamBold
 		b.TextSize = 12
 		-- EVERYONE with badge:true gets the REAL Roblox verified seal artwork
@@ -10548,8 +10561,8 @@ local function ntBuild(plr, rule)
 	if ubOn then
 		userBox = Instance.new("Frame")
 		userBox.Name = "UserBox"
-		userBox.Position = UDim2.fromOffset(textLeft, nameTop + NAME_H - 2)
-		userBox.Size = UDim2.new(1, -(textLeft + PAD_RIGHT), 0, USER_H + 4)
+		userBox.Position = UDim2.fromOffset(textLeft, nameTop + nameRowH - 2)
+		userBox.Size = UDim2.new(1, -(textLeft + PAD_RIGHT), 0, userRowH + 4)
 		userBox.BackgroundColor3 = ntColor(rule.userBoxColor, ntColor(ntOpts.userBoxColor, Color3.fromRGB(26, 31, 46)))
 		userBox.BackgroundTransparency = math.clamp(tonumber(rule.userBoxTransparency) or ntOpts.userBoxTransparency, 0, 1)
 		userBox.BorderSizePixel = 0
@@ -10580,11 +10593,11 @@ local function ntBuild(plr, rule)
 	user.Text = userText0
 	if userBox then
 		user.Position = UDim2.fromOffset(6, 0)
-		user.Size = UDim2.new(1, -12, 0, USER_H)
+		user.Size = UDim2.new(1, -12, 0, userRowH)
 		user.Parent = userBox
 	else
-		user.Position = UDim2.fromOffset(textLeft, nameTop + NAME_H)
-		user.Size = UDim2.new(1, -(textLeft + PAD_RIGHT), 0, USER_H)
+		user.Position = UDim2.fromOffset(textLeft, nameTop + nameRowH)
+		user.Size = UDim2.new(1, -(textLeft + PAD_RIGHT), 0, userRowH)
 		user.Parent = pill
 	end
 
