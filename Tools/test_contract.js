@@ -711,5 +711,28 @@ ok("a bgImage stays under the pill's ring and text (its own band, above the shad
 ok("the tag pins the ZIndexBehavior its layout assumes",
 	/bb\.ZIndexBehavior = Enum\.ZIndexBehavior\.Sibling/.test(tagBuild));
 
+/* ------------------------------------------------ badge contrast */
+
+/* A seal is a flat tint with the check cut out, so a tint close to the pill's own
+   lightness vanishes into it: the white HR seal on a white pill, the navy partner
+   seal on a black one. The script then builds the same mask flat black/white, and
+   Tools/test_editor_sync.js proves the site previews that same ink. Half of this
+   feature removed = the badge is simply invisible on those tags. */
+const badgeBlock = block(lua, "if rule.badge then", "\n\t-- optional customizable box");
+ok("the badge block was found", badgeBlock.length > 1000, badgeBlock.length + " chars");
+ok("the badge weighs its own tint against the pill before drawing it",
+	/ntSealInk\(pill\.BackgroundColor3, badgeTint or NT_SEAL_BLUE\)/.test(badgeBlock));
+ok("...and builds the mask locally in that ink when it would blend",
+	/local inkSeal = sealInk and ntSealAsset\(badgeRank, sealInk\) or nil/.test(badgeBlock));
+ok("...falling back to the glyph in the SAME ink when it cannot build one",
+	/badgeGlyphFallback\(\)\n\s*b\.TextColor3 = sealInk/.test(badgeBlock));
+ok("the local seal build takes an ink, so a rankless badge can have one too",
+	/local function ntSealAsset\(rank, ink\)/.test(lua) && /local key = rank\n\tif ink then/.test(lua));
+ok("both inks are prewarmed off the boot path (a blending badge never waits)",
+	/ntSealAsset, nil, NT_SEAL_INK_DARK/.test(lua) && /ntSealAsset, nil, NT_SEAL_INK_LIGHT/.test(lua));
+ok("the contrast math is sRGB linearised with the WCAG luminance weights",
+	/0\.2126 \* channel\(c\.R\) \+ 0\.7152 \* channel\(c\.G\) \+ 0\.0722 \* channel\(c\.B\)/.test(lua)
+		&& /v <= 0\.03928 and v \/ 12\.92/.test(lua));
+
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);

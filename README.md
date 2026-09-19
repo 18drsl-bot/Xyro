@@ -105,6 +105,14 @@ white check — after the name; every rule with `badge: true` gets it, staff or 
 `trial` / `purple` / `partner`) · `height` · `imageSize`. First matching rule wins —
 put exact names above the `*` catch-all.
 
+Badges look after themselves: a seal whose colour would blend into its pill (the
+white HR seal on a white pill, the navy partner seal on a black one) is drawn flat
+black on a light pill or flat white on a dark one instead. The check is cut out of
+the seal, so it takes the pill's colour either way and still reads as a check. A
+seal that already contrasts is left exactly as it is, so nothing needs configuring
+and a background image is judged by the rule's `bg` (or the global `pillColor`),
+which is the same colour the site previews against.
+
 **Options:** `size` · `userSize` · `height` · `imageSize` · `maxDistance` (studs, 0 =
 always) · `showDistance` · `showHealth` · `showBox` (pill background on/off) ·
 `onlyScriptUsers` (tags require presence — set false to tag everyone matching) ·

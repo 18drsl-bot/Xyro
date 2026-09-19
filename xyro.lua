@@ -8758,6 +8758,11 @@ local NT_RANK_COLORS = {
 	partner = Color3.fromRGB(36, 82, 220), -- custom dark blue (partners)
 	developer = Color3.fromRGB(230, 62, 62), -- red (developers)
 }
+-- The rankless seal's tint: media/verified_seal_blue.png, the Roblox verified
+-- blue. Tools/gen_seals.js paints that file from this same number, and
+-- Tools/test_seals.js reads it back out of the artwork, so a badge that has no
+-- rank still has a colour to weigh against the pill.
+local NT_SEAL_BLUE = Color3.fromRGB(0, 162, 255)
 local NT_RANK_ALIASES = {
 	founder = { founder = true, owner = true },
 	developer = {
@@ -8947,6 +8952,47 @@ local NT_FONTS = {
 }
 local function ntFont(name)
 	return NT_FONTS[ntNormalize(name)] or Enum.Font.GothamBlack
+end
+
+-- BADGE CONTRAST. Every seal is a flat-tinted disc with the check CUT OUT of it,
+-- so whatever the disc's colour, the pill shows through the check. That also
+-- means a seal whose tint sits near the pill's own lightness disappears into it:
+-- the white HR seal on a white pill, the navy partner seal on a black one. Both
+-- look like "the badge is missing" rather than "the badge is invisible".
+--
+-- Relative luminance (sRGB linearised, WCAG weights) turns "does this read?"
+-- into a number instead of a guess. Below NT_BADGE_MIN_CONTRAST the same mask is
+-- drawn flat black on a light pill or flat white on a dark one - and because the
+-- check stays a cut-out, it takes the pill colour either way, so the mark is
+-- still a check and not a solid disc.
+local NT_BADGE_MIN_CONTRAST = 3.5
+local NT_SEAL_INK_DARK = Color3.new(0, 0, 0)
+local NT_SEAL_INK_LIGHT = Color3.new(1, 1, 1)
+
+local function ntLuminance(c)
+	local function channel(v)
+		return v <= 0.03928 and v / 12.92 or ((v + 0.055) / 1.055) ^ 2.4
+	end
+	return 0.2126 * channel(c.R) + 0.7152 * channel(c.G) + 0.0722 * channel(c.B)
+end
+
+local function ntContrast(a, b)
+	local la, lb = ntLuminance(a), ntLuminance(b)
+	return (math.max(la, lb) + 0.05) / (math.min(la, lb) + 0.05)
+end
+
+-- nil = the seal's own tint reads on this pill, so keep it (this is the case for
+-- nearly every tag, which is why nothing else changes). Otherwise the ink to
+-- draw the mask in: whichever of black/white actually contrasts more, so a
+-- near-white pill gets black ink and a dark blue one gets white.
+local function ntSealInk(pillColor, sealColor)
+	if ntContrast(pillColor, sealColor) >= NT_BADGE_MIN_CONTRAST then
+		return nil
+	end
+	if ntContrast(pillColor, NT_SEAL_INK_DARK) >= ntContrast(pillColor, NT_SEAL_INK_LIGHT) then
+		return NT_SEAL_INK_DARK
+	end
+	return NT_SEAL_INK_LIGHT
 end
 
 local function ntTextWidth(text, size, font)
@@ -9918,7 +9964,7 @@ local NT_SEAL_MASK = {
 	"0000000000111111110000000000",
 	"0000000000000000000000000000",
 }
-local NT_SEAL_TINTS = {} -- [rank] = asset uri (false = build failed)
+local NT_SEAL_TINTS = {} -- [rank or ink key] = asset uri (false = build failed)
 -- pre-tinted seals. The in-engine tint stays as backup; on executors where
 -- getcustomasset refuses rewritten files the fallback keeps the real
 -- verified-seal artwork instead of a plain check.
@@ -9932,11 +9978,23 @@ local function ntMediaUrl(file, query)
 	end
 	return "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/" .. file .. (query or "")
 end
-local function ntSealAsset(rank)
-	if NT_SEAL_TINTS[rank] ~= nil then
-		return NT_SEAL_TINTS[rank] or nil
+local function ntSealAsset(rank, ink)
+	-- ink (optional): build the mask in a flat colour instead of the rank tint,
+	-- which is how a badge that would blend into the pill gets its black/white
+	-- version (ntSealInk). Cached under its own key, so a rankless badge can have
+	-- one too. The mask's check is a cut-out, so the pill shows through it.
+	local key = rank
+	if ink then
+		key = string.format("ink_%d_%d_%d",
+			math.floor(ink.R * 255 + 0.5), math.floor(ink.G * 255 + 0.5), math.floor(ink.B * 255 + 0.5))
 	end
-	local tint = NT_RANK_COLORS[rank]
+	if key == nil then
+		return nil -- no rank and no ink: there is nothing to draw
+	end
+	if NT_SEAL_TINTS[key] ~= nil then
+		return NT_SEAL_TINTS[key] or nil
+	end
+	local tint = ink or NT_RANK_COLORS[rank]
 	local function build()
 		if not tint or not ntEncodePNG or not writefile or not getcustomasset then
 			return nil
@@ -9967,19 +10025,23 @@ local function ntSealAsset(rank)
 		if type(png) ~= "string" or #png < 24 then
 			return nil
 		end
-		local path = "Xyro/seal_" .. rank .. ".png"
+		local path = "Xyro/seal_" .. tostring(key) .. ".png"
 		pcall(writefile, path, png)
 		return ntAssetFor(path)
 	end
 	local ok, asset = pcall(build)
 	asset = (ok and type(asset) == "string" and asset ~= "") and asset or nil
-	NT_SEAL_TINTS[rank] = asset or false
+	NT_SEAL_TINTS[key] = asset or false
 	return asset
 end
 task.spawn(function() -- prewarm every tint off the boot path
 	for rank in pairs(NT_RANK_COLORS) do
 		pcall(ntSealAsset, rank)
 	end
+	-- and the two contrast inks (two more 28x28 encodes) so a tag whose badge
+	-- would blend never waits for its black/white version to build
+	pcall(ntSealAsset, nil, NT_SEAL_INK_DARK)
+	pcall(ntSealAsset, nil, NT_SEAL_INK_LIGHT)
 end)
 
 local ntMediaQueue = {}
@@ -10561,8 +10623,34 @@ local function ntBuild(plr, rule)
 		-- entry; a new buster gives every seal a fresh stem, so the red developer
 		-- seal (added after ?v=14) stops inheriting that history.
 		local sealBuster = "?v=15"
+		-- CONTRAST FIRST. The seal is drawn ON the pill, so a rank tint that sits
+		-- close to the pill's own lightness vanishes into it - the white HR seal on
+		-- a white pill, the navy partner seal on a black one. When that happens the
+		-- mask is built locally in flat black (light pill) or flat white (dark
+		-- pill) instead; the check stays a cut-out, so it takes the pill colour and
+		-- the mark still reads as a check. nil = the tint is fine, i.e. almost
+		-- every tag, which is why nothing else about the badge changes.
+		local sealInk = ntSealInk(pill.BackgroundColor3, badgeTint or NT_SEAL_BLUE)
+		local inkSeal = sealInk and ntSealAsset(badgeRank, sealInk) or nil
 		local sealUrl = nil
-		if badgeRank and badgeTint then
+		if inkSeal then
+			-- local build: no network, no cache-buster, no stale edge copy
+			img.Image = inkSeal
+			-- trusted but not guaranteed (getcustomasset can still refuse the
+			-- file), so verify it like any other seal
+			task.delay(4, function()
+				if img.Parent and b.Parent and not (img.Image ~= "" and img.IsLoaded) then
+					badgeGlyphFallback()
+					if b.Parent then
+						b.TextColor3 = sealInk -- the glyph, in the ink that contrasts
+					end
+				end
+			end)
+		elseif sealInk then
+			-- no getcustomasset/writefile to build one with: the glyph in that ink
+			badgeGlyphFallback()
+			b.TextColor3 = sealInk
+		elseif badgeRank and badgeTint then
 			-- RANK TINT: the pre-tinted PNG first - the same network pipeline
 			-- that renders the blue seal everywhere - so in-game colors always
 			-- match the tag editor preview. (The in-engine tinted build stays
@@ -10571,14 +10659,16 @@ local function ntBuild(plr, rule)
 		else
 			sealUrl = ntMediaUrl("verified_seal_blue.png", sealBuster)
 		end
-		b.Text = ""
-		task.spawn(function()
-			pcall(ntApplyImage, img, sealUrl)
-			-- NOTE: a fresh URL returns true immediately (queued) and fills
-			-- the Seal ImageLabel in later; an outright refusal (no
-			-- getcustomasset / no http) lands here synchronously and the
-			-- verifier below catches it - either way the badge never vanishes.
-		end)
+		if sealUrl then
+			b.Text = ""
+			task.spawn(function()
+				pcall(ntApplyImage, img, sealUrl)
+				-- NOTE: a fresh URL returns true immediately (queued) and fills
+				-- the Seal ImageLabel in later; an outright refusal (no
+				-- getcustomasset / no http) lands here synchronously and the
+				-- verifier below catches it - either way the badge never vanishes.
+			end)
+		end
 
 		-- LOAD VERIFIER: the async pipeline can fail invisibly (queued 404,
 		-- poisoned old disk cache, getcustomasset refusing a rewritten file)
@@ -10587,6 +10677,9 @@ local function ntBuild(plr, rule)
 		-- badges only), then give up to the glyph. Runs on the tag's own
 		-- closure; every step re-checks parenting so re-ghosted tags are safe.
 		task.delay(6, function()
+			if sealInk then
+				return -- the contrast build has no download to verify (own delay above)
+			end
 			if not (img.Parent and b.Parent) then
 				return
 			end

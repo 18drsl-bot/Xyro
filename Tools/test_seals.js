@@ -4,6 +4,7 @@
 //
 //   * xyro.lua  NT_RANK_COLORS   rank -> tint      (the in-game seal)
 //   * index.html RANK_SEALS      rank -> file name (the editor preview)
+//   * index.html RANK_TINTS      rank -> tint      (the preview's contrast math)
 //   * media/seal_<rank>.png      the actual pixels
 //
 //   node Tools/test_seals.js
@@ -159,6 +160,33 @@ for (const m of (aliases ? aliases[1] : "").matchAll(/^\t(\w+)\s*=\s*\{/gm)) ali
 ok("every alias tier has a colour", [...aliasRanks].every(r => colors[r]), [...aliasRanks].join(","));
 ok("every colour tier has an alias (so it can be typed in a rule)", ranks.every(r => aliasRanks.has(r)),
 	ranks.filter(r => !aliasRanks.has(r)).join(","));
+
+/* ------------------------------------ the contrast fallback --------------- */
+
+/* A seal whose tint sits near the pill's lightness disappears into it - the white
+   HR seal on a white pill, the navy partner seal on a black one. Both sides then
+   draw the same mask flat black/white, and both decide it from three numbers:
+   the rank tints, the blue seal's tint, and the contrast floor. Drift in any one
+   of them and the site previews a coloured badge where a player gets a black one
+   - silently, because both look fine on their own. */
+const luaBlue = lua.match(/local NT_SEAL_BLUE = Color3\.fromRGB\((\d+),\s*(\d+),\s*(\d+)\)/);
+const luaFloor = Number((lua.match(/local NT_BADGE_MIN_CONTRAST = ([\d.]+)/) || [])[1]);
+const jsFloor = Number((html.match(/const BADGE_MIN_CONTRAST = ([\d.]+)/) || [])[1]);
+const jsBlue = (html.match(/const SEAL_BLUE = "([^"]+)"/) || [])[1];
+const jsTintBlock = html.match(/const RANK_TINTS = \{([\s\S]*?)\};/);
+const jsTints = {};
+for (const m of (jsTintBlock ? jsTintBlock[1] : "").matchAll(/(\w+):\s*"#([0-9a-fA-F]{6})"/g)) jsTints[m[1]] = m[2].toLowerCase();
+
+ok("xyro.lua and index.html both define the contrast floor", luaFloor > 0 && luaFloor === jsFloor,
+	"script " + luaFloor + " vs site " + jsFloor);
+ok("...and the site's rank tints are the script's NT_RANK_COLORS",
+	ranks.length > 0 && ranks.every(r => jsTints[r] === colors[r].map(v => v.toString(16).padStart(2, "0")).join("")),
+	ranks.filter(r => jsTints[r] !== colors[r].map(v => v.toString(16).padStart(2, "0")).join("")).join(",") || "all agree");
+ok("...and the rankless seal's tint is the blue the artwork actually paints",
+	luaBlue && blue && jsBlue &&
+		Math.abs(Number(luaBlue[1]) - blue.r) <= tol && Math.abs(Number(luaBlue[2]) - blue.g) <= tol && Math.abs(Number(luaBlue[3]) - blue.b) <= tol &&
+		jsBlue.toLowerCase() === "#" + [blue.r, blue.g, blue.b].map(v => v.toString(16).padStart(2, "0")).join(""),
+	[luaBlue && luaBlue.slice(1).join(","), jsBlue, blue && [blue.r, blue.g, blue.b].join(",")].join(" | "));
 
 /* --------------------------------- an error body is not a seal --------------- */
 

@@ -369,7 +369,7 @@ const factory = new Function(
 	"  get publishGuard(){return publishGuard;}, get liveSha(){return liveSha;}," +
 	"  refreshLive: refreshLive, publish: () => $(\"publishBtn\").onclick(), canonJSON: canonJSON, asConfig: asConfig," +
 	"  renderPreview: renderPreview, renderEditorPreview: renderEditorPreview, editorTag: editorTag," +
-	"  mediaURL: mediaURL, get rulesSource(){return rulesSource;}," +
+	"  mediaURL: mediaURL, sealInk: sealInk, contrastRatio: contrastRatio, get rulesSource(){return rulesSource;}," +
 	"  openEditor: openEditor, closeEditor: closeEditor, changed: changed, renderUsers: renderUsers," +
 	"  blockAccount: blockAccount, loadBlacklist: loadBlacklist, renderBlacklist: renderBlacklist, pollUsers: pollUsers," +
 	"  toasts: () => $(\"toasts\").children.map(t => t.textContent)," +
@@ -527,6 +527,48 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("a ranked rule's badge comes from the API", el("edBadgeCheck").src === "https://api.example/media/seal_founder.png", el("edBadgeCheck").src);
 	hosted.openEditor(1); // a rule with no rank - the official blue seal
 	ok("an unranked rule uses the API's verified badge", el("edBadgeCheck").src === "https://api.example/media/verified_seal_blue.png", el("edBadgeCheck").src);
+	hosted.closeEditor();
+
+	/* --- 5b. the badge goes flat black/white when its colour would blend ---- */
+
+	/* Every seal is a flat disc with the check CUT OUT, so a seal whose tint sits
+	   near the pill's own lightness disappears into it: the white HR seal on a
+	   white pill, the navy partner seal on a black one. Both read as "the badge is
+	   missing" rather than "the badge is invisible". Below the contrast floor the
+	   script draws the mask flat black (light pill) or flat white (dark pill), and
+	   this preview has to match it - otherwise the site shows a coloured badge the
+	   player never sees. */
+	const ink = api.sealInk;
+	ok("a white pill turns a white seal black (the case this exists for)",
+		ink("#ffffff", "#ffffff") === "black", String(ink("#ffffff", "#ffffff")));
+	ok("...and a black pill turns a dark seal white",
+		ink("#000000", "#2452dc") === "white", String(ink("#000000", "#2452dc")));
+	/* #909090 is the case that tells the two possible rules apart: it is DARKER
+	   than white, so "pick black when the pill is light" would answer white - but
+	   black is the side that actually contrasts (6.6 vs 3.2), and a white middle
+	   grey pill is exactly where a white seal is least readable */
+	ok("a middle-grey pill takes black: the side that contrasts more, not the 'lighter' one",
+		ink("#909090", "#ffffff") === "black", String(ink("#909090", "#ffffff")));
+	ok("colours that already read are left exactly as they are",
+		ink("#000000", "#00a2ff") === null && ink("#ffffff", "#2452dc") === null && ink("#0c0c10", "#e63e3e") === null,
+		[ink("#000000", "#00a2ff"), ink("#ffffff", "#2452dc"), ink("#0c0c10", "#e63e3e")].join("/"));
+	/* the numbers themselves: a floor of 1 would recolour every badge in the game,
+	   and a floor of 21 would never fire at all */
+	ok("the floor sits between 'everything flips' and 'nothing ever flips'",
+		api.contrastRatio("#ffffff", "#000000") > 3.5 && ink("#ffffff", "#00a2ff") === "black" && ink("#000000", "#00a2ff") === null,
+		"blue on white -> " + ink("#ffffff", "#00a2ff") + ", blue on black -> " + ink("#000000", "#00a2ff"));
+
+	/* and the mini preview actually applies it, on both sides */
+	hosted.openEditor(0); // founder: silver, the other seal that vanishes on white
+	el("fBgHex").value = "#FFFFFF";
+	hosted.renderEditorPreview();
+	ok("the mini preview draws the badge black on a white pill",
+		el("edBadgeCheck").style.filter === "brightness(0)", JSON.stringify(el("edBadgeCheck").style.filter));
+	el("fBgHex").value = "#000000";
+	hosted.renderEditorPreview();
+	ok("...and leaves it untouched on a black pill",
+		el("edBadgeCheck").style.filter === "", JSON.stringify(el("edBadgeCheck").style.filter));
+	el("fBgHex").value = "";
 	hosted.closeEditor();
 
 	/* With the API unreachable there is no second source to find, and looking for

@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r16</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r17</span>
 		<span class="chip" id="tokenChip" title="where Publish will write">no publish key</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules from the API now">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -813,6 +813,36 @@ function nameColorOf(t) {
 }
 function userColorOf(t) {
 	return (hex6(t && t.userColor) || $("optUserColor").value || "#8b92a5").toLowerCase();
+}
+
+/* ---- badge contrast: the same rule the script runs (xyro.lua ntSealInk) ----
+   Every seal is a flat-tinted disc with the check cut out, so a seal whose colour
+   sits near the pill's own lightness disappears into it: the white HR seal on a
+   white pill, the navy partner seal on a black one. Below BADGE_MIN_CONTRAST the
+   badge is drawn in whichever of black/white contrasts more instead - the cut-out
+   check then takes the pill colour, so the mark still reads as a check.
+   RANK_TINTS mirrors xyro.lua NT_RANK_COLORS; Tools/test_seals.js pins the script,
+   this table and media/seal_<rank>.png to each other so the three cannot drift. */
+const RANK_TINTS = { founder: "#d2d6de", hr: "#ffffff", support: "#42d878", trial: "#46cdc8", purple: "#b066ff", partner: "#2452dc", developer: "#e63e3e" };
+const SEAL_BLUE = "#00a2ff"; /* media/verified_seal_blue.png, the rankless seal */
+const BADGE_MIN_CONTRAST = 3.5;
+function relLuminance(hex) {
+	const n = parseInt((hex6(hex) || "#000000").replace("#", ""), 16);
+	const ch = v => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+	return 0.2126 * ch(((n >> 16) & 255) / 255) + 0.7152 * ch(((n >> 8) & 255) / 255) + 0.0722 * ch((n & 255) / 255);
+}
+function contrastRatio(a, b) {
+	const x = relLuminance(a), y = relLuminance(b);
+	return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
+/* null = the seal's own colour reads on that pill, which is the case for nearly
+   every tag, so nothing else about the badge changes. "black"/"white" = draw it
+   flat in that ink. */
+function sealInk(pillHex, sealHex) {
+	const pill = hex6(pillHex) || "#0c0c10";
+	const seal = hex6(sealHex) || SEAL_BLUE;
+	if (contrastRatio(pill, seal) >= BADGE_MIN_CONTRAST) return null;
+	return contrastRatio(pill, "#000000") >= contrastRatio(pill, "#ffffff") ? "black" : "white";
 }
 
 /* The font the game will actually draw. The script resolves this for real now
@@ -1394,7 +1424,12 @@ function renderEditorPreview() {
 	const t = editorTag();
 	const badge = $("edBadge");
 	badge.style.setProperty("--c", hex6(t.color) || "#6c80ff");
-	badge.style.setProperty("--pill", hex6(t.bg) || "#0c0c10");
+	/* rule bg, else the global pill colour, else the script's own #0c0c10 - the
+	   same order the game resolves it in, and the colour the badge's contrast is
+	   weighed against (the mini preview used to ignore the global option here,
+	   so a tag with no bg of its own previewed on the wrong background) */
+	const pillHex = hex6(t.bg) || hex6($("optPillColor").value) || "#0c0c10";
+	badge.style.setProperty("--pill", pillHex);
 	/* same resolver as the big preview, so both show what the game will draw */
 	$("edLabel").style.color = nameColorOf(t);
 	$("edUser").style.color = userColorOf(t);
@@ -1423,6 +1458,12 @@ function renderEditorPreview() {
 	/* mediaURL: the API's /media/<file>, the same origin the game reads, so a
 	   preview can never disagree with what a player sees */
 	check.src = mediaURL(t.badge && sealFile ? sealFile : "verified_seal_blue.png");
+	/* ...including which ink it is drawn in: brightness(0) flattens any tint to
+	   black and keeps the cut-out check transparent, invert(1) makes it white -
+	   exactly what the script's own mask build does locally */
+	const ink = sealInk(pillHex, RANK_TINTS[t.rank] || SEAL_BLUE);
+	check.style.filter = ink === "black" ? "brightness(0)" : ink === "white" ? "brightness(0) invert(1)" : "";
+	check.title = ink ? "badge drawn " + ink + " to stand out on this background" : "";
 	const img = $("edImg");
 	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
 		img.src = t.image; img.classList.remove("hidden");
