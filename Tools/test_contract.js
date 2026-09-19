@@ -645,17 +645,19 @@ if (rowConst && nameOffset && userOffset && rowPad && heightClamp) {
 
 /* ---------------------------------------------------- press-to-act commands */
 
-/* clicktp is pressed, not configured. It used to be a panel: pressing the bound
-   key ran the command, and the command's run opened a window - so the keybind
-   could not teleport without a popup. Now the press is the whole interaction,
-   its key is fixed at F, and four things have to stay true. None of them crash
-   when they break - the symptom is "my key stopped doing anything". */
+/* clicktp is pressed, not configured with a window - and its key is the
+   player's, like every other bind. It ships on F so it works out of the box,
+   and nothing may take that decision away from them. None of these break
+   loudly: the symptom is "my key stopped doing anything". */
 const clickTpSpec = block(lua, 'name = "clicktp",', "\n}");
-ok("clicktp has no key to choose (not bindable)", !/bindable = true/.test(clickTpSpec));
+ok("clicktp can be bound to any key (it has a Keys-tab row)", /bindable = true/.test(clickTpSpec));
 ok("clicktp is marked silent", /silent = true/.test(clickTpSpec));
-ok("click TP ships bound to F", /^\tF = "clicktp"/m.test(lua));
-// line comments stripped first: the notes above name the panel and the key, and
-// prose should not be able to satisfy or trip a check about code
+ok("click TP ships bound to F, so it works with no setup", /^\tF = "clicktp"/m.test(lua));
+// the key is a default, not a lock: an earlier cut claimed F back from every
+// rebind, which made the Keys tab row a lie for this one action
+ok("nothing claims the key back from the player", !/enforceClickTp/.test(lua));
+// line comments stripped first: the notes above name the panel they replaced,
+// and prose should not be able to satisfy or trip a check about code
 const clickTpCode = lua.replace(/--[^\n]*/g, "");
 ok("no Click TP panel is left anywhere in the script",
 	!/openClickTp|ClickTpUI|ClickTpCleanup|ClickTpToggle/.test(clickTpCode));
@@ -667,17 +669,12 @@ ok("click TP teleports to what the cursor is on",
 ok("click TP refuses a miss instead of teleporting off the map",
 	/if not mouse or not mouse\.Target then/.test(clickTpBody));
 
-/* Three separate paths move keys around - H.setBind, the `unbind` command, and
-   applyConfig (a loaded config replaces the whole bind table). Every one of them
-   has to hand F back, or the fixed key is only fixed until someone rebinds. */
-const enforce = block(lua, "H.enforceClickTp = function()", "\nend");
-ok("enforcement clears any other key pointing at click TP",
-	/if action == CLICK_TP_ACTION and keyName ~= CLICK_TP_KEY then/.test(enforce));
-ok("enforcement always ends with F on click TP",
-	/H\.Binds\[CLICK_TP_KEY\] = CLICK_TP_ACTION/.test(enforce));
-const enforceCalls = (lua.match(/H\.enforceClickTp\(\)/g) || []).length;
-ok("every path that moves a key calls it (setBind, unbind, applyConfig)",
-	enforceCalls >= 3, String(enforceCalls) + " call sites");
+/* A rebind has to actually move the key, and the row that shows it has to be the
+   same table the key dispatch reads - three copies of "the binds" would drift. */
+const keysTab = block(lua, "local bindsPage = H.makeTab(\"Keys\")", "\n\t-- stay in sync");
+ok("the Keys tab lists click TP with every other bindable action",
+	keysTab.length > 500 && /connect\(keyBtn\.MouseButton1Click/.test(keysTab)
+		&& /H\.setBind\(action, input\.KeyCode\.Name\)/.test(keysTab), keysTab.length + " chars");
 
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);
