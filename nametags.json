@@ -36,7 +36,7 @@
 			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/f77b149da7816504bb573156677450a6e9562296.gif",
 			"bg": "#1C1CA6",
 			"badge": true,
-			"bgLum": 0.245
+			"bgLum": 0.075
 		},
 		{
 			"match": "furyrAin620",
@@ -48,7 +48,7 @@
 			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/9d056ec5fdf79bdf88ee1628d3750e15d47b5ec7.jpg",
 			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/225cd37da6d4753d5d06c642fc9239b92048b2fc.gif",
 			"userBox": false,
-			"bgLum": 0.005
+			"bgLum": 0
 		},
 		{
 			"match": "krillclic",
@@ -76,7 +76,7 @@
 			"badge": true,
 			"rank": "developer",
 			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/225cd37da6d4753d5d06c642fc9239b92048b2fc.gif",
-			"bgLum": 0.18
+			"bgLum": 0.016
 		},
 		{
 			"match": "DiahArianna18",
@@ -86,7 +86,7 @@
 			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/629414ffd07cfc628423a02475807316cf768152.jpg",
 			"rank": "founder",
 			"bg": "#0F0F10",
-			"bgLum": 0.135
+			"bgLum": 0.241
 		},
 		{
 			"match": "stellarpAlladium",
@@ -96,7 +96,7 @@
 			"bgImage": "https://xyro-api.xyroapi.workers.dev/media/5eff0d99c04053c0bbff221852ffb16b578020aa.jpg",
 			"badge": true,
 			"textColor": "#000000",
-			"bgLum": 0.446
+			"bgLum": 0.448
 		},
 		{
 			"match": "*",
