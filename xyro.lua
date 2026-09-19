@@ -145,11 +145,9 @@ local ESPCOL = {
 	chams = Color3.fromRGB(230, 68, 68),
 }
 
-local ClickTp = {
-	enabled = false,
-	modifier = Enum.KeyCode.LeftControl,
-	key = Enum.KeyCode.R,
-}
+-- Click TP carries no state any more: it is a plain bindable command (see
+-- clickTpNow). There is nothing to enable and no key of its own to remember -
+-- the bind IS the setting, so it lives in Binds with every other keybind.
 
 local Binds = {
 	K = "menu",
@@ -2168,7 +2166,7 @@ H.Players, H.RunService, H.UIS = Players, RunService, UIS
 H.TweenService, H.HttpService = TweenService, HttpService
 H.player, H.conns, H.connect = player, conns, connect
 H.VERSION = VERSION
-H.COL, H.ESPCOL, H.ClickTp, H.Binds = COL, ESPCOL, ClickTp, Binds
+H.COL, H.ESPCOL, H.Binds = COL, ESPCOL, Binds
 H.themedRefs, H.themeRefreshers = themedRefs, themeRefreshers
 H.make, H.round, H.tween = make, round, tween
 H.gui, H.click, H.main, H.titleBar, H.keyChip = gui, click, main, titleBar, keyChip
@@ -4903,7 +4901,7 @@ end
 
 do
 
-local UIS, HttpService, connect, COL, ESPCOL, ClickTp = H.UIS, H.HttpService, H.connect, H.COL, H.ESPCOL, H.ClickTp
+local UIS, HttpService, connect, COL, ESPCOL = H.UIS, H.HttpService, H.connect, H.COL, H.ESPCOL
 local Binds, themedRefs, themeRefreshers, make, round, gui = H.Binds, H.themedRefs, H.themeRefreshers, H.make, H.round, H.gui
 local click, main, keyChip, selectTab, world = H.click, H.main, H.keyChip, H.selectTab, H.world
 local Speed, Grav, Esp, Hitbox, Move, Fly = H.Speed, H.Grav, H.Esp, H.Hitbox, H.Move, H.Fly
@@ -5061,11 +5059,6 @@ local function gatherConfig()
 		esp = Esp.get(),
 		notifs = H.getNotifs and H.getNotifs() or false,
 		friendToasts = H.getFriendToasts and H.getFriendToasts() or false,
-		clickTp = {
-			enabled = ClickTp.enabled,
-			modifier = ClickTp.modifier.Name,
-			key = ClickTp.key.Name,
-		},
 		binds = Binds,
 		scales = H.scales,
 	}
@@ -5157,17 +5150,24 @@ local function applyConfig(cfg)
 			end
 		end
 	end
-	if type(cfg.clickTp) == "table" then
-		if type(cfg.clickTp.enabled) == "boolean" then
-			ClickTp.enabled = cfg.clickTp.enabled
-		end
-		local mk = keyFromName(cfg.clickTp.modifier)
-		if mk then
-			ClickTp.modifier = mk
-		end
-		local ck = keyFromName(cfg.clickTp.key)
-		if ck then
-			ClickTp.key = ck
+	-- Click TP used to be a panel with its own enabled/modifier/key, and those
+	-- were saved here. It is a plain bindable command now, so the one thing worth
+	-- carrying over is the key a player actually chose: bind `clicktp` to it,
+	-- which turns a config written before the change into a working keybind
+	-- instead of a dead key. Only for configs that had it switched ON - the
+	-- untouched default named R, and silently binding R for a feature the player
+	-- never used would teleport them the first time they pressed it.
+	local legacyClickTp = cfg.clickTp
+	if type(legacyClickTp) == "table" then
+		local ck = keyFromName(legacyClickTp.key)
+		-- An untouched config still names the old default (R): the panel wrote its
+		-- fields whether or not anyone used it. So carry the key over when the
+		-- feature was switched ON, or when the key was deliberately changed off
+		-- that default - binding R merely because a config mentions it would
+		-- teleport people the first time they pressed reload.
+		local chosen = legacyClickTp.enabled == true or (ck ~= nil and ck ~= Enum.KeyCode.R)
+		if ck and chosen and Binds[ck.Name] == nil then
+			Binds[ck.Name] = "clicktp"
 		end
 	end
 
@@ -8430,7 +8430,7 @@ end
 
 do
 
-local Players, UIS, player, connect, COL, ClickTp = H.Players, H.UIS, H.player, H.connect, H.COL, H.ClickTp
+local Players, UIS, player, connect, COL = H.Players, H.UIS, H.player, H.connect, H.COL
 local Binds, make, round, gui, click, main = H.Binds, H.make, H.round, H.gui, H.click, H.main
 local world = H.world
 local Speed, Grav, Esp, Hitbox, Move, Fly, hubFindPlayer, hubSaveConfig, hubKeyFromName = H.Speed, H.Grav, H.Esp, H.Hitbox, H.Move, H.Fly, H.findPlayer, H.saveConfig, H.keyFromName
@@ -11595,202 +11595,48 @@ local function openCmdBar()
 
 end
 
-local function openClickTp()
-	if _G.ClickTpCleanup then
-		pcall(_G.ClickTpCleanup)
-		task.wait()
+-- Click TP is a keybind and nothing else.
+--
+-- It used to be a panel (openClickTp) that owned its own enabled flag, modifier
+-- and key, and whose listener only ran while the panel existed. `clicktp` is
+-- bindable, so it appeared in the Keys tab and in `bind list` - and pressing
+-- that key ran the command, whose run opened the panel. So the one thing a
+-- keybind is for, teleporting, could not happen without a window appearing
+-- first. There is no window now: the keypress is the whole interaction, and the
+-- bind (Keys tab, or `bind clicktp f`) is the on/off switch.
+local clickTpMouse = nil
+
+local function clickTpNow()
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if not (root and root:IsA("BasePart") and humanoid) or humanoid.Health <= 0 then
+		return "no character"
 	end
 
-	local Players = game:GetService("Players")
-	local UIS = game:GetService("UserInputService")
-
-	local player = Players.LocalPlayer
-	local mouse = player:GetMouse()
-
-	if _G.ClickTpCleanup then
-		pcall(_G.ClickTpCleanup)
+	if not clickTpMouse then
+		clickTpMouse = player:GetMouse()
 	end
 
-	local clickConns = {}
-
-	local function clickConnect(signal, func)
-		local c = signal:Connect(func)
-		table.insert(clickConns, c)
-		return c
+	local mouse = clickTpMouse
+	-- Target is nil when the cursor is over nothing: the sky, or past the draw
+	-- distance. Hit still reports a point then - hundreds of studs out, past the
+	-- edge of the map - and teleporting to it is how a teleport-to-cursor ends up
+	-- dropping the player out of the world, so a miss reports instead of moving.
+	if not mouse or not mouse.Target then
+		return "nothing under the cursor"
 	end
 
-	local waitingModifier = false
-	local waitingKey = false
-
-	local clickGui = gui:FindFirstChild("ClickTpUI")
-
-	if clickGui then
-		clickGui:Destroy()
+	local hit = mouse.Hit
+	if not hit then
+		return "nothing under the cursor"
 	end
 
-	clickGui = make("ScreenGui", {
-		Name = "ClickTpUI",
-		ResetOnSpawn = false,
-	}, gui)
-
-	local frame = make("Frame", {
-		Name = "ClickTpFrame",
-
-		Size = UDim2.new(0, 220, 0, 162),
-		Position = UDim2.new(0, 20, 0, 250),
-		BackgroundColor3 = COL.bg,
-		BorderSizePixel = 0,
-		Active = true,
-	}, clickGui)
-
-	round(frame, 10)
-
-	make("UIStroke", {
-		Color = COL.stroke,
-		Thickness = 1,
-	}, frame)
-	H.makeResizable(frame, 220, 162)
-
-	local title = make("TextLabel", {
-		Size = UDim2.new(1, -40, 0, 30),
-		Position = UDim2.new(0, 10, 0, 5),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold,
-		TextSize = 15,
-		TextColor3 = COL.text,
-		Text = "Click TP",
-		TextXAlignment = Enum.TextXAlignment.Left,
-	}, frame)
-
-	title.Active = true
-
-	H.chrome(frame, {
-		header = 38,
-		title = title,
-		onClose = function()
-
-			pcall(hubSaveConfig)
-
-			if _G.ClickTpCleanup then
-				_G.ClickTpCleanup()
-			else
-				clickGui:Destroy()
-			end
-		end,
-	})
-
-	local toggle = make("TextButton", {
-		Size = UDim2.new(1, -20, 0, 28),
-		Position = UDim2.new(0, 10, 0, 40),
-		BackgroundColor3 = COL.off,
-		Text = "Enabled: " .. (ClickTp.enabled and "ON" or "OFF"),
-		TextColor3 = COL.text,
-		BorderSizePixel = 0,
-	}, frame)
-
-	round(toggle, 6)
-	toggle.BackgroundColor3 = ClickTp.enabled and COL.on or COL.off
-
-	local mod = make("TextButton", {
-		Size = UDim2.new(1, -20, 0, 28),
-		Position = UDim2.new(0, 10, 0, 75),
-		BackgroundColor3 = COL.element,
-		Text = "Modifier: " .. ClickTp.modifier.Name,
-		TextColor3 = COL.text,
-		BorderSizePixel = 0,
-	}, frame)
-
-	round(mod, 6)
-
-	local key = make("TextButton", {
-		Size = UDim2.new(1, -20, 0, 28),
-		Position = UDim2.new(0, 10, 0, 110),
-		BackgroundColor3 = COL.element,
-		Text = "Key: " .. ClickTp.key.Name,
-		TextColor3 = COL.text,
-		BorderSizePixel = 0,
-	}, frame)
-
-	round(key, 6)
-
-	toggle.MouseButton1Click:Connect(function()
-		ClickTp.enabled = not ClickTp.enabled
-
-		toggle.Text = "Enabled: " .. (ClickTp.enabled and "ON" or "OFF")
-		toggle.BackgroundColor3 = ClickTp.enabled and COL.on or COL.off
-	end)
-
-	mod.MouseButton1Click:Connect(function()
-		waitingModifier = true
-		mod.Text = "Modifier: press key"
-	end)
-
-	key.MouseButton1Click:Connect(function()
-		waitingKey = true
-		key.Text = "Key: press key"
-	end)
-
-	clickConnect(UIS.InputBegan, function(input, gp)
-		if input.UserInputType ~= Enum.UserInputType.Keyboard then
-			return
-		end
-
-		if waitingModifier then
-			ClickTp.modifier = input.KeyCode
-			waitingModifier = false
-
-			mod.Text = "Modifier: " .. ClickTp.modifier.Name
-
-			return
-		end
-
-		if waitingKey then
-			ClickTp.key = input.KeyCode
-			waitingKey = false
-
-			key.Text = "Key: " .. ClickTp.key.Name
-
-			return
-		end
-
-		if gp or not ClickTp.enabled then
-			return
-		end
-
-		if input.KeyCode == ClickTp.key then
-			if UIS:IsKeyDown(ClickTp.modifier) then
-				local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-
-				if root and mouse.Hit then
-					root.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
-				end
-			end
-		end
-	end)
-
-	H.makeDraggable(frame, title, clickConnect)
-	H.animateAll(frame)
-	H.popIn(frame)
-
-	_G.ClickTpToggle = function()
-		frame.Visible = not frame.Visible
-	end
-
-	_G.ClickTpCleanup = function()
-		for _, c in ipairs(clickConns) do
-			pcall(function()
-				c:Disconnect()
-			end)
-		end
-
-		if clickGui then
-			clickGui:Destroy()
-		end
-
-		_G.ClickTpToggle = nil
-		_G.ClickTpCleanup = nil
-	end
-
+	-- same landing as the old panel: 3 studs above the surface, so the arrival is
+	-- on top of it rather than inside it
+	root.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3, 0))
+	return nil
 end
 
 add{
@@ -12178,9 +12024,12 @@ add{
 add{
 	name = "clicktp",
 	group = "Players",
-	help = "Open the Click TP window",
+	help = "Teleport to wherever your cursor points - bind it to a key",
 	bindable = true,
-	run = openClickTp,
+	-- press-to-act, so no notification (it would also be the popup this command
+	-- is deliberately not raising any more) - see the silent gate in hubRunCommand
+	silent = true,
+	run = clickTpNow,
 }
 add{
 	name = "vcmute",
@@ -13798,6 +13647,13 @@ hubRunCommand = function(input)
 	end
 	if msg then
 		say(msg)
+	end
+	-- press-to-act actions (click TP) are bound to a key and repeat: a toast on
+	-- every press buries the notifications that matter, and a toast is itself a
+	-- popup - the one thing that command is not supposed to raise. The message
+	-- above still reaches the console, so a miss is diagnosable.
+	if spec.silent then
+		return
 	end
 	if H.notify then
 
