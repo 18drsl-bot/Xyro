@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r14</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r15</span>
 		<span class="chip" id="tokenChip" title="where Publish will write">no publish key</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules from the API now">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -1051,6 +1051,172 @@ async function mediaNameFor(file) {
 	return { buf, path: "media/" + name + "." + ext };
 }
 
+/* ---------- keeping artwork small enough to be worth downloading ---------- */
+/* Every player fetches a rule's picture on every refresh, so the size of the
+   file IS the size of everyone's download: a 2.8 MB screenshot looks fine in the
+   editor and makes the whole server's tags feel slow. Oversized picks are
+   therefore downscaled HERE - before they are hashed, named or sent - and the
+   editor says what it did instead of quietly shipping a smaller picture.
+
+   Three things are deliberate:
+     - the format follows the PIXELS. A picture with transparency stays PNG (a
+       JPEG would fill its transparent areas with black); everything else becomes
+       JPEG, which is what takes a photo from megabytes to tens of KB;
+     - never UPscaled, and the aspect ratio untouched, so a small logo is not
+       blown up and a wide banner is not squashed;
+     - an animated GIF is left alone. Flattening one through a canvas keeps the
+       first frame and throws the animation away, which is a worse trade than a	   big file - so a GIF that is too big is reported, never quietly stilled;
+	   - a picture that is STILL too big after that is given fewer pixels rather
+	     than refused, because a refusal loses the tag and a smaller picture only
+	     costs detail;
+	   - a background is never left a sliver. It is drawn with ScaleType.Crop, so
+	     an 8000x50 banner would shrink to 512x3 and then be magnified ~18x into
+	     mush - it is cropped to the pill's own shape first, which is the part
+	     Crop was going to discard anyway. An icon is Fit, so it is never cropped:
+	     that would cut the logo. */
+const UPLOAD_BUDGET = 512 * 1024; // what one picture may cost every player
+/* On screen an icon is at most 128px across, so 256 leaves room for a retina
+   render; a background is stretched over a pill that is a few hundred px wide. */
+const UPLOAD_MAX_SIDE = { icon: 256, bg: 512 };
+/* A pill is about 5.5:1. A background longer than this is cropped to it before
+   scaling, so its short side keeps real pixels instead of being magnified. */
+const UPLOAD_MAX_ASPECT = 8;
+
+function canvasToBlob(canvas, type, quality) {
+	return new Promise((res, rej) => {
+		canvas.toBlob(b => (b ? res(b) : rej(new Error("could not encode " + type))), type, quality);
+	});
+}
+
+/* Does this picture actually USE transparency? A screenshot saved as PNG is not
+   transparent, and turning it into a JPEG is the whole saving. Sampled every
+   16th pixel: a real alpha edge is never a single stray pixel. */
+function hasTransparency(ctx, w, h) {
+	try {
+		const data = ctx.getImageData(0, 0, w, h).data;
+		for (let i = 3; i < data.length; i += 4 * 16) {
+			if (data[i] < 250) return true;
+		}
+	} catch (_) {
+		/* unreadable pixels: assume transparency, which fails safe to PNG */
+		return true;
+	}
+	return false;
+}
+
+/* Returns { file, note }: the file to actually upload (often the same one) and a
+   one-line description of what changed, or "" when nothing needed to. */
+async function shrinkForUpload(file, kind) {
+	const limit = UPLOAD_MAX_SIDE[kind] || 512;
+	if (/^image\/gif/i.test(file.type || "")) return { file, note: "" };
+	if (typeof createImageBitmap !== "function") return { file, note: "" };
+	let bitmap = null;
+	try {
+		bitmap = await createImageBitmap(file);
+	} catch (_) {
+		return { file, note: "" }; // not decodable here: the upload path reports it
+	}
+	const srcW = bitmap.width || 1;
+	const srcH = bitmap.height || 1;
+	/* A background is drawn with ScaleType.Crop, which magnifies the picture until
+	   it covers the pill and keeps the middle - so an extreme shape shrunk by its
+	   long side becomes a sliver that the game then blows up into mush. Cropping
+	   it to a pill-like shape FIRST keeps real pixels on screen and throws away
+	   only what Crop was about to throw away. Icons are Fit, so they are not
+	   cropped: that would cut the logo. */
+	let srcX = 0;
+	let srcY = 0;
+	let cropW = srcW;
+	let cropH = srcH;
+	let cropped = false;
+	if (kind === "bg") {
+		const short = Math.min(srcW, srcH);
+		if (short > 0 && Math.max(srcW, srcH) / short > UPLOAD_MAX_ASPECT) {
+			const want = Math.round(short * UPLOAD_MAX_ASPECT);
+			if (srcW >= srcH) {
+				cropW = want;
+				srcX = Math.round((srcW - want) / 2);
+			} else {
+				cropH = want;
+				srcY = Math.round((srcH - want) / 2);
+			}
+			cropped = true;
+		}
+	}
+	const longest = Math.max(cropW, cropH) || 1;
+	const scale = Math.min(1, limit / longest);
+	let outW = Math.max(1, Math.round(cropW * scale));
+	let outH = Math.max(1, Math.round(cropH * scale));
+	/* nothing to fix: it is already small in bytes and sane in pixels */
+	if (!cropped && scale === 1 && file.size <= UPLOAD_BUDGET) {
+		if (bitmap.close) bitmap.close();
+		return { file, note: "" };
+	}
+	const canvas = document.createElement("canvas");
+	/* Repainting at a new size is the whole of the downscale, so it is one helper:
+	   the bitmap stays open until the last pass has drawn from it. */
+	const paint = (w, h) => {
+		canvas.width = w;
+		canvas.height = h;
+		const c = canvas.getContext && canvas.getContext("2d");
+		if (!c) return null;
+		c.drawImage(bitmap, srcX, srcY, cropW, cropH, 0, 0, w, h);
+		return c;
+	};
+	const ctx = paint(outW, outH);
+	if (!ctx) {
+		if (bitmap.close) bitmap.close();
+		return { file, note: "" };
+	}
+	/* PNG and WebP can carry alpha, and only the ones that DO have to stay PNG
+	   (the canvas can always encode PNG, so a transparent WebP becomes one rather
+	   than losing its edges to black) */
+	let type = /^image\/(png|webp)$/i.test(file.type || "") && hasTransparency(ctx, canvas.width, canvas.height)
+		? "image/png"
+		: "image/jpeg";
+	let quality = 0.85;
+	let out = await canvasToBlob(canvas, type, quality).catch(() => null);
+	/* still over budget: JPEG has a dial, so turn it down before giving up (a PNG
+	   has none that preserves the picture, so it keeps its size) */
+	while (out && out.size > UPLOAD_BUDGET && type === "image/jpeg" && quality > 0.55) {
+		quality -= 0.15;
+		const smaller = await canvasToBlob(canvas, type, quality).catch(() => null);
+		if (!smaller) break;
+		out = smaller;
+	}
+	/* Still over budget? JPEG's dial is spent and a PNG never had one, so the only
+	   move left is fewer pixels - and dropping pixels beats the alternative, which
+	   is refusing the file and losing the tag. Cutting the sides to 70% quarters
+	   the pixel count, so a pass or two lands even a several-MB transparent
+	   background under the budget while it is still a picture. */
+	let best = out;
+	for (let pass = 0; best && best.size > UPLOAD_BUDGET && pass < 6; pass++) {
+		const w = Math.max(1, Math.round(outW * 0.7));
+		const h = Math.max(1, Math.round(outH * 0.7));
+		if (w === outW && h === outH) break; // 1px: nothing left to take
+		if (!paint(w, h)) break;
+		const smaller = await canvasToBlob(canvas, type, quality).catch(() => null);
+		if (!smaller || smaller.size >= best.size) break; // encoding cannot help
+		best = smaller;
+		outW = w;
+		outH = h;
+	}
+	out = best;
+	if (bitmap.close) bitmap.close();
+	/* encoding failed, or it came out larger: hand back the original and let the
+	   normal path deal with it - a "resize" that costs more is not a resize */
+	if (!out || out.size >= file.size) return { file, note: "" };
+	const ext = type === "image/png" ? "png" : "jpg";
+	const name = (file.name || "image").replace(/\.[^.]+$/, "") + "." + ext;
+	const before = Math.round(file.size / 1024) + " KB";
+	const after = Math.round(out.size / 1024) + " KB";
+	return {
+		file: new File([out], name, { type }),
+		note: srcW + "x" + srcH + (cropped ? " (cropped to " + cropW + "x" + cropH + ")" : "") +
+			" -> " + outW + "x" + outH + ", " + before + " -> " + after + " (" + ext.toUpperCase() + ")",
+	};
+}
+
 /* Is this exact file already being served? Asking costs one HEAD and needs no
    key, and it is the difference between a rule that references a 1.3 MB PNG
    and one that EMBEDS it: an embedded copy is re-downloaded by every player on
@@ -1106,12 +1272,33 @@ function wireFilePicker(fileInputId, btnId, urlInputId, mediaKey) {
 		const f = e.target.files[0];
 		e.target.value = "";
 		if (!f) return;
-		if (f.size > 3 * 1024 * 1024) { toast("Image too large (max 3 MB)", "err"); return; }
 		const btn = $(btnId);
 		btn.classList.remove("done"); btn.classList.add("busy");
-		btn.textContent = "uploading...";
+		btn.textContent = "checking size...";
+		/* declared out here because the embed fallback below must send the SAME
+		   bytes that were going to be uploaded, not the original pick */
+		let upload = f;
 		try {
-			const url = await fileToBlobURL(f);
+			/* A picture that is too big is FIXED, not refused: it is resized to
+			   something this tag can actually use, and the editor says what it did.
+			   That is the difference between "too large" and a tag nobody wants to
+			   wait for - the file only fails here if it was never an image. */
+			const { file: shrunk, note } = await shrinkForUpload(f, mediaKey);
+			upload = shrunk;
+			if (upload.size > 3 * 1024 * 1024) {
+				btn.classList.remove("busy");
+				btn.textContent = "too large";
+				toast("That file is " + Math.round(upload.size / 1024) + " KB even after resizing (limit 3 MB). Crop it, or export it as PNG or JPEG.", "err", 14);
+				return;
+			}
+			if (note) {
+				/* Say it out loud: a resized picture is a different file, so it also
+				   gets a different media name - someone re-uploading a file they
+				   already have needs to know why it was not recognised as the same. */
+				toast("Resized for tags: " + note, "info", 12);
+			}
+			btn.textContent = note ? "uploading (resized)..." : "uploading...";
+			const url = await fileToBlobURL(upload);
 			$(urlInputId).value = url;
 			btn.classList.remove("busy"); btn.classList.add("done");
 			btn.textContent = "uploaded!";
@@ -1120,7 +1307,10 @@ function wireFilePicker(fileInputId, btnId, urlInputId, mediaKey) {
 			btn.classList.remove("busy");
 			if (err && err.code === "notoken") {
 				try {
-					const uri = await fileToDataURI(f);
+					/* the embed fallback takes the SHRUNK file too: base64 is 4/3 of the
+					   bytes and every player pays for them on every refresh, so
+					   embedding the original would be the worst of both worlds */
+					const uri = await fileToDataURI(upload);
 					$(urlInputId).value = uri;
 					edMedia[mediaKey] = true;
 					btn.textContent = "embedded";

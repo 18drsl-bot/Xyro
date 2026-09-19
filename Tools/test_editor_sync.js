@@ -89,11 +89,53 @@ function makeEl(id) {
 const els = new Map();
 const el = id => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); };
 
+/* --- canvas + createImageBitmap: exactly as much as the resize path uses --- */
+/* The resize decision is about dimensions, alpha and byte size, so those are the
+   three things the harness controls: `bitmapPlan` says how big the picked image
+   is, `canvasPlan.alpha` says whether its pixels use transparency, and
+   `canvasPlan.blobBytes` is how big the re-encoded picture comes out. No pixels
+   are drawn - the assertions are about what the editor decides to send. */
+let bitmapPlan = { width: 2000, height: 1000 };
+let canvasPlan = { alpha: false, blobBytes: 40 * 1024 };
+let canvasCalls = [];
+/* every drawImage, minus the bitmap itself: [sx, sy, sw, sh, dx, dy, dw, dh]. The
+   source rect is how a crop becomes visible to a test with no pixels in it. */
+let canvasDraws = [];
+let bitmapCalls = 0;
+
+if (typeof global.createImageBitmap !== "function") global.createImageBitmap = null;
+global.createImageBitmap = async () => {
+	bitmapCalls++;
+	if (bitmapPlan.fail) throw new Error("not an image");
+	return { width: bitmapPlan.width, height: bitmapPlan.height, close() {} };
+};
+
+function makeCanvas() {
+	const canvas = makeEl("canvas");
+	canvas.width = 0;
+	canvas.height = 0;
+	canvas.getContext = () => ({
+		drawImage(...a) { canvasDraws.push(a.slice(1)); },
+		getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4).fill(canvasPlan.alpha ? 128 : 255) }),
+	});
+	canvas.toBlob = (cb, type, quality) => {
+		canvasCalls.push({ type, quality, width: canvas.width, height: canvas.height });
+		/* A real encoder's size follows its pixel count, which is the only reason
+		   the budget loop can converge - so a plan may say so instead of pinning
+		   one byte count for every pass. */
+		const bytes = typeof canvasPlan.bytesFor === "function"
+			? canvasPlan.bytesFor(canvas.width, canvas.height)
+			: canvasPlan.blobBytes;
+		cb(new Blob([new Uint8Array(bytes)], { type }));
+	};
+	return canvas;
+}
+
 const document = {
 	title: "",
 	body: makeEl("body"),
 	getElementById: el,
-	createElement: tag => makeEl(tag),
+	createElement: tag => (tag === "canvas" ? makeCanvas() : makeEl(tag)),
 	addEventListener() {},
 	querySelector() { return null; },
 	querySelectorAll() { return []; },
@@ -616,6 +658,159 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("...and the file is embedded instead of failing", /^data:image\/gif;base64,/.test(el("fBgImage").value), el("fBgImage").value.slice(0, 40));
 	ok("...with the cost to every player stated, not hidden",
 		/KB to EVERY player's download every refresh/.test(newToasts(toastsBeforeEmbed)), newToasts(toastsBeforeEmbed).slice(0, 220));
+	localStorage.setItem("xyro_owner_key", OWNER_KEY);
+
+	/* --- 6c. artwork that is too big is RESIZED, not refused -------------- */
+
+	/* Every player re-downloads a rule's picture on every refresh, so a 2.8 MB
+	   screenshot is a cost paid by everyone - but refusing it just loses the tag.
+	   The editor downscales it first, and the note it shows is the evidence that
+	   it happened rather than being guessed at. */
+	const bigPng = new File([Buffer.alloc(2 * 1024 * 1024)], "screenshot.png", { type: "image/png" });
+	bitmapPlan = { width: 2000, height: 1000 };
+	canvasPlan = { alpha: false, blobBytes: 40 * 1024 };
+	canvasCalls = [];
+	mediaUploads.length = 0;
+	const toastsBeforeResize = toastCount();
+	await el("edBgFile").onchange({ target: { files: [bigPng], value: "" } });
+	ok("a 2 MB background is resized rather than refused",
+		canvasCalls.length === 1 && mediaUploads.length === 1, canvasCalls.length + " encodes, " + mediaUploads.length + " uploads");
+	ok("...down to the background limit, keeping its shape",
+		canvasCalls[0].width === 512 && canvasCalls[0].height === 256, canvasCalls[0].width + "x" + canvasCalls[0].height);
+	ok("...as a JPEG, because the pixels carry no transparency",
+		canvasCalls[0].type === "image/jpeg", canvasCalls[0].type);
+	ok("...and the RESIZED bytes are what was uploaded, not the original",
+		mediaUploads[0].bytes.length === 40 * 1024 && mediaUploads[0].name.endsWith(".jpg"),
+		mediaUploads[0].bytes.length + " bytes as " + mediaUploads[0].name);
+	ok("...so the rule points at a 40 KB picture, not a 2 MB one",
+		/^https:\/\/api\.example\/media\/[0-9a-f]{40}\.jpg$/.test(el("fBgImage").value), el("fBgImage").value);
+	ok("...and the editor says what it did instead of hiding it",
+		/Resized for tags: 2000x1000 -> 512x256/.test(newToasts(toastsBeforeResize)), newToasts(toastsBeforeResize).slice(0, 200));
+
+	/* A transparent background is the hard case. PNG has no quality dial, so
+	   turning it down is not available and the file simply stays big - but
+	   refusing it loses the tag, and the whole point is that the picture still
+	   ends up on screen. So it is given fewer pixels until it fits. */
+	bitmapPlan = { width: 4000, height: 4000 };
+	canvasPlan = { alpha: true, bytesFor: (w, h) => w * h * 4 };
+	canvasCalls = [];
+	canvasDraws = [];
+	mediaUploads.length = 0;
+	await el("edBgFile").onchange({ target: { files: [new File([Buffer.alloc(4 * 1024 * 1024)], "wall.png", { type: "image/png" })], value: "" } });
+	ok("a background still over budget afterwards is given fewer pixels, not refused",
+		canvasCalls.length > 1 && mediaUploads.length === 1,
+		canvasCalls.length + " encodes, " + mediaUploads.length + " uploads");
+	ok("...until it fits what one picture may cost every player",
+		mediaUploads[0].bytes.length <= 512 * 1024, mediaUploads[0].bytes.length + " bytes");
+	ok("...and every pass stayed PNG, so the transparency survived the shrinking",
+		canvasCalls.every(c => c.type === "image/png"), JSON.stringify(canvasCalls.map(c => c.type)));
+
+	/* The other half of "too big": shape. A background is drawn with
+	   ScaleType.Crop, so a long banner shrunk by its long side becomes a sliver
+	   the game then magnifies into mush - the shape has to be fixed too. */
+	bitmapPlan = { width: 8000, height: 50 };
+	canvasPlan = { alpha: false, blobBytes: 40 * 1024 };
+	canvasCalls = [];
+	canvasDraws = [];
+	mediaUploads.length = 0;
+	const toastsBeforeCrop = toastCount();
+	await el("edBgFile").onchange({ target: { files: [new File([Buffer.alloc(300 * 1024, 9)], "banner.png", { type: "image/png" })], value: "" } });
+	ok("an extreme background is cropped to a pill-like shape, never a sliver",
+		canvasDraws.length === 1 && canvasDraws[0][2] === 400 && canvasDraws[0][3] === 50,
+		JSON.stringify(canvasDraws[0]));
+	ok("...so it keeps real pixels instead of magnifying its short side",
+		canvasCalls[0].width === 400 && canvasCalls[0].height === 50,
+		canvasCalls[0].width + "x" + canvasCalls[0].height);
+	ok("...and the crop is stated, because it makes it a different file",
+		/cropped to 400x50/.test(newToasts(toastsBeforeCrop)), newToasts(toastsBeforeCrop).slice(0, 200));
+	/* an icon is Fit, not Crop, so the same shape must NOT be cropped: that would
+	   cut the logo out of a picture the tag still shows whole */
+	canvasCalls = [];
+	canvasDraws = [];
+	mediaUploads.length = 0;
+	await el("edIconFile").onchange({ target: { files: [new File([Buffer.alloc(90 * 1024, 11)], "wide.png", { type: "image/png" })], value: "" } });
+	ok("the same shape as an icon is never cropped (icons are Fit, not Crop)",
+		canvasDraws.length === 1 && canvasDraws[0][2] === 8000 && canvasDraws[0][3] === 50,
+		JSON.stringify(canvasDraws[0]));
+	bitmapPlan = { width: 2000, height: 1000 };
+	canvasPlan = { alpha: false, blobBytes: 40 * 1024 };
+
+	/* transparency is the one thing a JPEG cannot carry, so it has to survive */
+	bitmapPlan = { width: 1200, height: 1200 };
+	canvasPlan = { alpha: true, blobBytes: 30 * 1024 };
+	canvasCalls = [];
+	mediaUploads.length = 0;
+	await el("edIconFile").onchange({ target: { files: [new File([Buffer.alloc(900 * 1024)], "logo.png", { type: "image/png" })], value: "" } });
+	ok("a transparent icon keeps its transparency (PNG, not JPEG)",
+		canvasCalls.length === 1 && canvasCalls[0].type === "image/png" && mediaUploads[0].name.endsWith(".png"),
+		(canvasCalls[0] && canvasCalls[0].type) + " / " + (mediaUploads[0] && mediaUploads[0].name));
+	ok("...at the icon limit, which is smaller than the background one",
+		canvasCalls[0].width === 256 && canvasCalls[0].height === 256, canvasCalls[0].width + "x" + canvasCalls[0].height);
+
+	/* an animated GIF cannot be flattened without losing the animation, so it is
+	   left alone - a big GIF is reported by the upload path, never quietly still */
+	bitmapPlan = { width: 800, height: 800 };
+	canvasCalls = [];
+	mediaUploads.length = 0;
+	const gifPick = new File([Buffer.alloc(700 * 1024)], "animated.gif", { type: "image/gif" });
+	await el("edBgFile").onchange({ target: { files: [gifPick], value: "" } });
+	ok("an animated GIF is never resized (that would drop the animation)",
+		canvasCalls.length === 0 && mediaUploads.length === 1 && mediaUploads[0].bytes.length === gifPick.size,
+		canvasCalls.length + " encodes, " + (mediaUploads[0] && mediaUploads[0].bytes.length));
+	ok("...so it is still uploaded as the GIF it is", mediaUploads[0].name.endsWith(".gif"), mediaUploads[0].name);
+
+	/* nothing to fix: a small picture at sane dimensions is sent untouched, so
+	   re-picking an image that is already served still matches it by hash */
+	bitmapPlan = { width: 128, height: 128 };
+	canvasCalls = [];
+	mediaUploads.length = 0;
+	const smallPick = new File([Buffer.alloc(20 * 1024, 3)], "small.png", { type: "image/png" });
+	const toastsBeforeSmall = toastCount();
+	await el("edIconFile").onchange({ target: { files: [smallPick], value: "" } });
+	ok("a picture that is already the right size is left exactly as it is",
+		canvasCalls.length === 0 && mediaUploads.length === 1 && mediaUploads[0].bytes.length === smallPick.size,
+		canvasCalls.length + " encodes, " + (mediaUploads[0] && mediaUploads[0].bytes.length));
+	ok("...and nothing claims it was resized", !/Resized/.test(newToasts(toastsBeforeSmall)), newToasts(toastsBeforeSmall).slice(0, 160));
+
+	/* A resize that would come out BIGGER is not a resize. A tight PNG of 300x300
+	   can easily re-encode into a larger JPEG, and shipping that would cost every
+	   player more than the file it replaced - so the original is kept. */
+	bitmapPlan = { width: 300, height: 300 };
+	canvasPlan = { alpha: false, blobBytes: 200 * 1024 };
+	canvasCalls = [];
+	mediaUploads.length = 0;
+	/* distinct bytes on purpose: media names are content hashes, so re-using the
+	   previous fixture's contents would be "already served" and upload nothing */
+	const tightPick = new File([Buffer.alloc(20 * 1024, 7)], "tight.png", { type: "image/png" });
+	await el("edIconFile").onchange({ target: { files: [tightPick], value: "" } });
+	ok("a resize that would make the file BIGGER is discarded",
+		canvasCalls.length === 1 && mediaUploads[0].bytes.length === tightPick.size,
+		canvasCalls.length + " encodes, sent " + (mediaUploads[0] && mediaUploads[0].bytes.length) + " bytes vs " + tightPick.size);
+	canvasPlan = { alpha: false, blobBytes: 40 * 1024 };
+
+	/* an undecodable pick (not an image at all) must not crash the handler - the
+	   upload path is what reports it */
+	bitmapPlan = { fail: true };
+	canvasCalls = [];
+	mediaUploads.length = 0;
+	await el("edIconFile").onchange({ target: { files: [new File([Buffer.alloc(5000)], "notes.png", { type: "image/png" })], value: "" } });
+	ok("a file that cannot be decoded is passed through untouched, not crashed on",
+		canvasCalls.length === 0 && mediaUploads.length === 1 && mediaUploads[0].bytes.length === 5000,
+		canvasCalls.length + " encodes, " + (mediaUploads[0] && mediaUploads[0].bytes.length));
+
+	/* the embed fallback pays the same bill, so it must embed the SHRUNK file:
+	   base64 is 4/3 of the bytes and every player carries them on every refresh */
+	localStorage.removeItem("xyro_owner_key");
+	bitmapPlan = { width: 1600, height: 1600 };
+	canvasPlan = { alpha: false, blobBytes: 20 * 1024 };
+	canvasCalls = [];
+	await el("edBgFile").onchange({ target: { files: [new File([Buffer.alloc(1.5 * 1024 * 1024)], "huge.png", { type: "image/png" })], value: "" } });
+	const embedded = el("fBgImage").value.length;
+	ok("with no key saved it embeds the RESIZED bytes, not the 1.5 MB original",
+		canvasCalls.length === 1 && /^data:image\/jpeg;base64,/.test(el("fBgImage").value) && embedded < 60 * 1024,
+		canvasCalls.length + " encodes, embedded " + Math.round(embedded / 1024) + " KB");
+	bitmapPlan = { width: 2000, height: 1000 };
+	canvasPlan = { alpha: false, blobBytes: 40 * 1024 };
 	localStorage.setItem("xyro_owner_key", OWNER_KEY);
 
 	/* --- 7. structural invariants --------------------------------------- */
