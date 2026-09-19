@@ -1382,17 +1382,17 @@ async function health(env, url) {
 /** Serve the script, refusing anything that looks truncated on the way through -
  *  every client then gets the same guard the loader applies locally. */
 async function serveScript(env, url) {
-	const raw = (env.RAW_REPO || "https://raw.githubusercontent.com/vertxxy-1/Xyro/main").replace(/\/+$/, "");
-	let res;
-	try {
-		res = await fetch(raw + "/xyro.lua" + (url.searchParams.has("fresh") ? "?t=" + Date.now() : ""), {
-			cf: { cacheTtl: 0 }, // never hand out an edge-cached older revision
-		});
-	} catch (err) {
-		throw new ApiError(502, "repo unreachable: " + (err && err.message ? err.message : String(err)));
-	}
-	if (!res.ok) throw new ApiError(502, "repo script returned " + res.status);
-	const src = await res.text();
+	/* Through repoFile, like /editor and /version - NOT straight to raw. This was
+	   the last read still going to raw.githubusercontent, which is a CDN and goes
+	   on serving the revision before the one you just pushed. That is worse here
+	   than anywhere else, because the loaders can only retry a fetch that FAILED:
+	   a complete but stale build passes their size and marker checks, so a client
+	   would run the old script while /version already reported the new one - the
+	   "my update did not apply" symptom. repoFile prefers the contents API when a
+	   token exists (never CDN-cached) and otherwise reads raw with a unique
+	   cache-buster on every fetch, so neither path can hand back a previous
+	   revision. The truncation guard below is unchanged and still runs first. */
+	const src = await repoFile(env, "xyro.lua", url.searchParams.has("fresh"));
 	if (src.length < 100000 || !src.includes("H.Nametags") || !src.includes("RenderStepped")) {
 		throw new ApiError(502, "repo script looks wrong or truncated (" + src.length + " bytes)");
 	}

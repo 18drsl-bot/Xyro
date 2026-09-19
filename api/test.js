@@ -402,6 +402,23 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("/script refuses a truncated repo copy", res.status === 502 && /truncated/.test(json.error || ""), JSON.stringify(json));
 	scriptTruncated = false;
 
+	/* The script is the one file where a stale read does real damage: the loaders
+	   can only retry a fetch that FAILED, so a complete-but-old build passes their
+	   size and marker checks and gets run as if it were current - while /version
+	   already reports the new one. So it reads through the same chain as the
+	   rules, the editor and the version file, and never straight off the CDN. */
+	calls.length = 0;
+	res = await call("/script?fresh=1", { env: { ...WITH_KEYS, GH_TOKEN: "gh-read-token" }, headers: { "x-api-key": "sekret" } });
+	const scriptHosts = calls.map(c => c.url.hostname);
+	ok("/script reads through the freshest source, not GitHub's CDN",
+		scriptHosts.includes("api.github.com") && !scriptHosts.includes("raw.githubusercontent.com"), scriptHosts.join(", "));
+	ok("...and still serves a real build", res.status === 200 && (await res.text()).includes("H.Nametags"), "got " + res.status);
+	calls.length = 0;
+	res = await call("/script", { env: WITH_KEYS, headers: { "x-api-key": "sekret" } });
+	ok("...and cache-busts the fallback read, so a CDN copy cannot win either",
+		res.status === 200 && calls.some(c => c.url.hostname === "raw.githubusercontent.com" && c.url.search !== ""),
+		calls.map(c => c.url.href).join(", "));
+
 	/* --- the loader your users are handed ------------------------------- */
 
 	// it must NOT need a key: this is the line someone pastes before they have
