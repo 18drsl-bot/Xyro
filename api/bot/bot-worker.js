@@ -141,14 +141,39 @@ function removeRule(rules, match) {
 	return true;
 }
 
+/** The same rules? Compared on the shaped form, so key order or an absent
+ *  optional field cannot make two identical rule sets look different. */
+function sameRules(a, b) {
+	return JSON.stringify(shapeRules(a)) === JSON.stringify(shapeRules(b));
+}
+
 /* ------------------------------------------------------------- the Xyro API */
 
-function xyro(env, fetchImpl) {
-	const base = String(env.XYRO_API_URL || "").replace(/\/+$/, "");
-	const key = String(env.XYRO_ADMIN_KEY || "");
-	const doFetch = fetchImpl || fetch;
+/* A Worker may not fetch another Worker on the SAME zone over its public URL:
+   Cloudflare refuses it with error 1042, which arrives as an opaque "404 error
+   code: 1042" and looks like the Xyro API is missing rather than unreachable.
+   Both of these Workers live on one workers.dev subdomain, so http-fetching
+   xyro-api from xyro-bot never worked. A SERVICE BINDING ([[services]] in
+   wrangler.toml) is the supported path: it goes straight into the other Worker
+   inside the account, no DNS, no same-zone restriction, one extra hop on
+   Cloudflare's network. The host below is a placeholder - a binding routes by
+   service, not by hostname - and XYRO_API_URL stays supported as the fallback
+   for `wrangler dev` and for anyone who split the two onto different zones. */
+const SERVICE_BASE = "https://xyro-api.internal";
 
-	if (!base) throw new Error("XYRO_API_URL is not set (npx wrangler secret put XYRO_API_URL)");
+function xyro(env, fetchImpl) {
+	const svc = env.XYRO_API && typeof env.XYRO_API.fetch === "function" ? env.XYRO_API : null;
+	const base = svc ? SERVICE_BASE : String(env.XYRO_API_URL || "").replace(/\/+$/, "");
+	const key = String(env.XYRO_ADMIN_KEY || "");
+	const doFetch = fetchImpl || (svc ? (url, init) => svc.fetch(url, init) : fetch);
+
+	if (!base) {
+		throw new Error(
+			"the Xyro API is not reachable: add the XYRO_API service binding to api/bot/wrangler.toml " +
+				"(DISCORD-BOT.md, \"Hosting the bot on Cloudflare\"), or set XYRO_API_URL if the two " +
+				"Workers are on different zones"
+		);
+	}
 	if (!key) throw new Error("XYRO_ADMIN_KEY is not set (npx wrangler secret put XYRO_ADMIN_KEY)");
 
 	async function call(method, route, body) {
@@ -198,7 +223,17 @@ function xyro(env, fetchImpl) {
 			let last = null;
 			for (let i = 0; i < attempts; i++) {
 				const { rules, rev } = await this.read();
+				/* Snapshot BEFORE the change runs. `setRule` and `removeRule` mutate
+				   the document in place, so comparing `next` with `rules` afterwards
+				   would compare the object with itself and call every edit a no-op. */
+				const before = JSON.stringify(shapeRules(rules));
 				const next = (await change(rules)) || rules;
+				/* A change that changes nothing must not publish. `/nametag remove`
+				   for a rule that does not exist used to PUT a byte-identical
+				   document: the revision moved, a mirror commit was written, and
+				   every client was told to refresh - for no reason at all, and it
+				   made "who last changed the tags" unanswerable. */
+				if (i === 0 && JSON.stringify(shapeRules(next)) === before) return { rev, bytes: null, unchanged: true };
 				const route = "/nametags" + (rev ? "?sha=" + encodeURIComponent(rev) : "");
 				const res = await call("PUT", route, JSON.stringify({ options: next.options, tags: next.tags }));
 				if (res.status === 409) {
@@ -293,12 +328,17 @@ async function runCommand(interaction, env, fetchImpl) {
 
 	if (name === "nametag" && verb === "remove") {
 		const user = String(args.user || "").trim();
+		/* the same guard `set` has: without it an omitted option answers with
+		   "There is no rule matching ``" - empty backticks, which reads like a
+		   bug - and the write below went out anyway */
+		if (!user || user.length > 32) return reply("Give a Roblox username or user id (32 characters or fewer).");
 		const api = xyro(env, fetchImpl);
 		let removed = false;
-		await api.edit(r => {
+		const out = await api.edit(r => {
 			removed = removeRule(r, user);
 		});
-		return reply(removed ? `Removed the tag for \`${user}\`.` : `There is no rule matching \`${user}\`.`);
+		if (!removed) return reply(`There is no rule matching \`${user}\`.`);
+		return reply(out.unchanged ? `Still no rule matching \`${user}\`.` : `Removed the tag for \`${user}\`.`);
 	}
 
 	if (name === "block") {
@@ -371,8 +411,10 @@ export default {
 		/* read ONCE, as text: the signature covers these exact bytes, so a parsed
 		   and re-serialised body would not verify */
 		const raw = await request.text();
-		return handleInteraction(raw, request.headers, env || {}, (env && env.fetchImpl) || fetch);
+		/* undefined, not fetch: xyro() has to be able to prefer the service binding,
+		   and handing it the global fetch would look like an injected one */
+		return handleInteraction(raw, request.headers, env || {}, (env && env.fetchImpl) || undefined);
 	},
 };
 
-export { verifySignature, hexToBytes, handleInteraction, runCommand, shapeRules, findRule, listRules, setRule, removeRule, optionMap, mayManage };
+export { verifySignature, hexToBytes, handleInteraction, runCommand, shapeRules, sameRules, findRule, listRules, setRule, removeRule, optionMap, mayManage };

@@ -250,10 +250,14 @@ There is a Worker for it in **`api/bot/`**. It is a separate deployment from the
 tag API on purpose, so a bot change can never take the tags down:
 
 ```
-Discord ──interaction──▶ api/bot (xyro-bot)  ──x-api-key──▶ api/worker.js ──▶ rules database
-                         verifies the Ed25519                     serves GET /nametags
-                         signature, ~200ms                        PUT /nametags, /blacklist
+Discord ──interaction──▶ api/bot (xyro-bot)  ──service──▶ api/worker.js ──▶ rules database
+                         verifies the Ed25519   binding   serves GET /nametags
+                         signature, ~200ms                PUT /nametags, /blacklist
 ```
+
+That `service binding` arrow is not a style choice, and getting it wrong is the
+one failure on this page that looks like something else entirely - see **Why the
+two Workers cannot talk over HTTP** below.
 
 ### Setup
 
@@ -267,6 +271,17 @@ npx --yes wrangler@latest deploy
 ```
 
 It prints a URL like `https://xyro-bot.<your-subdomain>.workers.dev`.
+
+`wrangler deploy` also prints a **Bindings** table. One line must be there:
+
+```
+Binding                        Resource
+env.XYRO_API (xyro-api)        Worker          <- required, and not a secret
+```
+
+It comes from `[[services]]` in `api/bot/wrangler.toml`, and it is already in the
+file - you only need to look. If that line is missing, the bot cannot reach the
+tags at all and every command answers with a `404 error code: 1042`.
 
 **2. Give it your owner key** (the same one from the top of this page):
 
@@ -284,22 +299,62 @@ $env:DISCORD_GUILD_ID = "your-test-server-id"   # optional; guild commands appea
 node api/bot/register-commands.js
 ```
 
-**4. Set the Interactions Endpoint URL.** Developer Portal → your app → General
-Information → **Interactions Endpoint URL** → the Worker URL from step 1.
-
-Discord immediately sends a signed `PING` to confirm the endpoint is real, and
-**refuses to save the URL** unless the Worker answers it correctly. If the save
-fails, the Worker is not verifying signatures - start with
-`npx wrangler tail` in `api/bot/` and watch what the request does.
-
-**5. Set the Public Key.** The Worker needs `DISCORD_PUBLIC_KEY` (General
-Information → Public Key) to verify signatures:
+**4. Give it the bot's Public Key.** Developer Portal → your app → General
+Information → **Public Key**:
 
 ```powershell
-npx --yes wrangler@latest secret put DISCORD_PUBLIC_KEY
+npx --yes wrangler@latest secret put DISCORD_PUBLIC_KEY    # paste at the prompt
 ```
 
-It is public by design - it verifies, and cannot be used to impersonate anyone.
+It is public by design - it verifies signatures and cannot be used to
+impersonate anyone.
+
+**This must come before step 5, not after.** Without it the Worker cannot verify
+anything, so it answers `401` to everything, including the validation `PING`
+Discord sends when you try to save the URL - and the portal then says the
+endpoint could not be verified, which looks like a Worker problem and is really
+a missing secret.
+
+**5. Set the Interactions Endpoint URL.** Developer Portal → your app → General
+Information → **Interactions Endpoint URL** → the Worker URL from step 1.
+
+Discord immediately sends a signed `PING` and **refuses to save the URL** unless
+the Worker answers it correctly. If that save fails, watch what actually arrives:
+
+```powershell
+cd "$HOME\Downloads\x9k-main\script\Xyro\api\bot"
+npx --yes wrangler@latest tail
+```
+
+Every request is logged. A `401` means the public key does not match the app you
+are configuring; a `405` means you set a different URL (only `POST` is accepted).
+
+### Why the two Workers cannot talk over HTTP
+
+This is worth reading once, because it is the mistake that costs an hour.
+
+A Cloudflare Worker may not `fetch()` another Worker **on the same zone** using
+its public URL. Cloudflare refuses it with error **1042**, and what reaches the
+bot is an opaque `404 error code: 1042` - which reads like the Xyro API is
+missing, or the route is wrong, or the key is bad. It is none of those.
+
+Both Workers here live on one `*.workers.dev` subdomain, so that path never
+worked. The supported route is a **service binding**:
+
+```toml
+[[services]]
+binding = "XYRO_API"      # what the code calls it
+service = "xyro-api"      # `name` from ../wrangler.toml
+```
+
+It goes straight into the other Worker inside your account - no DNS, no
+same-zone restriction, still one hop on Cloudflare's network, and it needs no
+credential of its own. `api/bot/bot-worker.js` prefers the binding and falls
+back to `XYRO_API_URL` only when there is no binding (a local `wrangler dev`, or
+two Workers on genuinely different zones).
+
+`XYRO_API_URL` is still in `wrangler.toml` as that fallback. Leaving it set is
+fine; **relying** on it is what returns 1042.
 
 ### Things worth knowing before you move your bot here
 
@@ -329,8 +384,15 @@ your owner key and nothing else.
 **Test it offline first.** `node Tools/test_bot_worker.js` generates a real
 Ed25519 keypair, signs payloads the way Discord does, and drives the Worker's
 own verify path - including the cases that matter: a tampered body, a replayed
-timestamp, the wrong key, and a member without Manage Roles. 48 checks, no
+timestamp, the wrong key, and a member without Manage Roles. 58 checks, no
 network, no Cloudflare account.
+
+**Then test it live.** `node Tools/test_bot_live.js` checks the endpoint you
+actually deployed: that an unsigned or forged request is refused, that a `GET` is
+`405`, and that a signed `PING` is answered. Add `--selftest` to sign for real -
+it installs a throwaway public key, drives the full command path (which is what
+proves the service binding works), and then **tells you to put your real key
+back**, because until you do, Discord's own validation is refused.
 
 ### What you need from the Developer Portal
 
@@ -359,6 +421,16 @@ Against your live Worker, which also exercises the guarded write path:
 ```bash
 node Tools/test_live_api.js             # 50 checks, read-only
 ```
+
+Against the deployed **bot** endpoint - always runnable, then signed for real:
+
+```bash
+node Tools/test_bot_live.js             # 4 checks: deployed, guarded, 405/401
+node Tools/test_bot_live.js --selftest  # 9 checks: signs like Discord does
+```
+
+`--selftest` installs a throwaway `DISCORD_PUBLIC_KEY` and prints the command to
+put your real one back. Do not leave the throwaway in place.
 
 Then in game: add a rule with `"match": "<your own username>"`, and run
 `!nametagsfetch` for an immediate reload (otherwise it re-checks every

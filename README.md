@@ -273,3 +273,11 @@ Full copy-paste guide, including a complete `/nametag` slash command:
 needs no always-on host. A bot that reads chat cannot be hosted there at all:
 Discord blocks gateway (persistent WebSocket) connections from Cloudflare, so
 message events, member joins and presence are off the table.
+
+One trap worth knowing before you deploy it: a Worker may not `fetch()` another
+Worker on the **same zone**, so `xyro-bot` cannot call `xyro-api` over its public
+URL - Cloudflare answers error `1042`, which surfaces as `404 error code: 1042`
+and reads like a missing route. Both live on one `*.workers.dev` subdomain, so
+that path never worked. The two talk over a **service binding**, which is already
+configured in `api/bot/wrangler.toml`. `node Tools/test_bot_live.js` checks the
+deployed endpoint, and `--selftest` signs real interactions to prove it.

@@ -279,6 +279,74 @@ const BOT = path.join(ROOT, "api", "bot");
 	   is a dead end for whoever reads the Discord reply */
 	ok("...including the API's own explanation", /boom/.test(res.text), res.text.slice(0, 140));
 
+	/* ======================================= a change that changes nothing */
+
+	/* Every publish bumps the revision and writes a mirror commit. A command
+	   that removes a rule which is not there used to do both anyway, which made
+	   "who last changed the tags" unanswerable and told every client in every
+	   server to refresh a document that had not changed. */
+	{
+		const untouched = upstream(() => ({ body: RULES(), headers: { "x-xyro-sha": "d1-9" } }));
+		const gone = JSON.stringify(command("nametag", [{ type: 1, name: "remove", options: [{ name: "user", type: 3, value: "nobody-here" }] }]));
+		let res = await post(gone, signBody(gone), envWith(untouched));
+		ok("removing a rule that does not exist writes nothing",
+			!untouched.calls.some(c => c.method === "PUT"), JSON.stringify(untouched.calls.map(c => c.method)));
+		ok("...and says so plainly", /no rule matching/.test(res.text) && !/``/.test(res.text), res.text.slice(0, 140));
+
+		/* an omitted option is a user error, not an empty rule name */
+		const bare = JSON.stringify(command("nametag", [{ type: 1, name: "remove", options: [] }]));
+		const bareUp = upstream(() => ({ body: RULES(), headers: { "x-xyro-sha": "d1-9" } }));
+		res = await post(bare, signBody(bare), envWith(bareUp));
+		ok("removing with no username asks for one instead of printing empty backticks",
+			/Give a Roblox username/.test(res.text), res.text.slice(0, 140));
+		ok("...and still writes nothing", !bareUp.calls.some(c => c.method === "PUT"), JSON.stringify(bareUp.calls.map(c => c.method)));
+
+		/* a real change must still publish - the guard is on "changed nothing",
+		   not on "second attempt" */
+		const real = upstream(call => (call.method === "PUT" ? { body: { ok: true, sha: "d1-10" } } : { body: RULES(), headers: { "x-xyro-sha": "d1-9" } }));
+		const removePayload = JSON.stringify(command("nametag", [{ type: 1, name: "remove", options: [{ name: "user", type: 3, value: "Vertxxy2" }] }]));
+		res = await post(removePayload, signBody(removePayload), envWith(real));
+		ok("removing a rule that does exist still publishes",
+			real.calls.some(c => c.method === "PUT"), JSON.stringify(real.calls.map(c => c.method)));
+	}
+
+	/* ==================================================== the service binding */
+
+	/* A Worker fetching another Worker on the SAME zone over its public URL is
+	   refused by Cloudflare with error 1042, and it arrives as an opaque
+	   "404 error code: 1042" - which reads like the Xyro API is missing rather
+	   than unreachable. Both Workers here are on one workers.dev subdomain, so
+	   the binding is the only route that works in production, and this is the
+	   regression test for the day someone "simplifies" it back to a plain
+	   fetch of XYRO_API_URL. */
+	{
+		const bound = upstream(() => ({ body: RULES(), headers: { "x-xyro-sha": "d1-9" } }));
+		const listPayload = JSON.stringify(command("nametag", [{ type: 1, name: "list", options: [] }]));
+		const viaBinding = envWith(null, {
+			XYRO_API: { fetch: bound.impl },
+			XYRO_API_URL: "https://same-zone-and-therefore-blocked.example",
+		});
+		let res = await post(listPayload, signBody(listPayload), viaBinding);
+		ok("the API is reached through the service binding", bound.calls.length > 0, "0 calls");
+		ok("the public URL is not used when a binding exists",
+			!bound.calls.some(c => /same-zone-and-therefore-blocked/.test(c.url)),
+			JSON.stringify(bound.calls.map(c => c.url)));
+		ok("...and the command still answers with the live rules", /Vertxxy2/.test(res.text), res.text.slice(0, 200));
+
+		/* a write has to travel the same way as the read, or publishing silently
+		   becomes "it worked" while nothing changes */
+		const writeBound = upstream(call => (call.method === "PUT" ? { body: { ok: true, sha: "d1-11" } } : { body: RULES(), headers: { "x-xyro-sha": "d1-9" } }));
+		res = await post(setPayload, signBody(setPayload), envWith(null, { XYRO_API: { fetch: writeBound.impl } }));
+		ok("a publish travels through the binding too",
+			writeBound.calls.some(c => c.method === "PUT"), JSON.stringify(writeBound.calls.map(c => c.method)));
+
+		/* the binding makes the URL optional, which is the point: nothing to keep
+		   in sync between two deployments */
+		const noUrl = upstream(() => ({ body: RULES(), headers: { "x-xyro-sha": "d1-9" } }));
+		res = await post(listPayload, signBody(listPayload), envWith(null, { XYRO_API: { fetch: noUrl.impl }, XYRO_API_URL: "" }));
+		ok("the binding works with no XYRO_API_URL set at all", res.status === 200 && /Vertxxy2/.test(res.text), res.text.slice(0, 140));
+	}
+
 	/* ============================================ the two implementations agree */
 
 	/* api/bot/bot-worker.js and api/nametags-client.js each shape the rules, in

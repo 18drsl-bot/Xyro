@@ -32,9 +32,18 @@ main = "bot-worker.js"
 compatibility_date = "2025-06-01"
 
 [vars]
-# Where the rules, the blacklist and the kill switch live. A Worker-to-Worker
-# subrequest, so it is one hop on Cloudflare's own network.
+# A FALLBACK only, used when the service binding below is absent. Do NOT rely on
+# this in production: a Worker fetching another Worker on the same zone over its
+# public URL is refused by Cloudflare with error 1042, and both of these Workers
+# share the xyroapi.workers.dev zone. The bindings do the talking.
 XYRO_API_URL = "https://xyro-api.xyroapi.workers.dev"
+
+# The tag API, reached as a Worker rather than over the network. The public URL
+# above is blocked for this exact pair (same zone), so this is what makes
+# /nametag set actually publish. `service` must match `name` in ../wrangler.toml.
+[[services]]
+binding = "XYRO_API"
+service = "xyro-api"
 
 # How old a signed request may be, in seconds (replay protection). Set to "0" to
 # disable, which is not recommended: a captured interaction stays valid forever.

@@ -361,5 +361,25 @@ ok("no rule in the shipped file carries an inline image",
 	JSON.stringify(file).length < 256 * 1024 && !/data:image\//.test(JSON.stringify(file)),
 	JSON.stringify(file).length + " bytes");
 
+/* ------------------------------------------------------ the worker-to-worker hop */
+
+/* Cloudflare refuses a Worker fetching another Worker on the same zone (error
+   1042), which arrives as "404 error code: 1042" - indistinguishable from a
+   missing route. The bot and the tag API share one workers.dev subdomain, so
+   the bot reaches the API through a service binding. The binding names the
+   OTHER Worker by `service`, and a rename on either side breaks it silently:
+   deploy succeeds, the binding table looks plausible, and every command fails
+   at request time. */
+const botSrc = fs.readFileSync(path.join(ROOT, "api", "bot", "bot-worker.js"), "utf8");
+const apiToml = fs.readFileSync(path.join(ROOT, "api", "wrangler.toml"), "utf8");
+const apiName = (apiToml.match(/^name\s*=\s*"([^"]+)"/m) || [])[1];
+const svcName = (botToml.match(/\[\[services\]\][\s\S]*?^service\s*=\s*"([^"]+)"/m) || [])[1];
+const svcBinding = (botToml.match(/\[\[services\]\][\s\S]*?^binding\s*=\s*"([^"]+)"/m) || [])[1];
+ok("the bot declares a service binding", !!svcName && !!svcBinding, "service=" + svcName + " binding=" + svcBinding);
+ok("...naming the tag API by its actual worker name", svcName === apiName, "binding targets " + svcName + ", api/wrangler.toml is " + apiName);
+ok("...and the code reads that binding", botSrc.includes("env." + svcBinding), "env." + svcBinding);
+ok("the bot prefers the binding over the same-zone URL",
+	/svc\s*=\s*env\.\w+/.test(botSrc) && botSrc.includes("fetchImpl ||"), "");
+
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);
