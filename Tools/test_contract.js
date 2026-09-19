@@ -18,10 +18,17 @@ function ok(name, cond, extra) {
 	}
 }
 
+/* Every source is read with its newlines normalised. These tests slice the real
+   files between two markers, and on a Windows checkout (core.autocrlf) the same
+   file is CRLF while the markers are written with \n - which silently turned a
+   slice into "the rest of the file" and made an assertion look at code it was
+   never meant to see. Normalising here means the assertions describe content,
+   not the line endings of whatever machine happens to run them. */
+const readText = p => fs.readFileSync(path.join(__dirname, "..", p), "utf8").replace(/\r\n/g, "\n");
 const ROOT = path.join(__dirname, "..");
-const lua = fs.readFileSync(path.join(ROOT, "xyro.lua"), "utf8");
-const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
-const worker = fs.readFileSync(path.join(ROOT, "api", "worker.js"), "utf8");
+const lua = readText("xyro.lua");
+const html = readText("index.html");
+const worker = readText(path.join("api", "worker.js"));
 const file = JSON.parse(fs.readFileSync(path.join(ROOT, "nametags.json"), "utf8"));
 
 const block = (src, start, end) => {
