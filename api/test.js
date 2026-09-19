@@ -145,6 +145,7 @@ function newDb(opts = {}) {
 	};
 }
 let githubConflict = false; // simulate GitHub refusing a stale publish (409)
+let rawStaleIndex = false; // raw.githubusercontent's edge still holding the previous index.html
 const githubPuts = [];
 
 global.fetch = async (url, init) => {
@@ -226,6 +227,13 @@ global.fetch = async (url, init) => {
 		return new Response(JSON.stringify({ sha: githubSha, content: Buffer.from(body, "utf8").toString("base64") }), { status: 200 });
 	}
 	if (u.hostname === "raw.githubusercontent.com") {
+		/* raw is a CDN, and right after a push it keeps serving the previous
+		   revision. Modelled rather than assumed, because "the page still shows a
+		   control the repo deleted" is exactly what that looks like from a
+		   browser - and the test below has to be able to fail. */
+		if (rawStaleIndex && u.pathname.endsWith("/index.html")) {
+			return new Response("<!doctype html>\n<html><head><title>STALE PAGE FROM THE CDN</title></head><body>old</body></html>\n", { status: 200 });
+		}
 		const body = repoFile(u.pathname);
 		if (body === undefined) return new Response("Not Found", { status: 404 });
 		return new Response(body, { status: 200 });
@@ -605,6 +613,23 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("...injected inside <head>, before anything renders", editorHTML.indexOf("__XYRO_API") < editorHTML.indexOf("</head>"), "");
 	res = await call("/editor?fresh=1", { env: { XYRO_KEY: "client-key" } });
 	ok("?fresh=1 on the editor is never cached", /no-store/.test(res.headers.get("cache-control") || ""), res.headers.get("cache-control"));
+
+	/* The editor page is read from the repo, and the repo has two ways to answer:
+	   raw (a CDN, minutes stale after a push) and the contents API (immediate,
+	   never cached, needs the token). Reading raw meant a deploy could be
+	   half-visible: the page came from the previous revision while the API it
+	   talks to was already the new one. */
+	rawStaleIndex = true;
+	res = await call("/editor?fresh=1", { env: { XYRO_KEY: "client-key", GH_TOKEN: "gh-read-token" } });
+	editorHTML = await res.text();
+	ok("the editor page is read through the token path, not the raw CDN",
+		res.status === 200 && !/STALE PAGE FROM THE CDN/.test(editorHTML) && /<title>Xyro Tag Editor<\/title>/.test(editorHTML),
+		res.status + " " + (editorHTML.match(/<title>[^<]*<\/title>/) || ["?"])[0]);
+	res = await call("/version", { env: { GH_TOKEN: "gh-read-token" } });
+	const servedVersion = (await res.text()).trim();
+	ok("...and so is /version, so a release cannot be under-reported",
+		res.status === 200 && servedVersion === "0.8.11", "got " + res.status + " " + servedVersion);
+	rawStaleIndex = false;
 
 	res = await call("/api.json", { env: { XYRO_KEY: "client-key" } });
 	const apiJson = await body(res);

@@ -629,13 +629,19 @@ Machine-readable: <a href="/health">/health</a> \u00b7 script: <code>/script</co
 
 const DEFAULT_RAW_REPO = "https://raw.githubusercontent.com/vertxxy-1/Xyro/main";
 
+/** Text of one repo file, from the freshest source available.
+ *
+ *  This was the ONLY read here that went straight to raw.githubusercontent - and
+ *  raw is a CDN. Right after a push it goes on serving the previous revision for
+ *  minutes, to a cache-busted URL as well, which made /editor hand out a page
+ *  whose controls no longer existed in the repo (a removed field was still on
+ *  screen, with a new build chip beside it) and let /version under-report a
+ *  release. It now shares ONE chain with the rules and the artwork: the contents
+ *  API when a token exists (never cached), raw only for what the API will not
+ *  inline. A deploy can no longer be half-visible. */
 async function repoFile(env, name, bust) {
-	const raw = (env.RAW_REPO || DEFAULT_RAW_REPO).replace(/\/+$/, "");
-	const res = await fetch(raw + "/" + name + (bust ? "?t=" + Date.now() : ""), {
-		cf: { cacheTtl: 30, cacheEverything: true },
-	});
-	if (!res.ok) throw new ApiError(502, "repo file " + name + " returned " + res.status);
-	return await res.text();
+	const file = await repoBytes(env, name, bust);
+	return new TextDecoder().decode(file.bytes);
 }
 
 /* --------------------------------------------- repo content (the nametags) */
