@@ -18,6 +18,12 @@
  * So this is the right host if your bot is slash commands and moderation, and
  * the wrong host if it reads chat. See ../DISCORD-BOT.md.
  *
+ * CONSEQUENCE WORTH KNOWING: with no gateway there is no presence, so the bot
+ * shows as OFFLINE in the member list even though it works. Nothing in the
+ * Developer Portal changes that. If you want the green dot, presence.js in this
+ * directory holds a gateway session somewhere always-on and does nothing else -
+ * commands still come here, because the Interactions Endpoint URL routes them.
+ *
  * WHAT IT DOES. Verifies Discord's Ed25519 signature, answers the PING that the
  * Developer Portal uses to validate the endpoint, and routes /nametag, /block
  * and /unblock to the Xyro API using the owner key.

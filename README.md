@@ -281,3 +281,10 @@ and reads like a missing route. Both live on one `*.workers.dev` subdomain, so
 that path never worked. The two talk over a **service binding**, which is already
 configured in `api/bot/wrangler.toml`. `node Tools/test_bot_live.js` checks the
 deployed endpoint, and `--selftest` signs real interactions to prove it.
+
+Because there is no gateway, the bot shows as **offline** in your member list -
+that is structural, not a setting, and every command works anyway. `api/bot/presence.js`
+is a small dependency-free gateway keeper (`node api/bot/presence.js`) that gives
+it a green dot by running somewhere always-on; it holds presence and nothing else,
+so commands still go to the Worker. Don't deploy it to Cloudflare - that is the
+one thing Workers can't do.

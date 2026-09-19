@@ -571,6 +571,8 @@ the rest of your database.
 node api/test.js                     # route tests against a mocked database and repo, no network
 node Tools/test_live_api.js          # check the DEPLOYED API with real requests (read-only)
 node Tools/test_nametags_client.js   # the bot client: no network, no key needed
+node Tools/test_bot_worker.js        # the Discord bot endpoint: real Ed25519 signatures, no network
+node Tools/test_presence.js          # the bot's green dot: the gateway protocol, over a fake socket
 npx wrangler tail             # live request log while you test in game
 npx wrangler dev              # run the Worker locally on http://localhost:8787
 npx wrangler deploy           # ship a change

@@ -381,5 +381,40 @@ ok("...and the code reads that binding", botSrc.includes("env." + svcBinding), "
 ok("the bot prefers the binding over the same-zone URL",
 	/svc\s*=\s*env\.\w+/.test(botSrc) && botSrc.includes("fetchImpl ||"), "");
 
+/* ------------------------------------------------ the presence keeper's bounds */
+
+/* presence.js is the one file here that must run OUTSIDE Cloudflare, with no
+   build step: plain CommonJS, no dependencies, no bundler. It is easy to break
+   by "tidying" it - an import statement, a require of discord.js, or an export
+   keyword would all look fine in a diff and fail only when someone runs it on
+   the host that is supposed to keep the bot online. */
+const presenceSrc = fs.readFileSync(path.join(ROOT, "api", "bot", "presence.js"), "utf8");
+ok("presence.js is plain CommonJS, so node can run it with no build",
+	presenceSrc.includes("module.exports") && !/^\s*(import|export)\s/m.test(presenceSrc), "");
+/* Built-ins only. `require("fs")` is fine; `require("discord.js")` is the trap -
+   it works on the dev machine and then needs an install step on the host that
+   is meant to just keep a socket open. */
+const BUILTINS = ["fs", "path", "os", "crypto", "url", "util", "events", "net", "tls", "http", "https", "zlib", "node:fs", "node:path", "node:os", "node:crypto"];
+const presenceRequires = (presenceSrc.match(/require\(\s*["']([^"']+)["']\s*\)/g) || [])
+	.map((call) => call.match(/["']([^"']+)["']/)[1]);
+ok("presence.js requires only node built-ins, so there is nothing to install",
+	presenceRequires.every((name) => BUILTINS.indexOf(name) !== -1),
+	presenceRequires.join(", ") || "none");
+ok("presence.js is never the Worker's entry point",
+	!/main\s*=\s*"presence\.js"/.test(botToml), "");
+ok("presence.js only holds a session, it does not talk to the tag API",
+	!/nametags|XYRO_ADMIN_KEY|x-api-key/.test(presenceSrc), "");
+
+/* The offline state is the single most confusing thing about this deployment,
+   and the two places someone looks are the Worker and the bot guide. If either
+   stops explaining it, the grey dot reads like a bug again. */
+ok("the Worker says why a Worker-hosted bot has no presence",
+	/offline/i.test(botSrc) && /presence\.js/.test(botSrc), "");
+const botDoc = fs.readFileSync(path.join(ROOT, "DISCORD-BOT.md"), "utf8");
+ok("the bot guide documents the green dot and where it can run",
+	botDoc.includes("api/bot/presence.js") && /Do not deploy it to Cloudflare/i.test(botDoc), "");
+ok("the bot guide does not promise presence from the Worker",
+	!/needs no always-on host[^]*?presence works/i.test(botDoc), "");
+
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);

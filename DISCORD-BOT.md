@@ -356,6 +356,59 @@ two Workers on genuinely different zones).
 `XYRO_API_URL` is still in `wrangler.toml` as that fallback. Leaving it set is
 fine; **relying** on it is what returns 1042.
 
+### Keeping the bot online (the green dot)
+
+**A Worker-hosted bot is always offline, and no portal setting changes that.**
+The Worker only wakes when Discord POSTs an interaction; between commands there
+is no process and no socket, so the member list shows the bot grey. Every slash
+command still works perfectly. If the grey dot bothers you, that is a separate,
+small program:
+
+```bash
+node api/bot/presence.js
+```
+
+It opens the gateway, sends `IDENTIFY` once (with the presence inside it, so the
+dot is green on the first frame), heartbeats every ~41s, and does nothing else.
+It never touches your tag rules - setting the Interactions Endpoint URL routes
+every command to the Worker whether or not a gateway session exists, so both run
+at once:
+
+```
+Discord --interactions--> xyro-bot Worker --> tags API     (commands)
+Discord --gateway-------> presence.js                      (presence only)
+```
+
+Token: `DISCORD_TOKEN`, or write it to `api/bot/.discord-token` (gitignored).
+Status and activity are optional:
+
+```powershell
+$env:DISCORD_TOKEN = "your-bot-token"
+$env:DISCORD_STATUS = "online"            # online | idle | dnd | invisible
+$env:DISCORD_ACTIVITY = "Managing tags"
+$env:DISCORD_ACTIVITY_TYPE = "watching"   # playing | streaming | listening | watching | competing | custom
+node api/bot/presence.js
+```
+
+**It needs an always-on host, and your PC is not one.** Run it from a laptop and
+the bot is online exactly as long as the laptop is. Anywhere Node 22+ runs is
+fine and costs nothing to try: a spare machine, a Raspberry Pi, or a free tier
+on Fly.io / Railway / Render. **Do not deploy it to Cloudflare Workers** - it is
+precisely the thing Workers cannot do, because Discord refuses gateway
+connections from Cloudflare's egress addresses.
+
+What it does *not* give you: chat commands, join messages, or anything else that
+only exists on the gateway. It is a presence keeper. If you want those, the whole
+bot has to move to a gateway host - and then the Worker becomes optional, because
+it can answer interactions too.
+
+Its failure modes are the quiet kind, so they are worth naming: a session that
+stops being ACKed is a *zombie* (open socket, no traffic, bot silently grey), so
+the keeper reconnects on a missed heartbeat; a bad token closes with `4004` and
+the keeper stops and says so instead of retrying forever; and reconnects use
+bounded backoff with jitter, because a fixed retry interval is itself something
+Discord closes sessions for. All of that is tested - see below.
+
 ### Things worth knowing before you move your bot here
 
 **The 3-second deadline is why the bot answers inline.** Discord requires the
@@ -406,7 +459,9 @@ back**, because until you do, Discord's own validation is refused.
 
 Still prefer a normal always-on host? Everything on this page works unchanged
 there - the bot just needs to reach your Worker, and `api/nametags-client.js` is
-the Node client for it.
+the Node client for it. On a gateway host you also get chat commands and join
+messages, which the Worker cannot give you, and `api/bot/presence.js` is then
+unnecessary.
 
 ## Testing
 
@@ -414,6 +469,7 @@ Offline, no network and no key:
 
 ```bash
 node Tools/test_nametags_client.js      # 39 checks: the helpers and the race logic
+node Tools/test_presence.js             # 64 checks: the gateway protocol, over a fake socket
 ```
 
 Against your live Worker, which also exercises the guarded write path:

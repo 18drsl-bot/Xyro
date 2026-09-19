@@ -10,3 +10,9 @@ api/.xyro-admin-key
 # wrangler's local state, including your Cloudflare account details
 #   ...in api/ AND api/bot/ - a nested Worker gets its own
 **/.wrangler/
+
+# The bot token, written here by api/bot/presence.js so it does not have to sit
+# in an environment variable on a machine that only needs presence. A token can
+# post as your bot, so it is never committed.
+.discord-token
+api/bot/.discord-token
