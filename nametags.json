@@ -39,14 +39,10 @@
 		},
 		{
 			"match": "furyrAin620",
-			"label": "x9k",
-			"color": "#DEDEDE",
-			"badge": true,
-			"rank": "founder",
-			"bg": "#07070E",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/9d056ec5fdf79bdf88ee1628d3750e15d47b5ec7.jpg",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/225cd37da6d4753d5d06c642fc9239b92048b2fc.gif",
-			"userBox": false
+			"label": "Krilly",
+			"color": "#E70DD5",
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/240c6ae0ab958b3694a62e9293653f8dfcabd1ce.jpg",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/629414ffd07cfc628423a02475807316cf768152.jpg"
 		},
 		{
 			"match": "krillclic",
@@ -75,11 +71,15 @@
 			"rank": "developer"
 		},
 		{
-			"match": "furyrAin620",
-			"label": "Krilly",
-			"color": "#E70DD5",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/240c6ae0ab958b3694a62e9293653f8dfcabd1ce.jpg",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/629414ffd07cfc628423a02475807316cf768152.jpg"
+			"match": "hfjvts",
+			"label": "x9k",
+			"color": "#DEDEDE",
+			"badge": true,
+			"rank": "founder",
+			"bg": "#07070E",
+			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/9d056ec5fdf79bdf88ee1628d3750e15d47b5ec7.jpg",
+			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/225cd37da6d4753d5d06c642fc9239b92048b2fc.gif",
+			"userBox": false
 		},
 		{
 			"match": "*",
