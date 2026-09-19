@@ -146,6 +146,83 @@ for (const rank of ranks) {
 		tint ? "file paints " + tint.r + "," + tint.g + "," + tint.b + " (" + Math.round((tint.n / tint.total) * 100) + "% of pixels)" : "no opaque pixels");
 }
 
+/* ------------- the disc that fills the artwork's cut-out check -------------- */
+
+/* The check is TRANSPARENT in every one of these files, so on a flat pill it has
+   always shown the pill colour - and on a rule with a bgImage it shows the photo,
+   which is how a black badge becomes a black blob with a smudge in it. The script
+   and the editor therefore draw a disc of the contrasting ink BEHIND the seal, and
+   that disc has two opposing constraints that only the pixels can settle:
+
+     - big enough to cover the whole check (or its tips stay transparent), and
+     - small enough never to reach the transparent region AROUND the badge (or it
+       shows as a blob of its own at the scalloped edge).
+
+   Both are measured here rather than assumed, so a redrawn seal with a different
+   check cannot quietly invalidate the number both sides hardcode. */
+function sealGeometry(img) {
+	const opaque = (x, y) => x >= 0 && y >= 0 && x < img.w && y < img.h &&
+		(img.bpp === 4 ? img.pixels[(y * img.w + x) * img.bpp + 3] >= 128 : true);
+	/* flood the outside: whatever transparent pixels are unreachable from the
+	   border are the check */
+	const outside = Array.from({ length: img.h }, () => new Array(img.w).fill(false));
+	const stack = [];
+	for (let x = 0; x < img.w; x++) stack.push([x, 0], [x, img.h - 1]);
+	for (let y = 0; y < img.h; y++) stack.push([0, y], [img.w - 1, y]);
+	while (stack.length) {
+		const [x, y] = stack.pop();
+		if (x < 0 || y < 0 || x >= img.w || y >= img.h || outside[y][x] || opaque(x, y)) continue;
+		outside[y][x] = true;
+		stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+	}
+	let minX = img.w, maxX = -1, minY = img.h, maxY = -1;
+	const hole = [];
+	for (let y = 0; y < img.h; y++) for (let x = 0; x < img.w; x++) {
+		if (opaque(x, y)) {
+			if (x < minX) minX = x;
+			if (x > maxX) maxX = x;
+			if (y < minY) minY = y;
+			if (y > maxY) maxY = y;
+		} else if (!outside[y][x]) hole.push([x, y]);
+	}
+	const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+	const dist = (x, y) => Math.hypot(x - cx, y - cy);
+	let reach = 0; /* the furthest the check gets from the disc's centre */
+	for (const [x, y] of hole) reach = Math.max(reach, dist(x, y));
+	let safe = 0; /* how far a centred circle may reach without leaving the badge */
+	for (let r = 0.25; r <= Math.max(img.w, img.h); r += 0.25) {
+		let clean = true;
+		for (let y = 0; y < img.h && clean; y++) for (let x = 0; x < img.w; x++) {
+			if (dist(x, y) <= r && outside[y][x]) { clean = false; break; }
+		}
+		if (!clean) break;
+		safe = r;
+	}
+	return { reach, safe, side: img.h, holes: hole.length };
+}
+
+const luaDisc = parseFloat((lua.match(/local NT_SEAL_CHECK_DISC = ([\d.]+)/) || [])[1]);
+const htmlDisc = parseFloat((html.match(/checkDisc: ([\d.]+)/) || [])[1]);
+ok("the script states how much of the badge the check's disc covers", isFinite(luaDisc), String(luaDisc));
+ok("...and the editor hardcodes the same fraction", isFinite(htmlDisc) && htmlDisc === luaDisc, luaDisc + " in xyro.lua vs " + htmlDisc + " in index.html");
+
+const checkFiles = [...new Set([...Object.values(seals), "verified_seal.png", "verified_seal_blue.png"])]
+	.map(f => path.join(ROOT, "media", f))
+	.filter(f => fs.existsSync(f));
+let worstCover = Infinity, worstInside = -Infinity, geometrySeen = new Set();
+for (const file of checkFiles) {
+	const g = sealGeometry(decode(file));
+	const radius = (luaDisc * g.side) / 2;
+	worstCover = Math.min(worstCover, radius - g.reach);
+	worstInside = Math.max(worstInside, radius - g.safe);
+	geometrySeen.add(g.reach.toFixed(2) + "/" + g.safe.toFixed(2) + "/" + g.holes);
+}
+ok("every seal shares one check geometry", geometrySeen.size === 1, [...geometrySeen].join(" | "));
+ok("the disc covers the whole check on every seal", worstCover >= 0,
+	"tightest seal leaves " + worstCover.toFixed(2) + "px of the check uncovered");
+ok("...and never reaches the transparent edge around the badge", worstInside <= 0,
+	"the disc would show by " + worstInside.toFixed(2) + "px on the worst seal");
+
 // the plain check everyone without a rank gets
 const blue = dominantTint(decode(path.join(ROOT, "media", "verified_seal_blue.png")));
 ok("the default seal is the Roblox blue", blue && Math.abs(blue.r - 0) <= tol && Math.abs(blue.g - 0xa2) <= 26 && Math.abs(blue.b - 0xff) <= 26,
@@ -182,6 +259,30 @@ ok("xyro.lua and index.html both define the contrast floor", luaFloor > 0 && lua
 ok("...and the site's rank tints are the script's NT_RANK_COLORS",
 	ranks.length > 0 && ranks.every(r => jsTints[r] === colors[r].map(v => v.toString(16).padStart(2, "0")).join("")),
 	ranks.filter(r => jsTints[r] !== colors[r].map(v => v.toString(16).padStart(2, "0")).join("")).join(",") || "all agree");
+const luaCheckFloor = Number((lua.match(/local NT_CHECK_MIN_CONTRAST = ([\d.]+)/) || [])[1]);
+const jsCheckFloor = Number((html.match(/const CHECK_MIN_CONTRAST = ([\d.]+)/) || [])[1]);
+ok("xyro.lua and index.html both define the check's floor, below the seal's",
+	luaCheckFloor > 0 && luaCheckFloor === jsCheckFloor && luaCheckFloor < luaFloor,
+	"script " + luaCheckFloor + " vs site " + jsCheckFloor + " (seal floor " + luaFloor + ")");
+/* The mark this copies is a WHITE check on the blue seal. A floor above that
+   ratio is how the blue badge came out black in game while the site previewed
+   the real thing - the two numbers are the whole bug, so they are asserted
+   rather than trusted. */
+const relLumChannel = v => v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+const relLumHex = hex => {
+	const n = parseInt(hex.replace("#", ""), 16);
+	return 0.2126 * relLumChannel(((n >> 16) & 255) / 255) + 0.7152 * relLumChannel(((n >> 8) & 255) / 255) + 0.0722 * relLumChannel((n & 255) / 255);
+};
+const lumRatio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+const whiteCheckOn = hex => lumRatio(relLumHex(hex), 1) >= jsCheckFloor;
+ok("...and the blue seal gets a WHITE check, which is the real badge's own colours",
+	jsBlue && whiteCheckOn(jsBlue),
+	jsBlue + " white ratio " + lumRatio(relLumHex(jsBlue), 1).toFixed(2) + " vs floor " + jsCheckFloor);
+ok("...while a disc too light for white still gets a black check",
+	jsTints.hr && jsTints.founder && !whiteCheckOn(jsTints.hr) && !whiteCheckOn(jsTints.founder),
+	["hr " + lumRatio(relLumHex(jsTints.hr || "#ffffff"), 1).toFixed(2),
+		"founder " + lumRatio(relLumHex(jsTints.founder || "#ffffff"), 1).toFixed(2)].join(", "));
+
 ok("...and the rankless seal's tint is the blue the artwork actually paints",
 	luaBlue && blue && jsBlue &&
 		Math.abs(Number(luaBlue[1]) - blue.r) <= tol && Math.abs(Number(luaBlue[2]) - blue.g) <= tol && Math.abs(Number(luaBlue[3]) - blue.b) <= tol &&

@@ -107,10 +107,20 @@ put exact names above the `*` catch-all.
 
 Badges look after themselves: a seal whose colour would blend into its backdrop (the
 white HR seal on a white pill, the navy partner seal on a black one) is drawn flat
-black on a light backdrop or flat white on a dark one instead. The check is cut out
-of the seal, so it takes the backdrop's colour either way and still reads as a
-check. A seal that already contrasts is left exactly as it is, so nothing needs
-configuring.
+black on a light backdrop or flat white on a dark one instead. A seal that already
+contrasts is left exactly as it is, so nothing needs configuring.
+
+**The check is drawn, not borrowed.** The artwork is a disc with the check cut *out*
+of it, so on a flat pill the check has always been the pill colour showing through.
+On a rule with a `bgImage` that hole showed the photo instead — and once a seal was
+drawn flat black the result was a black blob with a smudge in it. Every badge now
+carries a small disc of contrasting ink *behind* the seal, sized from the artwork
+(89% of the badge: wide enough to cover the check, never reaching the transparent
+edge), so the check reads the same over a photo, a flat pill or a flat-ink seal. The
+ink is white on a dark disc and black only on a disc too light for white, so the
+blue seal keeps the exact look of the real Roblox mark. `Tools/test_seals.js`
+pins that size against `media/verified_seal.png`, so artwork and script cannot
+drift.
 
 That backdrop is the rule's `bgImage` when it has one, **not** its `bg`: a
 background image replaces the pill (the pill's own transparency is set to 1 and the

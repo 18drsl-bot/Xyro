@@ -100,7 +100,7 @@ let bitmapPlan = { width: 2000, height: 1000 };
    contrast path reads pixels back and averages them, so a test has to be able to
    say how bright the picture is instead of only how big it is. Unset, the fill is
    what the resize tests have always seen. */
-let canvasPlan = { alpha: false, blobBytes: 40 * 1024, rgb: null };
+let canvasPlan = { alpha: false, blobBytes: 40 * 1024, rgb: null, pixel: null };
 let canvasCalls = [];
 /* every drawImage, minus the bitmap itself: [sx, sy, sw, sh, dx, dy, dw, dh]. The
    source rect is how a crop becomes visible to a test with no pixels in it. */
@@ -122,21 +122,38 @@ function makeCanvas() {
 	const canvas = makeEl("canvas");
 	canvas.width = 0;
 	canvas.height = 0;
-	canvas.getContext = () => ({
-		drawImage(...a) { canvasDraws.push(a.slice(1)); },
-		getImageData: (x, y, w, h) => {
-			const data = new Uint8ClampedArray(w * h * 4).fill(canvasPlan.alpha ? 128 : 255);
-			if (canvasPlan.rgb) {
-				for (let i = 0; i < data.length; i += 4) {
-					data[i] = canvasPlan.rgb[0];
-					data[i + 1] = canvasPlan.rgb[1];
-					data[i + 2] = canvasPlan.rgb[2];
-					data[i + 3] = 255;
+	canvas.getContext = () => {
+		const ctx = {
+			font: "",
+			drawImage(...a) { canvasDraws.push(a.slice(1)); },
+			/* A font engine is not what these tests are about, but text width IS an
+			   input to where the badge lands - so this returns the script's own
+			   characters-times-size estimate (ntTextWidth's fallback), which a test
+			   can predict and which the editor uses when it has no canvas. */
+			measureText: (s) => {
+				const px = parseFloat((String(ctx.font).match(/([\d.]+)px/) || [0, 0])[1]) || 0;
+				return { width: String(s).length * px * 0.55 };
+			},
+			/* `pixel(x, y, w, h)` makes a picture that is not uniform - the only way
+			   to prove a measurement follows the part of a picture it is meant to */
+			getImageData: (x, y, w, h) => {
+				const data = new Uint8ClampedArray(w * h * 4).fill(canvasPlan.alpha ? 128 : 255);
+				let at = 0;
+				for (let cy = 0; cy < h; cy++) {
+					for (let cx = 0; cx < w; cx++, at += 4) {
+						const rgb = canvasPlan.pixel ? canvasPlan.pixel(cx, cy, w, h) : canvasPlan.rgb;
+						if (!rgb) continue;
+						data[at] = rgb[0];
+						data[at + 1] = rgb[1];
+						data[at + 2] = rgb[2];
+						data[at + 3] = 255;
+					}
 				}
-			}
-			return { data };
-		},
-	});
+				return { data };
+			},
+		};
+		return ctx;
+	};
 	canvas.toBlob = (cb, type, quality) => {
 		canvasCalls.push({ type, quality, width: canvas.width, height: canvas.height });
 		/* A real encoder's size follows its pixel count, which is the only reason
@@ -389,7 +406,8 @@ const factory = new Function(
 	"  refreshLive: refreshLive, publish: () => $(\"publishBtn\").onclick(), canonJSON: canonJSON, asConfig: asConfig," +
 	"  renderPreview: renderPreview, renderEditorPreview: renderEditorPreview, editorTag: editorTag," +
 	"  mediaURL: mediaURL, sealInk: sealInk, sealInkForLum: sealInkForLum, relLuminance: relLuminance, contrastRatio: contrastRatio, get rulesSource(){return rulesSource;}," +
-	"  measureBgLum: measureBgLum, bgLumOf: bgLumOf, ensureBgLum: ensureBgLum, measureRuleBackgrounds: measureRuleBackgrounds," +
+	"  bgLum: bgLum, bgLumCached: bgLumCached, ensureBgLum: ensureBgLum, measureRuleBackgrounds: measureRuleBackgrounds," +
+	"  pillBadgeRect: pillBadgeRect, cropToPicture: cropToPicture, checkInkOf: checkInkOf, PILL_LAYOUT: PILL_LAYOUT," +
 	"  openEditor: openEditor, closeEditor: closeEditor, changed: changed, renderUsers: renderUsers," +
 	"  blockAccount: blockAccount, loadBlacklist: loadBlacklist, renderBlacklist: renderBlacklist, pollUsers: pollUsers," +
 	"  toasts: () => $(\"toasts\").children.map(t => t.textContent)," +
@@ -612,17 +630,17 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	mediaStored.add(RED_BG);
 
 	canvasPlan.rgb = [255, 255, 255];
-	const lumWhite = await hosted.measureBgLum(urlOf(WHITE_BG));
+	const lumWhite = await hosted.bgLum(urlOf(WHITE_BG));
 	canvasPlan.rgb = [0, 0, 0];
-	const lumBlack = await hosted.measureBgLum(urlOf(BLACK_BG));
+	const lumBlack = await hosted.bgLum(urlOf(BLACK_BG));
 	canvasPlan.rgb = [128, 128, 128];
-	const lumGrey = await hosted.measureBgLum(urlOf(GREY_BG));
+	const lumGrey = await hosted.bgLum(urlOf(GREY_BG));
 	/* a COLOURED picture is what pins the weights: pure red is 0.2126 by the WCAG
 	   formula, 1.0 by "how bright is the red channel", and the script's own
 	   ntLuminance returns 0.2126 for the same pixel - so a brightness that is
 	   merely monotonic (or one channel) would pick a different ink than the game */
 	canvasPlan.rgb = [255, 0, 0];
-	const lumRed = await hosted.measureBgLum(urlOf(RED_BG));
+	const lumRed = await hosted.bgLum(urlOf(RED_BG));
 	canvasPlan.rgb = null;
 	/* the resize tests read this log to see the crop rectangle they got, so the
 	   measurements above must not be left in it */
@@ -639,8 +657,8 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	/* one URL is measured ONCE: the preview re-renders on every keystroke, and a
 	   measurement per redraw would put a fetch and a decode behind each one */
 	const lumCallsBefore = calls.filter(c => c.url.pathname === "/media/" + WHITE_BG).length;
-	await hosted.measureBgLum(urlOf(WHITE_BG));
-	await hosted.measureBgLum(urlOf(WHITE_BG));
+	await hosted.bgLum(urlOf(WHITE_BG));
+	await hosted.bgLum(urlOf(WHITE_BG));
 	ok("a picture is measured once, however often it is asked for",
 		calls.filter(c => c.url.pathname === "/media/" + WHITE_BG).length === lumCallsBefore,
 		calls.filter(c => c.url.pathname === "/media/" + WHITE_BG).length + " vs " + lumCallsBefore);
@@ -648,12 +666,12 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	   a promise that resolves without landing in it makes the preview kick a fresh
 	   measurement on every redraw, which is a loop that never yields to the page */
 	ok("a picture that cannot be read measures as nothing",
-		(await hosted.measureBgLum("rbxassetid://12345")) === null &&
-			(await hosted.measureBgLum(urlOf("missing-picture.jpg"))) === null,
+		(await hosted.bgLum("rbxassetid://12345")) === null &&
+			(await hosted.bgLum(urlOf("missing-picture.jpg"))) === null,
 		"unreadable artwork must not be reported as a brightness");
 	ok("...but it is remembered as unmeasurable, so the preview stops asking",
-		hosted.bgLumOf("rbxassetid://12345") === null && hosted.bgLumOf(urlOf("missing-picture.jpg")) === null,
-		String(hosted.bgLumOf("rbxassetid://12345")) + "/" + String(hosted.bgLumOf(urlOf("missing-picture.jpg"))));
+		hosted.bgLumCached("rbxassetid://12345") === null && hosted.bgLumCached(urlOf("missing-picture.jpg")) === null,
+		String(hosted.bgLumCached("rbxassetid://12345")) + "/" + String(hosted.bgLumCached(urlOf("missing-picture.jpg"))));
 
 	/* the ink the script would pick for that picture - flat black on a white one,
 	   flat white on a black one, and untouched when the tint already reads */
@@ -678,7 +696,7 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	   measurement nothing writes down is a measurement the game never sees */
 	hosted.openEditor(0);
 	el("fBgImage").value = urlOf(GREY_BG);
-	await hosted.measureBgLum(urlOf(GREY_BG));
+	await hosted.bgLum(urlOf(GREY_BG));
 	await el("edSave").onclick();
 	/* 3 decimal places on purpose: it is a brightness, not a measurement record, and
 	   the file it lands in is re-downloaded by every player every refresh */
@@ -697,14 +715,14 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	/* the mini preview has to SHOW that, on both sides of the flip */
 	hosted.openEditor(0); // founder: silver, the seal that vanishes on a white picture
 	el("fBgImage").value = urlOf(WHITE_BG);
-	await hosted.measureBgLum(urlOf(WHITE_BG));
+	await hosted.bgLum(urlOf(WHITE_BG));
 	hosted.renderEditorPreview();
 	ok("the preview draws the badge black on a white background picture",
 		el("edBadgeCheck").style.filter === "brightness(0)" && /background picture/.test(el("edBadgeCheck").title),
 		JSON.stringify(el("edBadgeCheck").style.filter) + " / " + el("edBadgeCheck").title);
 	el("fBgImage").value = urlOf(BLACK_BG);
 	el("fRank").value = "partner"; // navy on black: the other direction
-	await hosted.measureBgLum(urlOf(BLACK_BG));
+	await hosted.bgLum(urlOf(BLACK_BG));
 	hosted.renderEditorPreview();
 	ok("...and white on a black one",
 		el("edBadgeCheck").style.filter === "brightness(0) invert(1)", JSON.stringify(el("edBadgeCheck").style.filter));
@@ -736,6 +754,87 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 		!gh.file.tags[0].bgLum, JSON.stringify(gh.file.tags[0]));
 	gh.file = servedDoc;
 	canvasPlan.rgb = null;
+
+	/* --- 5d. WHICH pixels of the picture the badge sits on ----------------- */
+
+	/* The pill is only as wide as its longest line, the badge is drawn right after
+	   the name text, and the picture is Cropped to the pill - so what is behind a
+	   seal is a narrow band near the right, not the whole photograph. Judging the
+	   whole picture is how a pale corner turns every badge on an otherwise dark
+	   photo black. The band's place comes from the script's own layout numbers. */
+	const SPLIT_BG = "split-bg.jpg";
+	mediaStored.add(SPLIT_BG);
+	canvasPlan.pixel = (x, y, w) => (x < w / 2 ? [0, 0, 0] : [255, 255, 255]); /* dark left, bright right */
+	const splitWhole = await hosted.bgLum(urlOf(SPLIT_BG));
+	const badgeRect = hosted.pillBadgeRect({ match: "x9k", label: "x9k", badge: true }, {});
+	const splitBadge = await hosted.bgLum(urlOf(SPLIT_BG), badgeRect, badgeRect.width / badgeRect.height);
+	canvasPlan.pixel = null;
+	ok("the badge is judged on the part of the picture it sits on, not the whole of it",
+		splitBadge === 1 && splitWhole === 0.5,
+		"behind the badge " + splitBadge + ", whole picture " + splitWhole);
+
+	ok("the band is a narrow strip, and it ends at the pill's own padding",
+		badgeRect.fx1 - badgeRect.fx0 < 0.25 && badgeRect.fx1 <= 1 - hosted.PILL_LAYOUT.padRight / badgeRect.width,
+		JSON.stringify(badgeRect));
+	ok("...and a long @username pushes it left, because the pill grows to fit that line",
+		hosted.pillBadgeRect({ label: "x9k", badge: true, userText: "a_very_long_username" }, {}).fx1 < badgeRect.fx1,
+		JSON.stringify(hosted.pillBadgeRect({ label: "x9k", badge: true, userText: "a_very_long_username" }, {})));
+	/* the badge is in the NAME row, which sits above the @username row - so the
+	   band is above the pill's middle, not across it (the game puts nameTop at
+	   (height - nameRowH - userRowH) / 2) */
+	ok("the band is the name row, which sits above the pill's middle",
+		badgeRect.fy0 > 0.1 && badgeRect.fy1 < 0.6 && badgeRect.fy0 < badgeRect.fy1,
+		JSON.stringify(badgeRect));
+
+	/* ScaleType.Crop, as arithmetic: a picture wider than the pill is scaled to the
+	   pill's height and cut from both sides; a taller one keeps its full width and
+	   is cut vertically. Getting this backwards would sample a band of the picture
+	   that is nowhere near the badge. */
+	const band = { fx0: 0.8, fx1: 0.95, fy0: 0.3, fy1: 0.7 };
+	const wider = hosted.cropToPicture(band, 2.5, 5.0);
+	const taller = hosted.cropToPicture(band, 2.5, 1.0);
+	ok("a picture wider than the pill is cropped from both sides",
+		wider.x0 > 0 && wider.x1 < band.fx1 && wider.y0 === band.fy0
+			&& wider.x1 - wider.x0 < band.fx1 - band.fx0, /* the band is compressed with it */
+		JSON.stringify(wider));
+	ok("...while a taller one keeps its full width and is cropped vertically",
+		taller.x0 === band.fx0 && taller.x1 === band.fx1 && taller.y0 > band.fy0,
+		JSON.stringify(taller));
+
+	/* --- 5e. the check is DRAWN, not a hole ------------------------------ */
+
+	/* The artwork's check is transparent, so it shows whatever the badge is over -
+	   the pill colour on a flat pill and the PHOTO on a rule with a bgImage. Both
+	   sides draw a disc of the contrasting ink behind the seal to fill it, and that
+	   disc's size is pinned to the artwork's own geometry by test_seals.js. */
+	/* white first, not "whichever contrasts more": the mark is a WHITE check on a
+	   dark disc, and black only when the disc is too light for white to read */
+	ok("the check's ink is white on a dark disc, black only on a light one",
+		api.checkInkOf(api.relLuminance("#2452dc")) === "#ffffff" && api.checkInkOf(api.relLuminance("#00a2ff")) === "#ffffff"
+			&& api.checkInkOf(api.relLuminance("#d2d6de")) === "#000000" && api.checkInkOf(api.relLuminance("#ffffff")) === "#000000",
+		[api.checkInkOf(api.relLuminance("#2452dc")), api.checkInkOf(api.relLuminance("#00a2ff")),
+			api.checkInkOf(api.relLuminance("#d2d6de")), api.checkInkOf(api.relLuminance("#ffffff"))].join("/"));
+	const discCss = () => String(el("edBadgeCheck").style.background || "");
+	/* rule 0 has a background picture measured bright, so its silver seal is
+	   drawn flat black - and a BLACK check on a black disc is nothing, which is
+	   exactly the case this disc exists for */
+	hosted.openEditor(0);
+	hosted.renderEditorPreview();
+	ok("the preview draws that disc behind the seal",
+		/radial-gradient/.test(discCss()) && discCss().includes("#ffffff"), discCss());
+	ok("...sized to the artwork's geometry, not to taste",
+		discCss().includes((hosted.PILL_LAYOUT.checkDisc * 100).toFixed(0) + "%"), discCss());
+	/* the same silver seal on a plain dark pill is NOT flipped: a silver disc, so
+	   the check has to come out black */
+	el("fBgImage").value = "";
+	el("fBgHex").value = "#0C0C10";
+	el("fRank").value = "founder";
+	hosted.renderEditorPreview();
+	ok("...in the ink that disc needs, not one fixed colour",
+		discCss().includes("#000000") && !discCss().includes("#ffffff"), discCss());
+	el("fBgHex").value = "";
+	el("fRank").value = "";
+	hosted.closeEditor();
 
 	/* With the API unreachable there is no second source to find, and looking for
 	   one is how a page ends up showing rules nobody plays by. */

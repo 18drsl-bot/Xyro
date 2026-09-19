@@ -740,12 +740,15 @@ ok("a background picture is what decides the ink, not the pill colour behind it"
 		&& /return math\.clamp\(lum, 0, 1\)/.test(backdropFn), backdropFn.length + " chars");
 ok("...on the same luminance scale the editor measures and publishes",
 	/function relLuminanceRGB\(r, g, b\)/.test(html) && /function lumRatio\(la, lb\)/.test(html)
-		&& /lumRatio\(backdropLum, seal\)/.test(html) && /ntLumRatio\(backdropLum, sealLum\)/.test(lua));
+		&& /lumRatio\(backdropLum, seal\)/.test(html) && /ntLumRatio\(backdropLum, ntLuminance\(sealColor\)\)/.test(lua));
 ok("...and a rule with no number for its picture keeps the old behaviour",
 	/return ntLuminance\(pillColor\)/.test(lua));
+/* The unreadable case has two halves, and both matter: the picture is remembered
+   as unmeasured (so the preview stops asking and a redraw does not loop), and the
+   rule then loses any number it had rather than keeping the old picture's. */
 ok("a picture that cannot be measured publishes no number, never a guessed one",
 	/if \(rule\.bgLum === undefined\) return false;\n\s*delete rule\.bgLum;/.test(html)
-		&& /bgLumCache\.set\(u, null\)/.test(html));
+		&& /bgPictures\.set\(u, entry\)/.test(html) && /if \(!entry\) return null;/.test(html));
 ok("a changed brightness forces a rebuild in game, like the other rule fields",
 	/tostring\(rule\.bgLum or ""\)/.test(lua), "the rebuild signature does not carry bgLum");
 ok("a loaded document is measured through, so a live tag's badge is fixed by opening it",
@@ -756,6 +759,34 @@ ok("...falling back to the glyph in the SAME ink when it cannot build one",
 	/badgeGlyphFallback\(\)\n\s*b\.TextColor3 = sealInk/.test(badgeBlock));
 ok("the local seal build takes an ink, so a rankless badge can have one too",
 	/local function ntSealAsset\(rank, ink\)/.test(lua) && /local key = rank\n\tif ink then/.test(lua));
+/* THE CHECK IS A HOLE. The artwork is a disc with the check cut out, so the check
+   is whatever sits behind the badge - fine on a flat pill, and a photo-coloured
+   smudge the moment the seal is drawn flat over a bgImage. A disc of contrasting
+   ink behind the seal is what turns the hole into a drawn check, so if it is
+   never created (or created on top) the badge goes back to a blob with a hole in
+   it - on exactly the tags this exists for. */
+ok("a contrasting disc is drawn behind the seal to fill its cut-out check",
+	/checkDisc\.Name = "SealCheck"/.test(badgeBlock) && /checkDisc\.Parent = b\n/.test(badgeBlock)
+		&& /checkCorner\.CornerRadius = UDim\.new\(1, 0\)/.test(badgeBlock));
+/* Below the seal, not on top of it: the seal keeps Roblox's default ZIndex of 1,
+   so a disc at 0 cannot depend on which of the two the build happens to parent
+   first - the same fragility the tag's own shadow had. */
+ok("...under the seal, by ZIndex rather than by creation order",
+	/checkDisc\.ZIndex = 0/.test(badgeBlock));
+/* What the disc contrasts is the DISC's colour, not the backdrop's: a seal drawn
+   flat black on a white photo still needs a white check inside it. */
+ok("...in an ink that contrasts the seal it fills, not the backdrop",
+	/local discColor = sealInk or badgeTint or NT_SEAL_BLUE/.test(badgeBlock)
+		&& /checkDisc\.BackgroundColor3 = ntCheckInk\(ntLuminance\(discColor\)\)/.test(badgeBlock));
+ok("the glyph fallback drops the disc, so it cannot sit over the text",
+	/if checkDisc and checkDisc\.Parent then\n\s*checkDisc:Destroy\(\)/.test(badgeBlock));
+/* The check has its own contrast floor, below the seal's, because the mark this
+   copies is a WHITE check on blue at 2.76 - judging it by the 3.5 text floor is
+   what turned the Roblox-blue badge black in game. */
+ok("the check's ink is judged by its own, lower floor",
+	/local NT_CHECK_MIN_CONTRAST = 2\n/.test(lua) && /ntLumRatio\(discLum, NT_SEAL_INK_LIGHT_LUM\) >= NT_CHECK_MIN_CONTRAST/.test(lua)
+		&& /lumRatio\(discLum, 1\) >= CHECK_MIN_CONTRAST/.test(html)
+		&& /const CHECK_MIN_CONTRAST = 2;/.test(html));
 ok("both inks are prewarmed off the boot path (a blending badge never waits)",
 	/ntSealAsset, nil, NT_SEAL_INK_DARK/.test(lua) && /ntSealAsset, nil, NT_SEAL_INK_LIGHT/.test(lua));
 ok("the contrast math is sRGB linearised with the WCAG luminance weights",

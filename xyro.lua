@@ -8978,6 +8978,21 @@ local NT_SEAL_INK_LIGHT = Color3.new(1, 1, 1)
 -- channel(1) = 1), so no rounding creeps in between the two sides
 local NT_SEAL_INK_DARK_LUM = 0
 local NT_SEAL_INK_LIGHT_LUM = 1
+-- THE CHECK IS A HOLE. The seal artwork is a disc with the check CUT OUT of it
+-- (45% of the file is transparent), so the check has always been whatever is
+-- behind the badge: the pill colour on a flat pill, and the background PICTURE
+-- on a rule with a bgImage - which is how a flat black badge ends up looking
+-- like a black blob with a smudge in it. A disc of the contrasting ink drawn
+-- BEHIND the seal fills that hole, so the check is drawn rather than borrowed
+-- and the badge reads the same whatever it is over.
+--
+-- The size is measured off the artwork, not guessed: the check reaches 9.92px
+-- from the disc's centre and a circle up to 12.50px of radius stays inside the
+-- opaque part (never reaching the transparent region around the badge), so
+-- 2 x 12.50 / 28 = 89% covers the check completely and can never show as a blob
+-- of its own at the scalloped edge. All nine seals share that geometry -
+-- Tools/test_seals.js pins this number against media/verified_seal.png.
+local NT_SEAL_CHECK_DISC = 0.89
 
 local function ntLuminance(c)
 	local function channel(v)
@@ -8996,15 +9011,39 @@ end
 -- for nearly every tag, which is why nothing else changes). Otherwise the ink to
 -- draw the mask in: whichever of black/white actually contrasts more, so a
 -- near-white backdrop gets black ink and a dark one gets white.
-local function ntSealInk(backdropLum, sealColor)
-	local sealLum = ntLuminance(sealColor)
-	if ntLumRatio(backdropLum, sealLum) >= NT_BADGE_MIN_CONTRAST then
-		return nil
-	end
+-- The ink to draw ON a colour: whichever of black/white actually contrasts it
+-- more. Used for the seal that would blend (ntSealInk) and for the disc that
+-- fills the seal's cut-out check, which is the same question asked about the
+-- seal's own colour.
+local function ntContrastInk(backdropLum)
 	if ntLumRatio(backdropLum, NT_SEAL_INK_DARK_LUM) >= ntLumRatio(backdropLum, NT_SEAL_INK_LIGHT_LUM) then
 		return NT_SEAL_INK_DARK
 	end
 	return NT_SEAL_INK_LIGHT
+end
+
+-- The CHECK's ink, which is a different question from the seal's, with a floor
+-- of its own. The badge is the Roblox mark, so the check is WHITE on a dark disc
+-- and black only when the disc is too light for white to read.
+--
+-- 2, not NT_BADGE_MIN_CONTRAST: 3.5 is a TEXT floor, and the reference mark
+-- itself is a white check on that blue at 2.76. A floor above it would turn the
+-- real badge's own colours black, which is not the mark anyone recognises. White
+-- first also preserves what a badge has always looked like in game: the hole it
+-- replaced took the (usually dark) pill colour.
+local NT_CHECK_MIN_CONTRAST = 2
+local function ntCheckInk(discLum)
+	if ntLumRatio(discLum, NT_SEAL_INK_LIGHT_LUM) >= NT_CHECK_MIN_CONTRAST then
+		return NT_SEAL_INK_LIGHT
+	end
+	return NT_SEAL_INK_DARK
+end
+
+local function ntSealInk(backdropLum, sealColor)
+	if ntLumRatio(backdropLum, ntLuminance(sealColor)) >= NT_BADGE_MIN_CONTRAST then
+		return nil
+	end
+	return ntContrastInk(backdropLum)
 end
 
 -- The luminance the badge is really drawn on.
@@ -10638,12 +10677,21 @@ local function ntBuild(plr, rule)
 		img.Size = UDim2.fromOffset(math.max(nameSize + 5, 15), math.max(nameSize + 5, 15))
 		img.ScaleType = Enum.ScaleType.Fit
 		img.Parent = b
+		-- the disc that fills the artwork's cut-out check, created further down
+		-- once the ink is known (nil until then: the glyph fallback destroys it)
+		local checkDisc = nil
 
 		-- last-resort text glyph, tinted to the rank so even the fallback
 		-- matches what the tag editor previews
 		local function badgeGlyphFallback()
 			if img.Parent then
 				img:Destroy()
+			end
+			-- the disc goes too: as a child of this label it would be painted over
+			-- the glyph text, and a badge that could not even load its seal does
+			-- not need a disc behind nothing
+			if checkDisc and checkDisc.Parent then
+				checkDisc:Destroy()
 			end
 			b.Text = (badgeRank or ntIsStaff(plr)) and (NT_BADGE_GLYPH ~= "" and NT_BADGE_GLYPH or "\xE2\x9C\x93") or "\xE2\x9C\x93"
 			b.TextSize = math.max(nameSize + 5, 15)
@@ -10676,6 +10724,25 @@ local function ntBuild(plr, rule)
 		-- the backdrop is a bgImage when the rule has one, not the pill colour the
 		-- build just made invisible (see ntBadgeBackdropLum)
 		local sealInk = ntSealInk(ntBadgeBackdropLum(pill.BackgroundColor3, rule.bgImage, rule.bgLum), badgeTint or NT_SEAL_BLUE)
+		-- what the seal will actually be drawn in, so the check's disc contrasts
+		-- the DISC and not the backdrop (they are different questions: a black
+		-- seal on a white photo still needs a white check)
+		local discColor = sealInk or badgeTint or NT_SEAL_BLUE
+		checkDisc = Instance.new("Frame")
+		checkDisc.Name = "SealCheck"
+		checkDisc.AnchorPoint = Vector2.new(0.5, 0.5)
+		checkDisc.Position = UDim2.fromScale(0.5, 0.5)
+		checkDisc.Size = UDim2.fromScale(NT_SEAL_CHECK_DISC, NT_SEAL_CHECK_DISC)
+		checkDisc.BackgroundColor3 = ntCheckInk(ntLuminance(discColor))
+		checkDisc.BorderSizePixel = 0
+		-- under the seal: this ZIndex is local to the badge label, and the seal
+		-- keeps Roblox's default 1, so the order cannot depend on which was
+		-- created first
+		checkDisc.ZIndex = 0
+		local checkCorner = Instance.new("UICorner")
+		checkCorner.CornerRadius = UDim.new(1, 0)
+		checkCorner.Parent = checkDisc
+		checkDisc.Parent = b
 		local inkSeal = sealInk and ntSealAsset(badgeRank, sealInk) or nil
 		local sealUrl = nil
 		if inkSeal then

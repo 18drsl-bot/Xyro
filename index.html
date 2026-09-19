@@ -826,6 +826,11 @@ function userColorOf(t) {
 const RANK_TINTS = { founder: "#d2d6de", hr: "#ffffff", support: "#42d878", trial: "#46cdc8", purple: "#b066ff", partner: "#2452dc", developer: "#e63e3e" };
 const SEAL_BLUE = "#00a2ff"; /* media/verified_seal_blue.png, the rankless seal */
 const BADGE_MIN_CONTRAST = 3.5;
+/* The CHECK's floor, deliberately lower than the seal's. 3.5 is a TEXT floor, and
+   the mark this copies is a white check on that blue at 2.76 - judging the mark
+   by the text rule would turn the real badge's own colours black. Mirrors
+   NT_CHECK_MIN_CONTRAST in xyro.lua, pinned by Tools/test_seals.js. */
+const CHECK_MIN_CONTRAST = 2;
 function relLumChannel(v) { return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }
 function relLuminanceRGB(r, g, b) {
 	return 0.2126 * relLumChannel(r / 255) + 0.7152 * relLumChannel(g / 255) + 0.0722 * relLumChannel(b / 255);
@@ -852,46 +857,161 @@ function sealInkForLum(backdropLum, sealHex) {
 	if (lumRatio(backdropLum, seal) >= BADGE_MIN_CONTRAST) return null;
 	return lumRatio(backdropLum, 0) >= lumRatio(backdropLum, 1) ? "black" : "white";
 }
+/* The CHECK's ink: WHITE on a dark disc, black only when the disc is too light
+   for white to read. A different question from the seal's ink above (which takes
+   whichever side contrasts more) and asked in this order on purpose - the check
+   is the Roblox mark, and because a hole in the seal has always taken the
+   (usually dark) pill colour, white first keeps every existing badge looking the
+   way it did on a normal pill (ntCheckInk in xyro.lua). */
+function checkInkOf(discLum) {
+	return lumRatio(discLum, 1) >= CHECK_MIN_CONTRAST ? "#ffffff" : "#000000";
+}
 function sealInk(pillHex, sealHex) {
 	return sealInkForLum(relLuminance(hex6(pillHex) || "#0c0c10"), sealHex);
 }
 
-/* ---------- how bright is a background picture? ---------- */
+/* ---------- what is behind the seal, and how bright it is ---------- */
 /* A rule's bgImage REPLACES the pill (the game sets the pill's own transparency
    to 1 and fills it with the picture), so the seal's contrast cannot be judged
    from the pill colour: a white HR seal on a white photo is invisible whatever
-   the rule's bg says. The picture's MEAN brightness is measured here - one canvas
-   readback per URL, 24x24 samples - and published as the rule's bgLum (0 = black,
-   1 = white, WCAG relative luminance, the scale the script's ntLuminance returns),
-   which the script clamps and feeds straight into the same contrast rule.
+   the rule's bg says. Two things decide the answer, and getting either wrong is
+   invisible until a player looks at a tag:
 
-   Two deliberate limits:
-     - a picture that will not load, or one served without CORS headers (canvas
-       readback taints - throw - caught below), yields NO bgLum, and the script
-       falls back to the pill colour, i.e. what it did before this existed;
-     - the mean is over the whole picture, not the few pixels actually behind the
-       seal: for a broadly light or dark picture that is the right answer, and for
-       one that is half black and half white either ink is a coin toss. */
-const LUM_SAMPLE = 24;
-const bgLumCache = new Map(); /* url -> number | null, once measured */
-const bgLumPending = new Map(); /* url -> in-flight promise, so one URL is measured once */
-function bgLumOf(url) {
-	return bgLumCache.has(url) ? bgLumCache.get(url) : undefined;
+     1. WHICH PIXELS. The pill is only as wide as its longest line, the badge is
+        drawn right after the name text, and the picture is Cropped to the pill -
+        so what is behind a seal is a band near the right, not the whole
+        photograph. Judging the whole picture is how a pale corner turns every
+        badge on an otherwise dark photo black. The band is computed from the
+        SCRIPT's own layout numbers (PILL_LAYOUT, pinned against xyro.lua by
+        test_contract.js) with the two text widths estimated, because canvas text
+        metrics are not Roblox's.
+
+     2. WHICH COLOUR. The band's MEAN brightness is published as the rule's bgLum
+        (0 = black, 1 = white, WCAG relative luminance - the scale the script's
+        ntLuminance returns), and the script clamps it and feeds it into the same
+        contrast rule it uses for a flat pill.
+
+   A picture that will not load, or one served without CORS headers (canvas
+   readback taints - it throws, caught below), yields NO bgLum at all and the
+   script falls back to the pill colour, i.e. exactly what it did before any of
+   this existed. */
+const LUM_SAMPLE = 48; /* 2304 samples: fine enough for a band a tenth of a picture wide */
+const bgPictures = new Map(); /* url -> { grid, aspect } | null (unmeasurable), once fetched */
+const bgPicturePending = new Map();
+
+/* The pill's own geometry, every number copied from xyro.lua and pinned there by
+   test_contract.js: an unmirrored copy drifts, and a drifted copy makes the
+   measurement quietly wrong instead of failing. */
+const PILL_LAYOUT = {
+	iconLeft: 8, /* ICON_LEFT */
+	textGap: 10, /* TEXT_GAP */
+	padRight: 12, /* PAD_RIGHT */
+	nameRowH: 17, /* NAME_H */
+	userRowH: 12, /* USER_H */
+	afterName: 6, /* the + 6 in the badge's Position */
+	badgePad: 6, /* badgeW = nameSize + 6 */
+	minWidth: 120, /* math.clamp(contentW, 120, ...) */
+	maxWidth: 4000, /* NT_MAX_PILL_W */
+	checkDisc: 0.89, /* NT_SEAL_CHECK_DISC - see the disc in renderEditorPreview */
+};
+
+function layoutNum(v, fallback) {
+	const n = parseFloat(v);
+	return isFinite(n) && n > 0 ? n : fallback;
 }
-function measureBgLum(url) {
+
+/* Roblox's text metrics are not available off-platform, so a width is estimated:
+   canvas metrics when the browser has them, and the script's own
+   characters-times-size estimate (ntTextWidth's fallback) when it does not. */
+function estTextWidth(text, size, fontKey) {
+	const s = String(text || "");
+	try {
+		const ctx = document.createElement("canvas").getContext("2d");
+		const f = FONT_PREVIEW[String(fontKey || "").toLowerCase()] || FONT_PREVIEW.gothamblack;
+		ctx.font = (f.weight || "400") + " " + size + "px " + (f.family || "sans-serif");
+		const w = ctx.measureText(s).width;
+		if (w > 0) return w;
+	} catch (_) { /* no canvas at all */ }
+	return Math.max(24, s.length * size * 0.55);
+}
+
+/* Where the badge lands on the pill, in pill fractions, plus the pill's own size
+   (the picture is Cropped to it, so its aspect is needed too). Mirrors ntBuild:
+   the badge is drawn at iconLeft + iconSize + textGap + nameW + 6, it is
+   nameSize + 6 wide, and the pill is exactly as wide as its longest line. */
+function pillBadgeRect(t, o) {
+	const rule = t || {}, opts = o || {};
+	const size = layoutNum(rule.size, layoutNum(opts.size, 15));
+	const userSize = layoutNum(rule.userSize, layoutNum(opts.userSize, 10));
+	const iconSize = layoutNum(rule.imageSize, layoutNum(opts.imageSize, 44));
+	const height = layoutNum(rule.height, layoutNum(opts.height, 48));
+	const nameW = estTextWidth(rule.label || "?", size, rule.font || opts.font);
+	const userW = estTextWidth("@" + (rule.userText || myName), userSize, "Gotham");
+	const badgeW = rule.badge ? size + PILL_LAYOUT.badgePad : 0;
+	const textLeft = PILL_LAYOUT.iconLeft + iconSize + PILL_LAYOUT.textGap;
+	const width = Math.min(PILL_LAYOUT.maxWidth, Math.max(PILL_LAYOUT.minWidth,
+		Math.ceil(textLeft + Math.max(nameW + badgeW, userW) + PILL_LAYOUT.padRight)));
+	const nameRowH = Math.max(PILL_LAYOUT.nameRowH, Math.ceil(size + 2));
+	const userRowH = Math.max(PILL_LAYOUT.userRowH, Math.ceil(userSize + 2));
+	const nameTop = Math.floor((height - (nameRowH + userRowH)) / 2);
+	return {
+		width: width,
+		height: height,
+		/* the badge label is nameSize + 6 wide but the seal inside it is
+		   max(nameSize + 5, 15), centred in it: sampling the wider box is the
+		   safe direction */
+		fx0: (textLeft + nameW + PILL_LAYOUT.afterName) / width,
+		fx1: (textLeft + nameW + PILL_LAYOUT.afterName + badgeW) / width,
+		fy0: nameTop / height,
+		fy1: (nameTop + nameRowH) / height,
+	};
+}
+
+/* ScaleType.Crop as fractions: the picture fills the pill and the overflow is cut
+   equally on both sides, so a point on the pill maps to a point on the picture by
+   one scale and one centring offset. */
+function cropToPicture(rect, pillAspect, pictureAspect) {
+	let ox = 0, oy = 0, sx = 1, sy = 1;
+	if (pictureAspect > pillAspect) {
+		sx = pillAspect / pictureAspect;
+		ox = (1 - sx) / 2;
+	} else {
+		sy = pictureAspect / pillAspect;
+		oy = (1 - sy) / 2;
+	}
+	return { x0: ox + rect.fx0 * sx, x1: ox + rect.fx1 * sx, y0: oy + rect.fy0 * sy, y1: oy + rect.fy1 * sy };
+}
+
+/* The mean brightness of one rectangle of a measured picture, in picture
+   fractions. Inclusive at both ends so a band narrower than a single cell still
+   answers with that cell rather than with nothing. */
+function meanLumIn(grid, rect) {
+	const cell = (v) => Math.max(0, Math.min(LUM_SAMPLE - 1, v));
+	const x0 = cell(Math.floor(rect.x0 * LUM_SAMPLE));
+	const x1 = Math.max(x0, cell(Math.ceil(rect.x1 * LUM_SAMPLE) - 1));
+	const y0 = cell(Math.floor(rect.y0 * LUM_SAMPLE));
+	const y1 = Math.max(y0, cell(Math.ceil(rect.y1 * LUM_SAMPLE) - 1));
+	let sum = 0, n = 0;
+	for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { sum += grid[y * LUM_SAMPLE + x]; n++; }
+	return n ? sum / n : null;
+}
+
+const WHOLE_PICTURE = { x0: 0, y0: 0, x1: 1, y1: 1 };
+
+function measureBgPicture(url) {
 	const u = String(url || "");
 	/* a URL this editor would never draw (an rbxassetid, a relative path, a typo)
-	   is answered - and cached - as "nothing measured", never re-asked: a promise
-	   that resolves without landing in the cache would make the preview kick a
-	   fresh measurement on every redraw, which is a loop that never yields */
+	   is answered - and remembered - as "nothing measured", never re-asked: a
+	   promise that resolves without landing in the cache would make the preview
+	   kick a fresh measurement on every redraw, which is a loop that never yields */
 	if (!/^(https:\/\/|data:image\/|\/)/i.test(u)) {
-		bgLumCache.set(u, null);
+		bgPictures.set(u, null);
 		return Promise.resolve(null);
 	}
-	if (bgLumCache.has(u)) return Promise.resolve(bgLumCache.get(u));
-	if (bgLumPending.has(u)) return bgLumPending.get(u);
+	if (bgPictures.has(u)) return Promise.resolve(bgPictures.get(u));
+	if (bgPicturePending.has(u)) return bgPicturePending.get(u);
 	const p = (async () => {
-		let lum = null;
+		let entry = null;
 		try {
 			const res = await fetch(u);
 			const blob = await res.blob();
@@ -900,29 +1020,54 @@ function measureBgLum(url) {
 			c.width = LUM_SAMPLE;
 			c.height = LUM_SAMPLE;
 			const ctx = c.getContext("2d");
+			/* the whole picture, stretched onto the grid: the crop and the badge's
+			   place inside it are PICTURE fractions, so they are applied when the
+			   sample is taken, not when it is drawn */
 			ctx.drawImage(bmp, 0, 0, LUM_SAMPLE, LUM_SAMPLE);
+			const aspect = bmp.width > 0 && bmp.height > 0 ? bmp.width / bmp.height : 1;
 			if (bmp.close) bmp.close();
 			const d = ctx.getImageData(0, 0, LUM_SAMPLE, LUM_SAMPLE).data;
-			let sum = 0;
-			let n = 0;
-			for (let i = 0; i < d.length; i += 4) { sum += relLuminanceRGB(d[i], d[i + 1], d[i + 2]); n++; }
-			lum = n ? sum / n : null;
+			const grid = new Float32Array(LUM_SAMPLE * LUM_SAMPLE);
+			for (let i = 0, at = 0; i < d.length; i += 4, at++) grid[at] = relLuminanceRGB(d[i], d[i + 1], d[i + 2]);
+			entry = { grid: grid, aspect: aspect };
 		} catch (_) { /* no picture, no CORS, no canvas: leave it unmeasured */ }
-		bgLumCache.set(u, lum);
-		bgLumPending.delete(u);
-		return lum;
+		bgPictures.set(u, entry);
+		bgPicturePending.delete(u);
+		return entry;
 	})();
-	bgLumPending.set(u, p);
+	bgPicturePending.set(u, p);
 	return p;
 }
-/* Write the measured brightness onto a rule (or clear a stale one: a rule whose
-   picture changed must not keep the old picture's number, and no bgLum is the
-   safe direction - the script then uses the pill colour). Returns whether the
-   rule actually changed, so a caller can count what it fixed. */
-async function ensureBgLum(rule) {
+
+/* Synchronous answer for a redraw: a number once the picture is measured, null
+   when it cannot be, undefined when nobody has asked for it yet - which is the
+   preview's cue to measure and redraw. No rect = the whole picture. */
+function bgLumCached(url, rect, pillAspect) {
+	if (!bgPictures.has(url)) return undefined;
+	const entry = bgPictures.get(url);
+	if (!entry) return null;
+	return meanLumIn(entry.grid, rect ? cropToPicture(rect, pillAspect, entry.aspect) : WHOLE_PICTURE);
+}
+
+async function bgLum(url, rect, pillAspect) {
+	const entry = await measureBgPicture(url);
+	if (!entry) return null;
+	return meanLumIn(entry.grid, rect ? cropToPicture(rect, pillAspect, entry.aspect) : WHOLE_PICTURE);
+}
+
+/* Write the band's brightness onto a rule (or clear a stale one: a rule whose
+   picture changed must not keep the old picture's number, and no bgLum at all is
+   the safe direction - the script then uses the pill colour). Reconciled rather
+   than filled in once, so changing how the band is measured re-measures the rules
+   the moment the editor is opened. Returns whether the rule changed, so a caller
+   can say how many it fixed. */
+async function ensureBgLum(rule, opts) {
 	const url = String(rule.bgImage || "");
 	let lum = null;
-	if (url) lum = await measureBgLum(url);
+	if (url) {
+		const rect = pillBadgeRect(rule, opts);
+		lum = await bgLum(url, rect, rect.width / rect.height);
+	}
 	if (lum == null || !(lum >= 0 && lum <= 1)) {
 		if (rule.bgLum === undefined) return false;
 		delete rule.bgLum;
@@ -933,14 +1078,16 @@ async function ensureBgLum(rule) {
 	rule.bgLum = rounded;
 	return true;
 }
-/* Rules published before bgLum existed (and any picture the browser could not
-   read at the time) have no number, so a loaded document is measured through
-   once. That is what makes opening the editor enough to fix an existing tag's
-   badge - the change is kept in the working copy and published like any edit. */
+
+/* Rules published before bgLum existed - and every rule after a change to how the
+   band is measured - are reconciled on load. That is what makes opening the
+   editor enough to fix a badge that is already live: the change is kept in the
+   working copy and published like any other edit. */
 async function measureRuleBackgrounds() {
+	const opts = readOptions();
 	let fixed = 0;
 	for (const t of (cfg.tags || [])) {
-		if (await ensureBgLum(t)) fixed++;
+		if (await ensureBgLum(t, opts)) fixed++;
 	}
 	if (fixed) {
 		changed("badge contrast measured on " + fixed + " background" + (fixed === 1 ? "" : "s"));
@@ -1542,8 +1689,10 @@ function renderEditorPreview() {
 	   preview redrawn when the answer lands; measured once per URL, so this
 	   cannot loop. */
 	const bgUrl = String(t.bgImage || "");
-	const bgLumNow = bgLumOf(bgUrl);
-	if (bgUrl && bgLumNow === undefined) measureBgLum(bgUrl).then(() => renderEditorPreview());
+	const bgRect = pillBadgeRect(t, readOptions());
+	const bgAspect = bgRect.width / bgRect.height;
+	const bgLumNow = bgLumCached(bgUrl, bgRect, bgAspect);
+	if (bgUrl && bgLumNow === undefined) bgLum(bgUrl, bgRect, bgAspect).then(() => renderEditorPreview());
 	const backdropLum = t.bgImage && typeof bgLumNow === "number" && bgLumNow >= 0 && bgLumNow <= 1
 		? bgLumNow
 		: relLuminance(pillHex);
@@ -1580,6 +1729,17 @@ function renderEditorPreview() {
 	   exactly what the script's own mask build does locally */
 	const ink = sealInkForLum(backdropLum, RANK_TINTS[t.rank] || SEAL_BLUE);
 	check.style.filter = ink === "black" ? "brightness(0)" : ink === "white" ? "brightness(0) invert(1)" : "";
+	/* THE CHECK IS A HOLE in the artwork, so it shows whatever the badge is over -
+	   the pill colour on a flat pill, and the photo on a rule with a bgImage,
+	   which is how a black badge becomes a black blob. A disc of the contrasting
+	   ink behind the seal fills it, so the check is drawn wherever the tag lands.
+	   The disc is measured off the artwork (covering the check, staying inside
+	   the disc, never reaching the transparent edge around it):
+	   PILL_LAYOUT.checkDisc, pinned against NT_SEAL_CHECK_DISC in xyro.lua. */
+	const discHex = ink === "black" ? "#000000" : ink === "white" ? "#ffffff" : (RANK_TINTS[t.rank] || SEAL_BLUE);
+	const disc = (PILL_LAYOUT.checkDisc * 100).toFixed(0);
+	check.style.background = "radial-gradient(circle closest-side, " + checkInkOf(relLuminance(discHex)) +
+		" 0 " + disc + "%, rgba(255,255,255,0) " + disc + "%)";
 	check.title = ink
 		? "badge drawn " + ink + " to stand out on " + (t.bgImage ? "the background picture" : "this pill")
 		: "";
@@ -1685,7 +1845,7 @@ $("edSave").onclick = async () => {
 	   stored. A picture that cannot be read clears any earlier number rather than
 	   keeping the previous picture's - the script then falls back to the pill
 	   colour, which is visible; a stale number would be a lie. */
-	await ensureBgLum(clean);
+	await ensureBgLum(clean, readOptions());
 	if (editing >= cfg.tags.length) {
 		// insert BEFORE the "*" catch-all: rules match first-wins, so a rule
 		// appended after the wildcard could never fire. If there's no
