@@ -207,7 +207,18 @@ global.fetch = async (url, init) => {
 			const payload = JSON.parse(init.body);
 			githubPuts.push({ name, payload });
 			if (name === "nametags.json") nametagsFixture = Buffer.from(payload.content, "base64").toString("utf8");
-			githubSha = "sha-" + (githubPuts.length + 1);
+			/* an uploaded piece of artwork becomes part of the repo the next read
+			   serves, so a GET after a PUT is a real round trip and not two mocks
+			   agreeing with each other. latin1 keeps the bytes exact through a
+			   string body, which is what the Worker's raw fallback reads back. */
+			if (name.startsWith("media/")) {
+				REPO_FILES_BASE["/vertxxy-1/Xyro/main/" + name] = Buffer.from(payload.content, "base64").toString("latin1");
+			} else {
+				/* githubSha is the RULES file's blob sha, and the publish tests depend
+				   on it moving only when that file moves - an artwork commit is a
+				   different blob */
+				githubSha = "sha-" + (githubPuts.length + 1);
+			}
 			return new Response(JSON.stringify({ content: { sha: githubSha } }), { status: 200 });
 		}
 		const body = repoFile("/vertxxy-1/Xyro/main/" + name);
@@ -509,6 +520,76 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 	ok("a missing media file is a 404, not a 502", res.status === 404, "got " + res.status);
 	res = await call("/media/%2e%2e%2fworker.js");
 	ok("a media name that is not one plain segment never reaches a repo path", res.status === 404, "got " + res.status);
+
+	/* --- POST /media/<file>: uploads without a token in the browser --------- */
+	/* The editor used to hold a GitHub personal access token for exactly this
+	   one job (PUT bytes into media/), which put the widest credential in the
+	   system in a browser field. The Worker already holds a token to mirror the
+	   rules, so the upload moves here - and the SAME whole-image rule applies at
+	   the door, because a stored error page is the badge bug with a commit. */
+	const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+	const IEND = Buffer.from([0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
+	const pngUpload = Buffer.concat([PNG_SIG, Buffer.from("pretend-pixels-here"), IEND]);
+	/* a GIF is used for the round trip because its bytes are all ASCII, so what
+	   the mock stores and what the Worker serves back can be compared exactly */
+	const gifUpload = Buffer.from("GIF89a" + "0123456789abcdefghij" + "\x3b", "latin1");
+	const UPLOAD = { "content-type": "image/png" };
+	/* the key that can publish, plus the Worker's own repo token */
+	const MEDIA_OWNER = { ...WITH_KEYS, GH_TOKEN: "gh-write-token" };
+
+	res = await call("/media/upload_thing.png", { method: "POST", body: pngUpload, env: WITH_KEYS, headers: UPLOAD });
+	ok("POST /media needs a key like any other write", res.status === 403, "got " + res.status);
+
+	res = await call("/media/upload_thing.png", { method: "POST", body: pngUpload, env: WITH_KEYS, headers: { ...UPLOAD, "x-api-key": "owner" } });
+	json = await body(res);
+	ok("...and says which one when the Worker has no repo token of its own",
+		res.status === 503 && /GH_TOKEN/.test((json.error || "") + (json.hint || "")), res.status + " " + JSON.stringify(json));
+
+	const putsBeforeUpload = githubPuts.length;
+	res = await call("/media/upload_thing.png", { method: "POST", body: pngUpload, env: MEDIA_OWNER, headers: { ...UPLOAD, "x-api-key": "owner" } });
+	json = await body(res);
+	ok("with the owner key and a repo token the artwork is committed",
+		res.status === 200 && json.ok === true && json.stored === "committed" && json.url === "/media/upload_thing.png",
+		res.status + " " + JSON.stringify(json));
+	const uploadPut = githubPuts[githubPuts.length - 1];
+	ok("...to media/<name>, not to the rules",
+		githubPuts.length === putsBeforeUpload + 1 && uploadPut.name === "media/upload_thing.png",
+		githubPuts.map(p => p.name).slice(putsBeforeUpload).join(", "));
+	ok("...carrying the bytes that were sent",
+		Buffer.from(uploadPut.payload.content, "base64").equals(pngUpload), "");
+
+	res = await call("/media/upload_thing.png", { method: "POST", body: pngUpload, env: MEDIA_OWNER, headers: { ...UPLOAD, "x-api-key": "owner" } });
+	json = await body(res);
+	ok("uploading the same file twice is answered without a second commit",
+		res.status === 200 && json.stored === "already", JSON.stringify(json));
+
+	/* the door check: an error page and a half-downloaded file must never be
+	   stored, because media/<name> is fetched and cached by URL in the game */
+	for (const [label, payload] of [
+		["an error page", Buffer.from('{"error":"no such repo file"}')],
+		["a half-downloaded PNG", pngUpload.subarray(0, Math.floor(pngUpload.length / 2))],
+		["an empty body", Buffer.alloc(0)],
+	]) {
+		const before = githubPuts.length;
+		res = await call("/media/upload_bad.png", { method: "POST", body: payload, env: MEDIA_OWNER, headers: { ...UPLOAD, "x-api-key": "owner" } });
+		json = await body(res);
+		ok("POST /media refuses " + label + " instead of committing it",
+			res.status === 400 && githubPuts.length === before, res.status + " " + JSON.stringify(json));
+	}
+	res = await call("/media/nope.exe", { method: "POST", body: pngUpload, env: MEDIA_OWNER, headers: { ...UPLOAD, "x-api-key": "owner" } });
+	ok("an unknown extension is refused for uploads too", res.status === 400, "got " + res.status);
+	res = await call("/media/huge.png", { method: "POST", body: pngUpload, env: MEDIA_OWNER, headers: { ...UPLOAD, "x-api-key": "owner", "content-length": String(4 * 1024 * 1024) } });
+	json = await body(res);
+	ok("an oversized upload is refused before it is read",
+		res.status === 413 && /limit is 3072 KB/.test(json.error || ""), res.status + " " + JSON.stringify(json));
+
+	/* the round trip: what was uploaded is what the game then downloads */
+	res = await call("/media/uploaded.gif", { method: "POST", body: gifUpload, env: MEDIA_OWNER, headers: { "content-type": "image/gif", "x-api-key": "owner" } });
+	ok("an upload is accepted", res.status === 200, res.status + " " + JSON.stringify(await body(res)));
+	res = await call("/media/uploaded.gif?fresh=1");
+	const servedBack = Buffer.from(await res.arrayBuffer());
+	ok("...and the very same bytes come back from the media route the game uses",
+		res.status === 200 && servedBack.equals(gifUpload), res.status + " " + servedBack.length + " bytes");
 
 	/* --- the editor, served from this origin ----------------------------- */
 	/* Same page as GitHub Pages, but at the API's origin: that is what removes

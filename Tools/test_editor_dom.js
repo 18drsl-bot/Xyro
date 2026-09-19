@@ -90,7 +90,7 @@ const CRITICAL = [
 	"edSave", "edCancel", "fMatch", "fLabel", "fRank", "fColor", "userList", "userCount",
 	"fTextColor", "fTextColorHex", "fUserColor", "fUserColorHex",
 	"usersLive", "ruleList", "ruleCount", "status", "draftBtn", "publishBtn", "refreshBtn",
-	"token", "tokenChip", "tokenState", "saveToken", "dirtyChip",
+	"tokenChip", "dirtyChip", "ownerCard", "ownerKey", "saveOwner", "forgetOwner", "ownerState",
 	"optSize", "optImgSize", "optUserSize", "optHeight",
 ];
 const goneCritical = CRITICAL.filter(id => !defined.has(id));

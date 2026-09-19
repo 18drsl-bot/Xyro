@@ -9824,6 +9824,43 @@ end
 -- backgrounds stopped showing). Resolver: try the direct read first (fresh or
 -- untouched files are fine), then fall back to a NEVER-BEFORE-USED copy.
 local ntCopyN = 0
+-- Is this a WHOLE image, or the body of an error page that got saved as one?
+--
+-- This is the badge bug, and it is worth being precise about. game:HttpGet hands
+-- back the BODY whatever the status was: a 404 for a seal that is not published
+-- yet arrives as the API's HTML/JSON error text, and that text used to be
+-- written straight to Xyro/ntmedia/<url hash>.png. Every later session then hit
+-- the disk-first branch below, got a custom asset back, set it as the badge's
+-- Image - and because the asset DID load (it is simply not an image) the load
+-- verifier saw a loaded image and never fell back. The badge was not blank, it
+-- was undrawable, for as long as that file stayed on disk, and only for the
+-- seals requested before they existed. Hence: never write bytes that are not a
+-- whole image, so a missing file costs one fallback instead of a permanent one.
+local NT_IMAGE_MIN = 24
+local function ntImageLooksWhole(data)
+	if type(data) ~= "string" or #data < NT_IMAGE_MIN then
+		return false
+	end
+	local last = data:sub(-16)
+	if data:sub(1, 8) == "\137PNG\13\10\26\10" then
+		-- a truncated PNG is the other way this goes wrong: the signature is
+		-- there, the pixels are not, and it renders as nothing
+		return last:find("IEND", 1, true) ~= nil
+	end
+	-- the trailer is searched for inside the last bytes rather than pinned to the
+	-- very end: a valid file may carry trailing bytes, and refusing those would
+	-- break working artwork to catch a case that does not need catching
+	if data:sub(1, 2) == "\255\216" then
+		return last:find("\255\217", 1, true) ~= nil
+	end
+	local gif = data:sub(1, 6)
+	if gif == "GIF87a" or gif == "GIF89a" then
+		return last:find("\59", 1, true) ~= nil
+	end
+	-- rbxasset thumbnails can also be webp/bmp; accept them on shape alone
+	return data:sub(1, 4) == "RIFF" and data:sub(9, 12) == "WEBP"
+end
+
 local function ntAssetFor(path)
 	if not getcustomasset then
 		return nil
@@ -10239,7 +10276,9 @@ local function ntApplyImage(img, url)
 	-- simultaneous image jobs can never collide into a game freeze
 	queueJob(function()
 		local data = ntHttpGet(url)
-		assert(type(data) == "string" and #data > 0, "empty download")
+		-- an error body is not an image, and writing one poisons this URL for
+		-- every future session (see ntImageLooksWhole)
+		assert(ntImageLooksWhole(data), "download was not a whole image")
 		if ntApplyData(img, data, url) then
 			return true -- GIF: decoded, disk-cached, animating
 		end
@@ -10500,7 +10539,11 @@ local function ntBuild(plr, rule)
 		-- cache-buster: a bumped version gives every seal URL a fresh
 		-- ntmedia disk stem, so a poisoned/broken cache file from an older
 		-- build can never blank the badge again
-		local sealBuster = "?v=14"
+		-- BUMPED when a seal is ADDED, not only when one changes. A URL that was
+		-- ever fetched while its file did not exist yet leaves a poisoned disk
+		-- entry; a new buster gives every seal a fresh stem, so the red developer
+		-- seal (added after ?v=14) stops inheriting that history.
+		local sealBuster = "?v=15"
 		local sealUrl = nil
 		if badgeRank and badgeTint then
 			-- RANK TINT: the pre-tinted PNG first - the same network pipeline

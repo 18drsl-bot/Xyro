@@ -160,6 +160,52 @@ ok("every alias tier has a colour", [...aliasRanks].every(r => colors[r]), [...a
 ok("every colour tier has an alias (so it can be typed in a rule)", ranks.every(r => aliasRanks.has(r)),
 	ranks.filter(r => !aliasRanks.has(r)).join(","));
 
+/* --------------------------------- an error body is not a seal --------------- */
+
+/* The badge bug this guards: game:HttpGet returns the BODY whatever the status
+   was, so a seal fetched before it was published (the red developer seal was
+   added after the last buster bump) arrived as the API's error text and was
+   written to Xyro/ntmedia/<url hash>.png as if it were pixels. Every session
+   after that served that file from disk and set it as the badge's Image - and
+   because the asset DID load, the load verifier saw a healthy image and never
+   fell back, so the badge drew nothing at all. The script now refuses to save
+   anything that is not a whole image.
+
+   The predicate is mirrored here on purpose: the Lua half is pinned by
+   test_contract.js, this half proves it accepts real seals and rejects the two
+   ways a bad body arrives. */
+function looksWhole(data) {
+	const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, "binary");
+	if (buf.length < 24) return false;
+	const last = buf.subarray(-16);
+	if (buf.subarray(0, 8).equals(SIG)) return last.includes(Buffer.from("IEND"));
+	if (buf[0] === 0xff && buf[1] === 0xd8) return last.includes(Buffer.from([0xff, 0xd9]));
+	const gif = buf.subarray(0, 6).toString("ascii");
+	if (gif === "GIF87a" || gif === "GIF89a") return last.includes(0x3b);
+	if (buf.subarray(0, 4).toString("ascii") === "RIFF" && buf.subarray(8, 12).toString("ascii") === "WEBP") return true;
+	return false;
+}
+
+/* the full buster line, parsed once: the version is part of the contract now */
+const busterVersion = Number(((lua.match(/local sealBuster = "\?v=(\d+)"/) || [])[1]) || 0);
+ok("...and the buster is recent enough to abandon a poisoned entry written before the red tier existed",
+	busterVersion >= 15, "sealBuster v" + busterVersion);
+
+for (const rank of ranks) {
+	const file = path.join(ROOT, "media", seals[rank]);
+	if (!fs.existsSync(file)) continue;
+	const bytes = fs.readFileSync(file);
+	ok("a real " + rank + " seal is recognised as a whole image", looksWhole(bytes), bytes.length + " bytes");
+	ok("...and that stops being true when the download is truncated", !looksWhole(bytes.subarray(0, Math.floor(bytes.length / 2))), "");
+}
+ok("an error page is not mistaken for a shield",
+	!looksWhole("<!DOCTYPE html><html><body>404 not found: no such repo file</body></html>") &&
+	!looksWhole('{"error":"no such repo file: media/seal_developer.png"}') &&
+	!looksWhole("") &&
+	!looksWhole("PNG"), "");
+ok("...and trailing bytes after a valid image do not make it invalid",
+	looksWhole(Buffer.concat([fs.readFileSync(path.join(ROOT, "media", seals[ranks[0]])), Buffer.from("\n\n")])), "");
+
 /* --------------------------- the DEPLOYED artwork (node Tools/test_seals.js --remote) */
 
 /* A seal that is right in the repo but wrong through the CDN renders the wrong

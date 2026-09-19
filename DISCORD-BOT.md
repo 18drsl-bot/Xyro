@@ -25,12 +25,11 @@ That is the trap this page exists to keep you out of. Everything below talks to
 the Worker instead.
 
 **The tag editor is not exempt from this.** Publishing there needs the owner key
-saved in the browser; with only a GitHub token connected it used to publish to
-the repo and report `Published`, which is the same trap with a better disguise.
-It now asks the Worker where the rules live before writing anything and refuses
-when the answer is its database (or when the API cannot answer at all), telling
-you to save the owner key. That is why Publish can decline with "owner key needed
-to publish" while a GitHub token is connected - the token is not what players
+saved in the browser; it used to hold a GitHub token instead and publish to the
+repo while reporting `Published`, which is the same trap with a better disguise.
+That token is gone: the page has no GitHub credential and no repo write path at
+all, so the only way to change what players see is the API. That is why Publish
+can decline with "owner key needed to publish" - the browser has no other route
 read.
 
 ## Setup (once)

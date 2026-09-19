@@ -115,7 +115,7 @@ the script re-checks for published changes, 10–300, default 15)
 Tags render as plain billboard UI, so **any executor works** — no Drawing API needed.
 Icons support PNG/JPG/GIF by URL, asset id, or base64 `data:` URI - **GIFs fully animate** (decoded frame-by-frame in script, since Roblox only shows a GIF's first frame). Rules also take `bgImage` (URL or data URI) to fill the pill background; the editor's **Choose file** buttons upload images to `media/` in this repo.
 
-**Reference artwork, do not embed it.** A rule that carries a base64 `data:` URI is re-downloaded by *every* player on *every* refresh (`refreshSeconds`, 15s by default) and re-decoded in Lua each time, so one embedded background is enough to make every tag in the server feel slow - a single 1.29 MB PNG took `nametags.json` to 1.72 MB before this was caught. Wrapping a file in a `data:` URI splits it into 4/3 of its size as printable text as well. **Choose file** now checks whether that exact picture is *already* served at `media/<sha1>.<ext>` and reuses that URL, which needs no GitHub token; it only falls back to embedding when the file is genuinely new and no token is connected, and it tells you how many KB that adds to every player's download. `api/test.js` fails the build if the shipped rules carry a large inline image or reference a `media/` file that does not exist.
+**Reference artwork, do not embed it.** A rule that carries a base64 `data:` URI is re-downloaded by *every* player on *every* refresh (`refreshSeconds`, 15s by default) and re-decoded in Lua each time, so one embedded background is enough to make every tag in the server feel slow - a single 1.29 MB PNG took `nametags.json` to 1.72 MB before this was caught. Wrapping a file in a `data:` URI splits it into 4/3 of its size as printable text as well. **Choose file** checks whether that exact picture is *already* served at `media/<sha1>.<ext>` and reuses that URL (a HEAD, no key needed), and otherwise uploads it through the API with your owner key. It only falls back to embedding when there is no API or no key saved, and then it tells you how many KB that adds to every player's download. `api/test.js` fails the build if the shipped rules carry a large inline image or reference a `media/` file that does not exist.
 
 The editor is a web page - nothing runs on your PC; publish straight from it. Two
 
@@ -130,17 +130,17 @@ The editor is a web page - nothing runs on your PC; publish straight from it. Tw
 Either way it paints the last copy your browser saw before the network answers, so
 opening it is instant, and a publish is a single round trip.
 
-It reads the rules and the tag artwork through the **Xyro API** when one is
-configured (`GET /nametags`, `GET /media/<file>`), which is the file rather than a
-CDN's memory of it - so "the site does not match nametags.json" cannot happen from a
-stale cache, and no GitHub token or rate-limit budget is involved. With a publish key
-saved in the **Publish through the Xyro API** card, **Publish** writes through your
-Worker too: no GitHub login, a stale tab is refused instead of clobbering a newer
-revision, and the Worker drops its cache as part of the write. With no `api.json`
-it falls back to the Contents API (never cached) and treats the raw copy as a hint
-only. After a publish it reads the file back and says so - "published and checked
-against the file (sha abc1234)" - and if GitHub reports something different it says
-that instead of claiming success. The header chip (`build: api-r6`) names the build
+It reads the rules and the tag artwork through the **Xyro API** (`GET /nametags`,
+`GET /media/<file>`), which is the file rather than a CDN's memory of it - so "the site
+does not match what the game shows" cannot happen from a stale cache, and no GitHub
+token or rate-limit budget is involved. With the owner key saved in the **Publish
+through the Xyro API** card, **Publish** writes through your Worker too: no GitHub
+login, a stale tab is refused instead of clobbering a newer revision, and the Worker
+drops its cache as part of the write. That one key is the page's only credential -
+reading needs none, and creating a rule's artwork (`POST /media/<file>`) uses the same
+key, so the browser never holds a GitHub token. After a publish it reads the rules back
+and says so, and if the read disagrees it says that instead of claiming success. The
+header chip (`build: api-r14`) names the build
 the page is actually running, so if a hard refresh (Ctrl+Shift+R) is needed you can
 see it.
 

@@ -188,6 +188,26 @@ ok("...and for the artwork", lua.includes('H.ntApiUrl("media/" .. file'), "");
 ok("every seal and badge URL goes through that one builder", !!block(lua, "local function ntMediaUrl", "\nend") && /ntMediaUrl\("seal_" \.\. badgeRank/.test(lua) && /ntMediaUrl\("verified_seal_blue\.png"/.test(lua), "");
 ok("no separate seal URL base survives to drift from it", !/NT_SEAL_URL_BASE/.test(lua) && !/NT_BADGE_URL/.test(lua), "");
 
+/* A badge that cannot be REDOWNLOADED is a badge that is stuck: game:HttpGet
+   returns the body for a 404 too, so the API's "no such repo file" text used to
+   be saved as seal_<rank>.png, and the disk-first branch then served it forever
+   while drawing nothing (a loaded asset, so the verifier never fell back). The
+   guard is the predicate below being checked BEFORE anything is written. */
+const wholeBlock = block(lua, "local function ntImageLooksWhole", "\nend");
+ok("the script has a whole-image predicate", !!wholeBlock, "");
+ok("...that knows the PNG signature and end marker",
+	wholeBlock.includes('"\\137PNG\\13\\10\\26\\10"') && wholeBlock.includes('find("IEND", 1, true)'), "");
+ok("...and the JPEG and GIF ones",
+	wholeBlock.includes('"\\255\\216"') && wholeBlock.includes('"\\255\\217"') && wholeBlock.includes('"GIF87a"'), "");
+ok("a download is refused unless it is a whole image",
+	/assert\(ntImageLooksWhole\(data\), "download was not a whole image"\)/.test(lua), "");
+ok("...with a floor, so an empty or one-byte body cannot pass",
+	/local NT_IMAGE_MIN = 24/.test(lua) && /#data < NT_IMAGE_MIN/.test(lua), "");
+const buster = Number(((lua.match(/local sealBuster = "\?v=(\d+)"/) || [])[1]) || 0);
+ok("the seal buster is bumped past every seal that has been added", buster >= 15, "v" + buster);
+ok("...and the comment says that adding a seal is what bumps it",
+	/BUMPED when a seal is ADDED/.test(lua), "");
+
 /* order matters: the API has to be TRIED before the CDN fallbacks, or a stale
    edge copy wins on a client that could have had the file */
 const ntFetchBlock = block(lua, "local function ntFetch(manual)", "\nlocal function ntRuleFor");
@@ -201,9 +221,18 @@ ok("the editor asks the API for the rules", html.includes('NT_BASE + "/nametags"
 ok("...and for the artwork", html.includes('NT_BASE + "/media/"'), "");
 ok("no hardcoded CDN media URL is left in the editor", !/cdn\.jsdelivr\.net\/gh\/vertxxy-1\/Xyro@main\/media/.test(html), "");
 const fetchBlock = block(html, "async function fetchConfig(opts)", "\nfunction load()");
-ok("the editor tries the API before raw/CDN for a read",
-	fetchBlock.indexOf("hostedRules") >= 0 && fetchBlock.indexOf("hostedRules") < fetchBlock.indexOf("rawConfig()"),
-	"hosted at " + fetchBlock.indexOf("hostedRules") + ", raw at " + fetchBlock.indexOf("rawConfig()"));
+ok("the editor reads the rules from the API and nowhere else",
+	fetchBlock.includes("hostedRules") && !/rawConfig|apiConfig\(\)|apiConfigWhenReady/.test(fetchBlock), block(html, "async function fetchConfig(opts)", "\nfunction load()"));
+ok("...and says so when there is no API, instead of falling back somewhere else",
+	/no API is configured - set api\.url in api\.json/.test(fetchBlock), "");
+/* The browser-side GitHub write is gone, and this is the part that kept the
+   token field alive: fetchConfig could ask for a blob sha to PUT with. With no
+   token in the page there is nothing to write with, so a sha request surviving
+   here would be a credential the page can no longer send. */
+ok("and there is no longer a path that needs a GitHub blob sha",
+	!/github\.com\/repos|Authorization.*Bearer|LS_TOKEN|getToken\(\)/.test(html),
+	["getToken", "LS_TOKEN", "github.com/repos", "Authorization"]
+		.filter(s => html.includes(s)).join(", "));
 ok("and waits for api.json before the first read, so boot is not a GitHub read",
 	/await apiReady;/.test(html) && /const apiReady = \(async function followApi\(\)/.test(html), "");
 
@@ -421,10 +450,17 @@ ok("the bot guide does not promise presence from the Worker",
    "Published". The guide is the only place that explains it, so it may not
    quietly lose the paragraph - the bot half alone would leave the trap live. */
 const editorSrc = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
-ok("the editor asks where the rules live before it would write to GitHub",
-	editorSrc.includes("async function rulesOrigin()") && editorSrc.includes("const origin = await rulesOrigin();"), "");
-ok("...and refuses instead of reporting a publish no player reads",
-	/Players read the API's database, not the repo file, so a GitHub publish cannot reach them/.test(editorSrc), "");
+/* The dead end used to be reachable two ways: the bot Worker fetching its own
+   zone, and the editor publishing to GitHub while the database was the store.
+   The editor half is closed by there being ONE route left - a publish either
+   goes through the API with the owner key or it does not happen - so what this
+   pins is that the route can never be chosen by a stale memory again. */
+ok("the editor has exactly one publish route, decided by the key alone",
+	/function publishRoute\(\) \{[\s\S]{0,200}?getOwnerKey\(\) && NT_BASE/.test(editorSrc) &&
+	!/function publishRoute\(\) \{[\s\S]{0,300}?liveSha/.test(editorSrc), "");
+ok("...and says why a publish cannot happen when the key is missing",
+	/owner key needed to publish/.test(editorSrc) &&
+	/owner key forgotten - Publish cannot write anywhere until a key is saved/.test(editorSrc), "");
 ok("the bot guide explains the editor's version of the same trap",
 	/The tag editor is not exempt from this/i.test(botDoc), "");
 

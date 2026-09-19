@@ -360,9 +360,9 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r13</span>
-		<span class="chip" id="tokenChip" title="token status">no token</span>
-		<button class="subtle" id="refreshBtn" title="pull the latest published rules now (through the API when one is configured, otherwise straight from GitHub)">&#8635; refresh</button>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r14</span>
+		<span class="chip" id="tokenChip" title="where Publish will write">no publish key</span>
+		<button class="subtle" id="refreshBtn" title="pull the latest published rules from the API now">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
 			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
 			nametags.json
@@ -371,24 +371,6 @@
 </header>
 
 <div class="wrap">
-
-	<div class="card" id="tokenCard">
-		<h2><span class="hl">Connect to GitHub</span> <span class="chip" id="tokenState">not connected</span></h2>
-		<label>Fine-grained token &mdash; <b>Contents: Read and write</b> on vertxxy-1/Xyro only</label>
-		<div class="tokenwrap">
-			<input id="token" type="password" placeholder="github_pat_... or ghp_..." autocomplete="off">
-			<button class="subtle" id="peek" title="show/hide">&#128065;</button>
-		</div>
-		<div class="hint">
-			Create one at <b>github.com/settings/personal-access-tokens/new</b> &rarr; Only select repositories &rarr;
-			<b>vertxxy-1/Xyro</b> &rarr; Permissions &rarr; Repository permissions &rarr; <b>Contents: Read and write</b>.
-			Stored only in this browser, sent only to api.github.com, revocable any time.
-		</div>
-		<div class="row" style="margin-top:12px">
-			<button id="saveToken" class="ghost">Save &amp; test</button>
-			<button id="forgetToken" class="subtle">Forget</button>
-		</div>
-	</div>
 
 	<div class="card" id="ownerCard">
 		<h2><span class="hl">Publish through the Xyro API</span> <span class="chip" id="ownerState">not set</span></h2>
@@ -652,18 +634,20 @@
 
 <script>
 const REPO = "vertxxy-1/Xyro";
-const PATH = "nametags.json";
-const API = "https://api.github.com/repos/" + REPO + "/contents/" + PATH;
-const LS_TOKEN = "xyro_token";
-/* the key that lets this page publish through the API instead of GitHub. It is
-   the Worker's owner key (or a publish-only key), so unlike the GitHub token it
-   is worth treating as a password - see the card that sets it. */
+/* The ONE credential this page has: the Worker's owner key (or a publish-only
+   XYRO_PUBLISH_KEY - api/README.md section 7). It is a password, and the card
+   that sets it says so.
+
+   There is deliberately no GitHub token here any more. The repo file is a
+   MIRROR: the Worker's own database is what players read, and the Worker commits
+   the mirror itself when it holds GH_TOKEN. A token in this browser could
+   therefore only ever write a copy no player reads - which is exactly what
+   happened, twice, and looked like a successful publish both times. */
 const LS_OWNER = "xyro_owner_key";
 const LS_DRAFT = "xyro_draft_v2";
 /* the last rules this browser successfully read: painted immediately on open so
    the page is never blank while the network answers */
 const LS_LIVE = "xyro_live_v1";
-const RAW = "https://raw.githubusercontent.com/" + REPO + "/main/" + PATH;
 /* live players now come from Firebase (here/<username> = unix seconds), the
    ntfy presence topic is only a fallback - mirrors NT_BEAT_WINDOW in xyro.lua */
 const FB_BASE = "https://xyro-fcaf8-default-rtdb.firebaseio.com";
@@ -683,12 +667,17 @@ const stamp = u => u + (u.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
    GET /media/<file> is every seal and the verified badge. Reading them from
    there is the difference between "what the file says" and "what a CDN thinks
    it said" - and it needs no GitHub token and no rate-limit budget, because
-   the Worker does that part. Empty NT_BASE (no api.json) keeps the old GitHub
-   path exactly as it was, so the editor works either way. */
+   the Worker does that part. That makes the API the ONLY origin this page talks
+   to, which is the point: one place to read, one place to write. With no API
+   configured there is nowhere to read and nowhere to publish, and the editor
+   says exactly that rather than previewing artwork it could never save. */
 let NT_BASE = "";
 let NT_KEY = "";
-const CDN_MEDIA = "https://cdn.jsdelivr.net/gh/" + REPO + "@main/media/";
-function mediaURL(file) { return (NT_BASE ? NT_BASE + "/media/" : CDN_MEDIA) + file; }
+/* A 1x1 transparent image, for the one state where an artwork URL cannot be
+   built: an empty src is not inert, it resolves to the page itself and fires a
+   request for the editor as if it were a picture. */
+const NO_MEDIA = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+function mediaURL(file) { return NT_BASE ? NT_BASE + "/media/" + file : NO_MEDIA; }
 /* re-draw the mini preview once we know where the artwork lives */
 function applyMediaHosts() {
 	try { renderEditorPreview(); } catch (_) {}
@@ -765,7 +754,6 @@ function toast(msg, kind, secs) {
 	setTimeout(() => t.remove(), (secs || 4.2) * 1000);
 }
 function status(msg, cls) { const s = $("status"); s.textContent = msg; s.className = cls || ""; }
-function getToken() { return localStorage.getItem(LS_TOKEN) || ""; }
 function getOwnerKey() { return localStorage.getItem(LS_OWNER) || ""; }
 
 function deepCopy(o) { return JSON.parse(JSON.stringify(o)); }
@@ -1036,9 +1024,10 @@ function changed(why) {
 }
 
 /* ---------- rule editor ---------- */
-/* media uploads: files go to media/<hash>.<ext> in the repo (keeps
-   nametags.json small); without a token we fall back to a base64 data
-   URI embedded straight into the rule, which the in-game decoder reads */
+/* media uploads: files go to media/<hash>.<ext> through the API (keeps
+   nametags.json small); with no API or no owner key saved, the last resort is a
+   base64 data URI embedded straight into the rule - which the in-game decoder
+   reads, and which every player re-downloads on every refresh */
 let edMedia = { icon: false, bg: false };
 
 function fileToDataURI(file) {
@@ -1062,60 +1051,53 @@ async function mediaNameFor(file) {
 	return { buf, path: "media/" + name + "." + ext };
 }
 
-/* Is this exact file already being served? Asking costs one HEAD and needs NO
-   token, and it is the difference between a rule that references a 1.3 MB PNG
-   and one that embeds it: an embedded copy is re-downloaded by every player on
-   every refresh (15s), and decoded in Lua each time, so one embedded
-   background is enough to make every tag in the server feel slow. The API's own
-   media route is asked first (same origin, always current); jsDelivr is the
-   fallback for a page with no API configured. */
+/* Is this exact file already being served? Asking costs one HEAD and needs no
+   key, and it is the difference between a rule that references a 1.3 MB PNG
+   and one that EMBEDS it: an embedded copy is re-downloaded by every player on
+   every refresh (15s) and decoded in Lua each time, so one embedded background
+   is enough to make every tag in the server feel slow.
+   One origin to ask, because one origin serves the game: with no API there is
+   nothing to ask and nothing to upload to, so this answers "no" rather than
+   consulting a CDN the game will never fetch. */
 async function mediaAlreadyServed(path) {
-	const urls = [];
-	if (NT_BASE) urls.push(NT_BASE + "/media/" + path.slice("media/".length));
-	urls.push("https://cdn.jsdelivr.net/gh/" + REPO + "@main/" + path);
-	for (const u of urls) {
-		try {
-			const res = await fetch(u, { method: "HEAD", cache: "no-store" });
-			if (res.ok) return true;
-		} catch (_) {
-			/* unreachable candidate - try the next one */
-		}
+	if (!NT_BASE) return false;
+	try {
+		const res = await fetch(NT_BASE + "/media/" + path.slice("media/".length), { method: "HEAD", cache: "no-store" });
+		return res.ok;
+	} catch (_) {
+		return false;
 	}
-	return false;
 }
 
+/* Upload one file through the API, with the owner key - the same credential
+   Publish uses, and the same one the browser already has. The page holds no
+   GitHub credential any more: the Worker has its own token to mirror the rules,
+   and a token that can write to the repository is the widest permission in this
+   whole system to keep in a browser field and retype on every device.
+   Throws {code:"notoken"} when there is no API or no key saved - the caller's
+   cue to embed instead. That fallback stays deliberately last: embedding is
+   paid for by every player, forever. */
 async function fileToBlobURL(file) {
 	const { buf, path } = await mediaNameFor(file);
-	const rawURL = "https://cdn.jsdelivr.net/gh/" + REPO + "@main/" + path; // fast global edge instead of raw.githubusercontent
-	// already in the repo? then its URL is instantly valid - and this needs no
-	// token, so the common case (re-picking an image you already uploaded) stops
-	// falling into the base64 branch below
-	if (await mediaAlreadyServed(path)) return rawURL;
-	const token = getToken();
-	if (!token) throw Object.assign(new Error("no token"), { code: "notoken" });
-	const head = await fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, { headers: { Authorization: "Bearer " + token } });
-	if (head.ok) return rawURL;
-	if (head.status !== 404) throw new Error("github said " + head.status);
-	/* chunked base64: spreading 100k+ bytes into String.fromCharCode
-	   blows the call stack on big GIFs */
-	const bytes = new Uint8Array(buf);
-	let bin = "";
-	for (let i = 0; i < bytes.length; i += 0x8000) {
-		bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-	}
-	const b64 = btoa(bin);
-	const put = await fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, {
-		method: "PUT",
-		headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-		body: JSON.stringify({ message: "Add tag media " + name.slice(0, 8), content: b64 }),
+	const name = path.slice("media/".length);
+	const apiURL = NT_BASE ? NT_BASE + "/media/" + name : "";
+	// already served? then this URL is valid right now and nothing is sent - and
+	// the common case (re-picking an image you already uploaded) lands here
+	if (await mediaAlreadyServed(path)) return apiURL;
+	const key = getOwnerKey();
+	if (!NT_BASE || !key) throw Object.assign(new Error("no owner key"), { code: "notoken" });
+	const res = await fetch(stamp(apiURL), {
+		method: "POST",
+		headers: { "x-api-key": key, "content-type": file.type || "application/octet-stream" },
+		body: buf,
 	});
-	if (!put.ok) {
-		const err = await put.json().catch(() => ({}));
-		// 422 = already exists (race) - the URL is still good
-		if (put.status === 422) return rawURL;
-		throw new Error(err.message || put.status);
-	}
-	return rawURL;
+	const out = await res.json().catch(() => ({}));
+	if (res.ok && out.ok) return apiURL;
+	/* 503 means the Worker cannot store artwork at all (no repo token of its own),
+	   which is a setup problem rather than a bad file - so fall back to embedding
+	   and let the caller explain it, instead of failing an upload that could work */
+	if (res.status === 503) throw Object.assign(new Error(out.error || "the API cannot store artwork"), { code: "notoken" });
+	throw new Error(out.error || ("upload failed: " + res.status));
 }
 
 function wireFilePicker(fileInputId, btnId, urlInputId, mediaKey) {
@@ -1133,7 +1115,7 @@ function wireFilePicker(fileInputId, btnId, urlInputId, mediaKey) {
 			$(urlInputId).value = url;
 			btn.classList.remove("busy"); btn.classList.add("done");
 			btn.textContent = "uploaded!";
-			toast("Image uploaded to the repo - remember to publish", "ok");
+			toast("Image uploaded through the API - remember to publish", "ok");
 		} catch (err) {
 			btn.classList.remove("busy");
 			if (err && err.code === "notoken") {
@@ -1148,8 +1130,8 @@ function wireFilePicker(fileInputId, btnId, urlInputId, mediaKey) {
 					   and Lua-decoded by everyone, forever. The size decides whether
 					   that is a rounding error or the reason tags feel slow. */
 					const kb = Math.round(uri.length / 1024);
-					toast("No token connected - embedded as base64, adding " + kb + " KB to EVERY player's download every refresh. " +
-						"Connect a token to upload it to media/ instead, or publish it once with a token so this exact file is reused from then on.",
+					toast("No owner key saved - embedded as base64, adding " + kb + " KB to EVERY player's download every refresh. " +
+						"Save your owner key in the card below and re-pick the file to upload it to media/ instead, where it is downloaded once.",
 						kb > 64 ? "err" : "info", 12);
 				} catch (_) {
 					btn.textContent = "Choose file";
@@ -1218,8 +1200,8 @@ function renderEditorPreview() {
 	const check = $("edBadgeCheck");
 	check.style.display = t.badge ? "" : "none";
 	const sealFile = RANK_SEALS[t.rank];
-	/* mediaURL: the API's /media/<file> when one is configured, jsDelivr only
-	   when there is no API to ask - same file, one origin, nothing stale */
+	/* mediaURL: the API's /media/<file>, the same origin the game reads, so a
+	   preview can never disagree with what a player sees */
 	check.src = mediaURL(t.badge && sealFile ? sealFile : "verified_seal_blue.png");
 	const img = $("edImg");
 	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
@@ -1711,45 +1693,19 @@ async function pollUsers() {
 setInterval(pollUsers, 20000);
 pollUsers();
 
-/* ---------- token + owner key ---------- */
-/* Where the published rules actually LIVE. The Worker answers x-xyro-sha
-   "d1-<rev>" when its OWN database holds them, and a git blob sha when the repo
-   file is still the store (the database is a seed-and-fallback, not a
-   migration, so both states are real). That three-character prefix decides
-   whether a publish to GitHub is a publish or a write nobody reads: the Worker
-   serves its own row FIRST, so once a row exists a repo write cannot reach a
-   single player - it only makes the repo file disagree with the game, and the
-   next API publish silently reverts it. */
-function databaseOwnsRules() {
-	return typeof liveSha === "string" && liveSha.slice(0, 3) === "d1-";
-}
-/* What GET /nametags would do RIGHT NOW: "database" when the Worker's own row is
-   the store, "repo" while the file still is, "unknown" when the API cannot be
-   asked. This is a READ, not a memory, and deliberately so - liveSha is a
-   publish guard that is only updated when a read happens, so a read that landed
-   while the store changed leaves it pointing at the wrong origin. Deciding a
-   publish's destination from a stale value is how a "database" page publishes
-   to GitHub, and it is exactly the mistake this replaced. */
-async function rulesOrigin() {
-	if (!NT_BASE) return "repo";
-	try {
-		const res = await fetch(stamp(NT_BASE + "/nametags?fresh=1"), { cache: "no-store" });
-		if (!res.ok) return "unknown";
-		const sha = res.headers.get("x-xyro-sha") || "";
-		if (sha.slice(0, 3) === "d1-") return "database";
-		return sha ? "repo" : "unknown";
-	} catch (_) {
-		return "unknown";
-	}
-}
+/* ---------- the owner key ---------- */
+/* There is no origin question to answer any more. This page has one
+   destination (the API) and one credential (the owner key), so a publish either
+   lands where players read or it stops and says why. The probe that used to
+   live here existed only to stop a GitHub publish writing a copy nobody reads;
+   with the GitHub path gone, so is that entire class of bug. */
 /* One place that decides what Publish will do, so the chip can never disagree
-   with the button: the API when a key is saved and an API is configured, else
-   the owner key is the only thing that CAN publish, else GitHub with the
-   token, else nothing. */
+   with the button. Publishing has ONE destination now - the API - so the states
+   are just "the key is saved", "save the key" and "no API is configured". The
+   old "publish: GitHub" state went with the token that produced it. */
 function publishRoute() {
 	if (getOwnerKey() && NT_BASE) return "api";
-	if (NT_BASE && databaseOwnsRules()) return "locked";
-	if (getToken()) return "github";
+	if (NT_BASE) return "locked";
 	return "none";
 }
 function refreshKeyChip() {
@@ -1759,62 +1715,10 @@ function refreshKeyChip() {
 	const route = publishRoute();
 	$("tokenChip").textContent = route === "api" ? "publish: API"
 		: route === "locked" ? "owner key needed to publish"
-		: route === "github" ? "publish: GitHub"
-		: "no publish key";
+		: "no API configured";
 	$("tokenChip").className = "chip" + (route === "none" ? "" : " on");
-	/* the button said "Publish to GitHub" in every mode, which is how a
-	   repo-only publish read as the normal, working path */
-	$("publishBtn").innerHTML = route === "github" ? "&#9650;&nbsp; Publish to GitHub" : "&#9650;&nbsp; Publish";
 }
-function refreshTokenChip() {
-	const has = !!getToken();
-	$("tokenState").textContent = has ? "connected" : "not connected";
-	$("tokenState").className = "chip" + (has ? " on" : "");
-	refreshKeyChip();
-}
-$("peek").onclick = () => {
-	const f = $("token");
-	f.type = f.type === "password" ? "text" : "password";
-};
-$("saveToken").onclick = async () => {
-	const v = $("token").value.trim();
-	if (!v) { toast("Paste a token first", "err"); return; }
-	status("testing token...", "info");
-	try {
-		const res = await fetch("https://api.github.com/repos/" + REPO, {
-			headers: { Authorization: "Bearer " + v },
-		});
-		if (res.status === 401 || res.status === 403) {
-			status("token rejected by GitHub (" + res.status + ")", "err");
-			toast("Token invalid or lacking access", "err");
-			return;
-		}
-		const repo = await res.json();
-		if (!repo.permissions || !repo.permissions.push) {
-			status("token cannot access " + REPO, "err");
-			toast("Token needs access to " + REPO + " (Only select repositories)", "err");
-			return;
-		}
-		// NOTE: for fine-grained tokens GitHub reports the ACCOUNT's repo
-		// permission here, not the token's scope - Contents: Read and write
-		// can only be truly verified by a publish attempt. Warn accordingly.
-		localStorage.setItem(LS_TOKEN, v);
-		$("token").value = "";
-		refreshTokenChip();
-		const fine = v.indexOf("github_pat_") === 0;
-		status(fine ? "token saved - make sure Contents: Read and write was set, publish verifies it" : "token saved and verified", fine ? "info" : "ok");
-		toast(fine ? "Connected - publish will verify write access" : "Connected to " + REPO, "ok");
-		refreshLive(true); // a stale tab heals the moment a token is connected
-	} catch (e) {
-		status("network error while testing token", "err");
-	}
-};
-$("forgetToken").onclick = () => {
-	localStorage.removeItem(LS_TOKEN);
-	refreshTokenChip();
-	status("token forgotten", "info");
-};
-$("tokenChip").onclick = () => $(publishRoute() === "api" ? "ownerCard" : "tokenCard").scrollIntoView({ behavior: "smooth" });
+$("tokenChip").onclick = () => $("ownerCard").scrollIntoView({ behavior: "smooth" });
 
 $("ownerPeek").onclick = () => {
 	const f = $("ownerKey");
@@ -1888,88 +1792,24 @@ $("saveOwner").onclick = async () => {
 $("forgetOwner").onclick = () => {
 	localStorage.removeItem(LS_OWNER);
 	refreshKeyChip();
-	status(getToken() ? "owner key forgotten - Publish falls back to your GitHub token" : "owner key forgotten", "info");
+	status("owner key forgotten - Publish cannot write anywhere until a key is saved", "info");
 };
 
 /* ---------- load / publish ---------- */
-/* READING is raw-first: raw.githubusercontent carries no sha, but it is fresh
-   within seconds of a push and never rate-limits, so the 2-minute refresh
-   loop costs no API budget.
-   PUBLISHING must use the contents API - it is the only source that returns
-   the blob sha a safe merge-on-publish needs (and it is never cached).
-   Two rules keep that API usable:
-     1. every call sends the token when one is connected: 5,000 requests/hour
-        instead of 60/hour PER IP, and the anonymous bucket is shared by every
-        tab, device and neighbour behind the same address;
-     2. when the bucket is empty anyway, ask WHEN it refills (GitHub exposes
-        x-ratelimit-reset over CORS) and wait it out instead of telling you to
-        come back and click Publish again later. */
-function apiHeaders() {
-	const h = { Accept: "application/vnd.github+json" };
-	const token = getToken();
-	if (token) h.Authorization = "Bearer " + token;
-	return h;
-}
-/* the contents API returns an envelope {sha, content:"<base64>"} - decode it */
-function decodeContents(env) {
-	if (typeof env.content !== "string") throw new Error("unexpected API response");
-	const bin = atob(env.content.replace(/\s/g, ""));
-	const bytes = new Uint8Array(bin.length);
-	for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-	return { config: JSON.parse(new TextDecoder("utf-8").decode(bytes)), sha: env.sha };
-}
-/* 429, or 403 with the bucket at zero, means rate limiting. Any OTHER 403 (a
-   token without Contents: Read and write, a blocked repo) must not be treated
-   as a limit, or we would retry a request that can never succeed. */
-function rateLimitError(res) {
-	const remaining = res.headers.get("x-ratelimit-remaining");
-	if (res.status !== 429 && !(res.status === 403 && (remaining === "0" || remaining === null))) return null;
-	const resetAt = Number(res.headers.get("x-ratelimit-reset") || 0) * 1000;
-	const e = new Error("rate limited");
-	e.rateLimited = true;
-	e.resetAt = resetAt > Date.now() ? resetAt : 0;
-	e.authenticated = !!getToken();
-	return e;
-}
-async function rawConfig() {
-	const res = await fetch(RAW + "?t=" + Date.now(), { cache: "no-store" });
-	if (!res.ok) throw new Error("raw " + res.status);
-	return { config: await res.json(), sha: null };
-}
-async function apiConfig() {
-	const res = await fetch(API + "?t=" + Date.now(), { headers: apiHeaders(), cache: "no-store" });
-	const limited = rateLimitError(res);
-	if (limited) throw limited;
-	if (!res.ok) throw new Error("github " + res.status);
-	return decodeContents(await res.json());
-}
-/* waits out a SHORT reset and returns the sha-bearing config. A long reset is
-   thrown instead - stalling the tab for minutes is worse than asking you to
-   retry. */
-async function apiConfigWhenReady(onWait) {
-	for (let attempt = 0; ; attempt++) {
-		try {
-			return await apiConfig();
-		} catch (e) {
-			if (!e.rateLimited || attempt >= 2) throw e;
-			const delay = e.resetAt ? e.resetAt - Date.now() + 2000 : 6000;
-			if (e.resetAt && delay > 90000) throw e;
-			if (onWait) onWait(Math.max(1, Math.ceil(delay / 1000)));
-			await new Promise(r => setTimeout(r, delay));
-		}
-	}
-}
-/* ---------- freshness: the CDN copy vs the file itself ---------- */
-/* raw.githubusercontent is a CDN copy. It is usually current within seconds,
-   but right after a publish it has been seen handing back the PREVIOUS revision
-   for a few minutes - and that is what "the editor will not keep my changes"
-   looks like: you publish, the tab polls, the stale copy arrives, the tab
-   reverts to the rules you just replaced and quietly flags unsaved changes.
-   The contents API is never cached, so it decides every "what is really in the
-   file?" question; raw is only trusted when it agrees. */
+/* ONE source for everything: the API. Reading it needs no token, no
+   rate-limit budget and no CDN (the Worker reads the rules itself), and its
+   x-xyro-sha is the guard a safe publish carries back. The raw/contents-API
+   dance that used to live here - with its rate-limit backoff and its two-phase
+   merge - existed to make a BROWSER-side GitHub write safe; that write is gone,
+   so all of it is gone with it. */
+/* ---------- a publish's own echo ---------- */
+/* The copy that arrives right after a publish is the one that publish REPLACED,
+   which looks exactly like someone else reverting you: the tab polls, the old
+   revision comes back, and it reverts the editor while flagging unsaved changes.
+   publishGuard remembers what we wrote and what it replaced, so that echo is
+   recognised instead of obeyed. */
 const CDN_WINDOW_MS = 5 * 60 * 1000;
 let publishGuard = null; // { replaced, wrote, until } - what we last published
-let staleNotice = 0;
 
 /* key-order-insensitive compare: the same rules written by two code paths are
    the same rules even if JSON.stringify prints their keys in another order */
@@ -1989,11 +1829,11 @@ function asConfig(c) {
 
 /* which source answered last - worth naming, because "the API" and "a CDN"
    are the difference between the file and a guess at it */
-let rulesSource = "GitHub";
+let rulesSource = "the Xyro API";
 
 /* the API's copy of the rules: one origin, no token needed, no rate-limit
    budget, and ?fresh=1 walks past even its 30-second edge cache. Returns null
-   when no API is configured so the GitHub path below still runs. */
+   only when no API is configured - and then there is nothing to read at all. */
 async function hostedRules(opts) {
 	/* the first read happens at boot, before this promise settles - waiting here
 	   is what makes "the site reads the rules from the API" true on the FIRST
@@ -2017,37 +1857,14 @@ async function hostedRules(opts) {
 
 async function fetchConfig(opts) {
 	opts = opts || {};
-	/* PUBLISHING needs the blob sha, and only GitHub's contents API has it,
-	   so that path is unchanged */
-	if (opts.needSha) return apiConfigWhenReady(opts.onWait);
-	/* READING: the hosted copy first. It IS the file - the Worker reads it with
-	   no CDN in front - so a publish can no longer be "undone" by its own echo
-	   arriving from a cache, which was the whole "it will not keep my changes"
-	   bug. The GitHub dance below is the fallback for no api.json. */
-	let hosted = null;
-	try { hosted = await hostedRules({ fresh: !!opts.checkApi }); } catch (_) { hosted = null; }
-	if (hosted) return hosted;
-	rulesSource = "GitHub";
-	let raw = null;
-	try { raw = await rawConfig(); } catch (_) { /* fall through to the API */ }
-	/* a token makes the API free (5,000/hour) so it is consulted every time; with
-	   no token only the load and the manual refresh pay for it, leaving the
-	   60/hour anonymous budget alone for the 2-minute background poll */
-	const askApi = !!getToken() || !!opts.checkApi || !raw;
-	if (!askApi) return raw;
-	let api = null;
-	try { api = await apiConfigWhenReady(opts.onWait); } catch (e) { if (!raw) throw e; }
-	if (!raw) return api;
-	/* they disagree: the API is the file, the other one is a cache */
-	if (api && !sameJSON(api.config, raw.config)) {
-		if (Date.now() - staleNotice > 60000) {
-			staleNotice = Date.now();
-			console.warn("[xyro] raw.githubusercontent served a different revision than the API - using the file itself");
-			if (opts.report) toast("GitHub's CDN was serving an older copy - showing the file itself", "info", 8);
-		}
-		return api;
-	}
-	return { config: raw.config, sha: api ? api.sha : null };
+	/* needSha only asks for the uncached read, which is the same request either
+	   way now - the sha rides along on every read */
+	const hosted = await hostedRules({ fresh: !!(opts.checkApi || opts.needSha) });
+	/* null means NO API is configured, and that is a real error rather than a cue
+	   to look elsewhere: with no API there is no store to read and nowhere to
+	   publish. Saying so beats a blank editor that looks merely empty. */
+	if (!hosted) throw new Error("no API is configured - set api.url in api.json (api/README.md)");
+	return { config: hosted.config, sha: hosted.sha };
 }
 
 /* ---------- the snapshot that makes an open instant ---------- */
@@ -2087,7 +1904,7 @@ async function load() {
 		const json = await fetchConfig({ checkApi: true, report: true });
 		live = { options: json.config.options || {}, tags: Array.isArray(json.config.tags) ? json.config.tags : [] };
 		liveSha = json.sha;
-		refreshKeyChip(); // liveSha is what decides whether a GitHub publish can reach players
+		refreshKeyChip(); // the chip reports whether a key is saved, so it needs to know we read fine
 		saveSnapshot(live);
 		/* the PUBLISHED rules always win on open - a stale draft must never
 		   masquerade as the live config. A differing draft is offered as an
@@ -2133,10 +1950,10 @@ async function load() {
 	}
 }
 
-/* keep the editor in sync with GitHub while it's open: anyone publishing
-   (you from another tab, a teammate) lands here within ~2 minutes, or
-   instantly via the refresh click. Never clobbers unsaved work or an
-   open rule editor. */
+/* keep the editor in sync with the API while it's open: anyone publishing
+   (you from another tab, the Discord bot, a teammate) lands here within ~2
+   minutes, or instantly via the refresh click. Never clobbers unsaved work or
+   an open rule editor. */
 let refreshing = false;
 async function refreshLive(sayIt, opts) {
 	if (refreshing) return false;
@@ -2150,9 +1967,9 @@ async function refreshLive(sayIt, opts) {
 		   wrong is what makes the editor look broken in both directions - so ask
 		   the API, which is never cached, and only then decide. */
 		if (publishGuard && Date.now() < publishGuard.until && canonJSON(fresh) === canonJSON(publishGuard.replaced)) {
-			const truth = await apiConfigWhenReady().catch(() => null);
+			const truth = await hostedRules({ fresh: true }).catch(() => null);
 			if (!truth || canonJSON(asConfig(truth.config)) === canonJSON(publishGuard.wrote)) {
-				if (sayIt) status("GitHub is still handing out a cached copy - your published rules are kept", "info");
+				if (sayIt) status("the API is still handing out the revision we replaced - your published rules are kept", "info");
 				return false;
 			}
 		}
@@ -2249,7 +2066,7 @@ async function publishThroughApi() {
 				shaToSend = remote.sha;
 			} catch (e) {
 				status("the API could not read the rules (" + (e && e.message ? e.message : e) + ")", "err");
-				return !getToken();
+				return true;
 			}
 			if (live && !sameJSON(remote.config, live)) {
 				cfg = mergeRemote(live, cfg, remote.config);
@@ -2298,8 +2115,8 @@ async function publishThroughApi() {
 			}
 		}
 		if (put.status === 503) {
-			status("the API cannot publish yet - set GH_TOKEN on the Worker (api/README.md section 7)", "err");
-			return !getToken();
+			status("the API cannot publish yet - the Worker needs a rules database bound, or GH_TOKEN (api/README.md section 7)", "err");
+			return true;
 		}
 		if (put.status === 403) {
 			status("the API refused the owner key", "err");
@@ -2350,207 +2167,31 @@ async function publishThroughApi() {
 		return true;
 	} catch (e) {
 		status("network error while publishing through the API: " + e, "err");
-		return !getToken();
+		return true;
 	}
 }
 
 $("publishBtn").onclick = async () => {
-	/* the API first when a key is saved and one is configured - no GitHub login,
-	   no rate limit, and the write clears the cache that would otherwise serve
-	   the old rules for another 30 seconds */
-	if (getOwnerKey() && NT_BASE) {
-		const handled = await publishThroughApi();
-		if (handled || !getToken()) return;
-		/* The API could not publish. ASK where the rules live before falling
-		   back, rather than trust a value the page happens to be holding. */
-		const origin = await rulesOrigin();
-		if (origin !== "repo") {
-			const msg = origin === "database"
-				? "The API could not publish (see the status line). Players read its database, not the repo file, so falling back to GitHub would change nothing in game. Your draft is safe - fix the API and Publish again."
-				: "The API did not answer, so there is no way to tell whether players read its database or the repo file. Publishing to GitHub might write a copy nobody reads. Your draft is safe - try again once the API answers.";
-			status(msg, "err");
-			toast(msg, "err", 16);
-			return;
-		}
-		toast("Publishing through the API is unavailable - falling back to your GitHub token", "info", 10);
-	} else if (NT_BASE) {
-		/* No owner key is saved here, so the only route left would be GitHub - and
-		   if the API's database holds the rules, that route writes a file no
-		   player reads while saying "Published". Refuse, and name the one field
-		   that fixes it. */
-		const origin = await rulesOrigin();
-		if (origin !== "repo") {
-			const msg = origin === "database"
-				? "Players read the API's database, not the repo file, so a GitHub publish cannot reach them. Paste your owner key below and Publish goes through the API."
-				: "The API did not answer, so there is no way to tell whether players read its database or the repo file. Publishing to GitHub might write a copy nobody reads. Paste your owner key below to publish through the API.";
-			status(msg, "err");
-			toast(msg, "err", 18);
-			$("ownerCard").scrollIntoView({ behavior: "smooth" });
-			return;
-		}
-	}
-	const token = getToken();
-	if (!token) {
-		toast(NT_BASE ? "Save an owner key to publish through the API, or connect a GitHub token" : "Connect a token first", "err", 8);
-		$(NT_BASE ? "ownerCard" : "tokenCard").scrollIntoView({ behavior: "smooth" });
+	/* Publishing has exactly ONE destination now: your Worker. There is no
+	   fallback, because there is nothing to fall back TO - the repo file is a
+	   mirror the Worker writes itself, so a browser-side GitHub write could only
+	   ever change a file no player reads. Every failure below therefore stops and
+	   says what is wrong, instead of quietly writing somewhere else and calling
+	   that published. */
+	if (!NT_BASE) {
+		status("no API is configured, so there is nowhere to publish", "err");
+		toast("This editor has no API to publish through. Set api.url in api.json - see api/README.md.", "err", 16);
 		return;
 	}
-	if (live && sameJSON(cfg, live)) { toast("Nothing to publish - no changes"); return; }
-	status("publishing...", "info");
-	try {
-		/* re-read the live file at publish time and MERGE (see mergeRemote).
-		   Needs the API (raw gives no sha) - if it is rate-limited we stop
-		   instead of publishing blind, because publishing blind is exactly
-		   how rules got eaten. */
-		let meta = null;
-		if (live) {
-			/* the merge needs the sha, so this read MUST be the API (raw cannot
-			   give one). It is authenticated and waits out a short rate-limit
-			   reset, instead of leaving you to retry Publish by hand. */
-			let remote = null;
-			try {
-				remote = await fetchConfig({
-					needSha: true,
-					onWait: s => status("GitHub API rate limit - resetting in " + s + "s, publishing automatically...", "info"),
-				});
-			} catch (e) {
-				if (e && e.rateLimited) {
-					const msg = e.authenticated
-						? "GitHub API rate limit is still active - wait a minute, then Publish again. Your draft is safe."
-						: "GitHub's anonymous API budget (60/hour per IP, shared by every tab and device on your connection) is used up. Connect a token above for 5,000/hour and Publish works right away.";
-					status(msg, "err");
-					toast(msg, "err", 14);
-					if (!e.authenticated) $("tokenCard").scrollIntoView({ behavior: "smooth" });
-				} else {
-					status("cannot read the current file from GitHub (" + (e && e.message ? e.message : e) + ") - refusing to publish blind, that is how rules get lost", "err");
-					toast("Publish blocked: could not read the current file from GitHub", "err", 10);
-				}
-				return;
-			}
-			if (!remote.sha) { status("GitHub did not return a file sha - Publish again in a moment.", "err"); return; }
-			if (!sameJSON(remote.config, live)) {
-				cfg = mergeRemote(live, cfg, remote.config);
-				renderOptions();
-				renderAll();
-				toast("GitHub changed while you were editing - your publish was merged with the latest rules", "info", 9);
-			}
-			if (sameJSON(cfg, remote.config)) {
-				live = deepCopy(cfg);
-				saveDraft();
-				$("draftBtn").classList.add("hidden");
-				status("nothing to publish - GitHub already has everything", "ok");
-				toast("Nothing to publish - GitHub already has everything", "ok");
-				return;
-			}
-			meta = { sha: remote.sha };
-		} else {
-			const cur = await fetch(API + "?t=" + Date.now(), { headers: { Authorization: "Bearer " + token } });
-			if (!cur.ok) { status("cannot read current file (" + cur.status + ")", "err"); return; }
-			meta = await cur.json();
-		}
-		const summary = live ? publishSummary() : cfg.tags.length + " rules";
-		/* Name where this actually lands. It used to promise "the game reads raw
-		   GitHub live", which stopped being true the moment the API's database
-		   became the store - and that promise is why a repo-only publish looked
-		   like a normal, working publish. Getting here means the database does
-		   NOT own the rules, so the repo file really is still the store. */
-		const reach = NT_BASE
-			? "Your API serves the repo file (its database has no row yet, so the file is still the store) - clients are current within ~30s."
-			: "Every player running Xyro gets this within seconds - with no API configured, the game reads raw GitHub live.";
-		if (!confirm("Publish to " + REPO + "?\n\n" + summary + "\n\n" + reach)) { status("publish cancelled", "info"); return; }
-		/* one canonical body string for GitHub, the local server sync, and
-		   the draft (previously the sync silently referenced a shadowed
-		   outer body -> local copy never actually updated) */
-		const body = JSON.stringify({ options: cfg.options, tags: cfg.tags }, null, "\t") + "\n";
-		const res = await fetch(API, {
-			method: "PUT",
-			headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-			body: JSON.stringify({
-				message: "Update nametags via tag editor",
-				content: btoa(unescape(encodeURIComponent(body))),
-				sha: meta.sha, // re-read AFTER merging, so we never clobber a concurrent publish (GitHub 409s if stale)
-			}),
-		});
-		if (!res.ok) {
-			const err = await res.json().catch(() => ({}));
-			const limited = rateLimitError(res);
-			status("GitHub said " + res.status + ": " + (err.message || "unknown"), "err");
-			if (limited) {
-				toast("Publish blocked by GitHub's API rate limit - your draft is safe. Connecting a token raises the limit from 60 to 5,000 requests/hour.", "err", 14);
-				return;
-			}
-			if (res.status === 403 || res.status === 404) {
-				toast("Publish blocked: your token has Contents: Read only. Fix it at github.com/settings/personal-access-tokens \u2192 click your token \u2192 Repository permissions \u2192 Contents \u2192 Read and write \u2192 Update (no new token needed), then Publish again. Your draft is safe.", "err", 14);
-			} else {
-				toast("Publish failed: " + (err.message || res.status), "err");
-			}
-			return;
-		}
-		const done = await res.json();
-		/* what was live BEFORE this publish: the guard in refreshLive needs it to
-		   recognise its own change coming back through a stale cache */
-		const beforePublish = deepCopy(live || { options: {}, tags: [] });
-		const wanted = { options: cfg.options, tags: cfg.tags };
-		liveSha = done.content && done.content.sha;
-		live = deepCopy(cfg);
-		/* Prove it instead of assuming it. The PUT answering 200 means GitHub took
-		   the request, not that the file holds what we sent, and a publish that
-		   silently did not land is indistinguishable from "the site will not keep
-		   my changes". One uncached read is cheap next to that. */
-		publishGuard = { replaced: beforePublish, wrote: deepCopy(wanted), until: Date.now() + CDN_WINDOW_MS };
-		const check = await apiConfigWhenReady().catch(() => null);
-		if (check && check.sha) liveSha = check.sha;
-		const landed = check ? canonJSON(asConfig(check.config)) === canonJSON(wanted) : null;
-		if (landed === false) {
-			status("published, but GitHub is serving different content back - open nametags.json and check", "err");
-			toast("GitHub accepted the publish but the file does not match what you sent. Reload this page (Ctrl+Shift+R) and look at nametags.json before assuming it landed.", "err", 16);
-		}
-		saveDraft();
-		$("draftBtn").classList.add("hidden");
-		renderAll();
-		/* kick the CDN so the update lands in seconds, not minutes - but ONLY
-		   when there is no API. Where the API hosts the rules the game reads the
-		   file itself, so jsDelivr is a last-resort fallback no current build
-		   touches, and purging it (plus retrying for four minutes when jsDelivr
-		   throttles) would be noise about a copy nobody reads. */
-		if (!NT_BASE) {
-			const purgeOnce = async () => {
-				try {
-					const pj = await (await fetch("https://purge.jsdelivr.net/gh/" + REPO + "@main/" + PATH)).json();
-					return !(pj && pj.paths && pj.paths["/gh/" + REPO + "@main/" + PATH] && pj.paths["/gh/" + REPO + "@main/" + PATH].throttled);
-				} catch { return false; }
-			};
-			if (!(await purgeOnce())) {
-				const waitS = 250; // just past the throttle window
-				status("published, but CDN purge throttled - retrying in " + Math.round(waitS / 60) + " min...", "info");
-				toast("Published - CDN purge throttled, auto-retrying in ~4 min", "info", 10);
-				setTimeout(async () => {
-					for (let i = 0; i < 3; i++) {
-						if (await purgeOnce()) {
-							toast("CDN purge succeeded on retry - everyone is current", "ok", 6);
-							return;
-						}
-						await new Promise(r => setTimeout(r, 60000)); // try again each minute
-					}
-					toast("CDN purge still throttled after retries - try purge.jsdelivr.net manually later", "err", 12);
-				}, waitS * 1000);
-			}
-		}
-		if (landed === null) {
-			/* the verification read did not answer at all, so "checked against the
-			   file" would be a claim this never made - say only what is known */
-			status("published - the read-back check did not answer, so it is unverified", "info");
-			toast("Published, but the read-back check did not answer. Reload (Ctrl+Shift+R) before trusting it.", "info", 12);
-		} else if (landed) {
-			status("published and checked against the file" + (liveSha ? " (sha " + String(liveSha).slice(0, 7) + ")" : "") +
-				(NT_BASE ? " - the API serves it, so every client is current within ~30s" : " - in game in seconds, or run !nametagsfetch now"), "ok");
-			toast(NT_BASE ? "Published" : "Published - purging CDN...", "ok", 4);
-		}
-	} catch (e) {
-		status("network error: " + e, "err");
+	if (!getOwnerKey()) {
+		const msg = "Paste your owner key below - it is what lets Publish write through the API. Without it nothing can be published: the browser has no other route.";
+		status(msg, "err");
+		toast(msg, "err", 18);
+		$("ownerCard").scrollIntoView({ behavior: "smooth" });
+		return;
 	}
+	await publishThroughApi();
 };
-
 $("revertBtn").onclick = () => {
 	if (!live) { toast("Nothing loaded yet", "err"); return; }
 	if (!sameJSON(cfg, live) && !confirm("Discard your unsaved changes and go back to the last published version?")) return;
@@ -2612,7 +2253,7 @@ window.addEventListener("beforeunload", e => {
 });
 
 /* ---------- boot ---------- */
-refreshTokenChip();
+refreshKeyChip();
 /* paint the last copy this browser saw before the network answers, so opening
    the editor is instant instead of a blank page and a status line */
 bootFromSnapshot();

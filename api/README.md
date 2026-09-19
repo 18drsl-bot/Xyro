@@ -427,6 +427,7 @@ So the Worker hosts all of it now, on your own domain:
 | the rules | `GET /nametags` | 30s edge cache, `?fresh=1` for a guaranteed read |
 | the seals and badge | `GET /media/seal_founder.png`, `/media/verified_seal_blue.png` | 300s (the files are immutable once named), `?fresh=1` to override |
 | publishing | `PUT /nametags` | writes the rules and drops the cache immediately |
+| artwork uploads | `POST /media/<file>` | commits the file to `media/` with the owner key and drops that file's cache |
 | **the tag editor** | `GET /editor` | 60s, `?fresh=1` to override; `/api.json` points a page here at itself |
 
 The editor has two homes. GitHub Pages still serves it at
@@ -455,12 +456,20 @@ maintenance everyone should still be able to read the rules.
 The rules live in this Worker's own database, so a publish needs nothing but the
 owner key. In the editor, open the **Publish through the Xyro API** card, paste
 your owner key and press **Save & test** — from then on **Publish** goes through
-the Worker and the header chip reads `publish: API`. The same thing by hand:
+the Worker and the header chip reads `publish: API`. The same key also uploads
+tag artwork (`POST /media/<file>`), which is what replaced the GitHub token the
+page used to keep in a browser field: the Worker already holds one to mirror the
+rules, so the browser does not need one at all. The same thing by hand:
 
 ```bash
 curl -X PUT https://xyro-api.<you>.workers.dev/nametags \
   -H "x-api-key: YOUR_XYRO_ADMIN_KEY" -H "content-type: application/json" \
   --data-binary @nametags.json
+
+# upload tag artwork (what the editor does when you pick a file)
+curl -X POST https://xyro-api.<you>.workers.dev/media/9d8b8846f4bae0e3.png \
+  -H "x-api-key: YOUR_XYRO_ADMIN_KEY" -H "content-type: image/png" \
+  --data-binary @my-art.png
 ```
 
 How the editor uses it:
@@ -496,9 +505,10 @@ says which one answered, and so does `/health`:
 Two consequences worth knowing before you rely on it:
 
 * **Once the table has a row, the repo file no longer drives reads.** Editing
-  `nametags.json` by hand (or publishing from a copy of the editor configured
-  with a GitHub token) will not change what players see. Publish through the
-  editor, or run the `PUT` above.
+  `nametags.json` by hand will not change what players see — the Worker serves
+  its own row first, so a repo write is a write nobody reads. Publish through
+  the editor, the Discord bot, or the `PUT` above. (The editor no longer holds a
+  GitHub credential at all, so it cannot make that mistake in either direction.)
 * **The repo mirror is optional.** With a `GH_TOKEN` set, every publish is also
   committed to `nametags.json`, which is what keeps git history — the mirror
   failing never fails the publish, because the rules are already live by then.
@@ -536,6 +546,7 @@ npx wrangler deploy
 | `/api.json` | GET | no | this origin, for a page served here to configure itself with |
 | `/editor` | GET | no | the tag editor itself (edge-cached 60s) |
 | `/media/<file>` | GET | no | seals, the verified badge and any other tag artwork (edge-cached 300s; `?fresh=1` bypasses) |
+| `/media/<file>` | POST | **owner** | store tag artwork: the body is the image, and the filename must be a whitelisted image type. Only whole images are accepted, and a name that already exists is answered as stored |
 | `/online` | GET | if gated | presence: `{count, online[], beats{}, window}` |
 | `/staff` | GET | if gated | the whole `staff` node |
 | `/blacklist` | GET | if gated | the blacklist map (the Worker's own entries merged over the staff node) |
@@ -620,8 +631,10 @@ bulk of the traffic — a full lobby for an evening is far inside the free tier.
 | `502 database unreachable` | `FB_URL` in `wrangler.toml` is wrong, or the database is paused. |
 | `/nametags` answers `502 ... is not {options, tags[]}` | The file on GitHub is not the expected shape (a half-finished edit, or the wrong file). It refuses rather than serving half a rule set to every client. |
 | `/media/...` answers `404` | The filename is missing from the repo, or its extension is not a whitelisted image/audio type. Path segments are not allowed. |
+| Uploading artwork answers `503` | The Worker has no `GH_TOKEN`, and `media/` is served from the repo — so there is nowhere to store it. Set `GH_TOKEN` (section 7); the editor then needs no token of its own. |
+| Uploading artwork answers `400` | The bytes are not a whole image (an error page, a truncated download), or the extension is not a whitelisted type. This is the same check the game makes before caching a download, so a bad file is refused at the door. |
 | `503 ... needs GH_TOKEN` on `PUT /nametags` | Expected: publishing through the API is off until you set that secret. Reads are unaffected. |
-| The editor says *the API refused that key* | The saved key is neither this Worker's `XYRO_ADMIN_KEY` nor its `XYRO_PUBLISH_KEY`. Paste the right one, or forget it and use a GitHub token. |
+| The editor says *the API refused that key* | The saved key is neither this Worker's `XYRO_ADMIN_KEY` nor its `XYRO_PUBLISH_KEY`. There is no second route to publish through — paste the right key (or set one, section 7) and press Save & test again. |
 | The editor says *the Worker still cannot publish* | The key is accepted; `GH_TOKEN` is missing on the Worker. `npx wrangler secret put GH_TOKEN` (no redeploy needed) and press Save & test again. |
 | A publish comes back `409` | Someone else published while your tab was open. Nothing was overwritten — the editor refreshes so you can merge. |
 | Tag changes take up to 30s to reach running clients | The Worker's edge cache. `?fresh=1` on a manual read bypasses it, and publishing through the API clears it outright. |

@@ -1,13 +1,18 @@
 // test_editor_sync.js - boots the REAL editor script from index.html in a fake
-// DOM against a mocked GitHub, and proves the two things that made the editor
-// look broken:
+// DOM against a mocked API, and proves the things that made the editor look
+// broken:
 //
-//   1. a publish that DID land must survive a stale CDN copy coming back
+//   1. a publish that DID land must survive its own echo arriving late
 //      (that is "the site will not keep my changes");
 //   2. a genuine change made elsewhere must still come through afterwards
 //      (a guard that just blocks everything would be a different bug);
-//   3. opening the editor must show the FILE, not a CDN's older idea of it
-//      (that is "the website does not match nametags.json").
+//   3. opening the editor must show what PLAYERS read, from the one origin they
+//      read it from (that is "the website does not match the game").
+//
+// The API is the only origin the page may talk to now: no GitHub token, no
+// repo write, no CDN. A leftover token in localStorage and a mocked GitHub that
+// answers everything are both present here on purpose - if the page ever reaches
+// for either one again, these tests go red.
 //
 //   node Tools/test_editor_sync.js
 const fs = require("fs");
@@ -139,6 +144,14 @@ let apiDown = false;
 let apiNoToken = false; // a Worker deployed without GH_TOKEN: reads fine, writes 503
 let apiClassicToken = false; // the Worker holds a CLASSIC token (account-wide), not fine-grained
 let apiStoresRules = false; // the Worker stores the rules itself: no repo token exists to judge
+/* the API's own 30-second edge cache: a plain read can answer with the revision
+   that was just replaced, and only ?fresh=1 walks past it. Modelled because the
+   editor's "is my publish still there?" decision depends on that difference. */
+let apiStale = null;
+let mediaUploads = []; // what POST /media/<name> received
+/* the artwork the API can serve: the seals that ship with the repo, plus
+   anything an upload in this run put there */
+const mediaStored = new Set(["verified_seal_blue.png", "seal_founder.png", "seal_developer.png"]);
 /* the blacklist as the Worker serves it: a map of key -> reason */
 let blMap = {};
 let blWrites = [];
@@ -207,6 +220,17 @@ global.fetch = async (url, init) => {
 				warning: apiClassicToken ? "this is a CLASSIC token, which cannot be limited to one repository" : "",
 			}), { status: 200 });
 		}
+		/* artwork uploads: the route that replaced the page's GitHub token. It
+		   takes the owner key and stores the bytes; a 403 without one, so a test
+		   can tell "refused" from "never asked". */
+		const mediaPost = u.pathname.match(/^\/media\/([A-Za-z0-9_.-]{1,80})$/);
+		if (mediaPost && (method === "POST" || method === "PUT")) {
+			if (apiKey !== OWNER_KEY) return new Response('{"error":"forbidden: this route needs the owner key"}', { status: 403 });
+			const bytes = Buffer.from(init.body || "", "binary");
+			mediaUploads.push({ name: mediaPost[1], bytes, headers: init.headers });
+			mediaStored.add(mediaPost[1]);
+			return new Response(JSON.stringify({ ok: true, url: "/media/" + mediaPost[1], bytes: bytes.length, stored: "committed" }), { status: 200 });
+		}
 		if (u.pathname === "/nametags") {
 			if (method === "PUT") {
 				if (apiKey !== OWNER_KEY) return new Response('{"error":"forbidden: this route needs the owner key"}', { status: 403 });
@@ -215,11 +239,15 @@ global.fetch = async (url, init) => {
 				gh.file = JSON.parse(init.body);
 				return new Response(JSON.stringify({ ok: true, sha: "api-sha-" + ++apiPuts }), { status: 200 });
 			}
+			/* ?fresh=1 is what walks past the API's own edge cache - and the whole
+			   point of the editor asking for it is that a plain poll may answer with
+			   the revision it just replaced */
+			const served = apiStale && !u.searchParams.has("fresh") ? apiStale : text(gh.file);
 			/* The real Worker answers "d1-<rev>" when its OWN database holds the rules
 			   and a git blob sha when the repo file is still the store. That prefix is
 			   the difference between a publish players see and one they never will, so
 			   the mock models both instead of only the git one. */
-			return new Response(text(gh.file), { status: 200, headers: { "x-xyro-sha": apiStoresRules ? "d1-" + apiDbRev : gh.sha() } });
+			return new Response(served, { status: 200, headers: { "x-xyro-sha": apiStoresRules ? "d1-" + apiDbRev : gh.sha() } });
 		}
 		if (u.pathname === "/blacklist") {
 			// reading is gated by the CLIENT key, which the editor sends as ?key=
@@ -243,7 +271,12 @@ global.fetch = async (url, init) => {
 			return new Response(JSON.stringify({ ok: true, who, action: "blocked" }), { status: 200 });
 		}
 		if (u.pathname.startsWith("/media/")) {
-			return new Response("PNG:" + u.pathname.split("/").pop(), { status: 200, headers: { "content-type": "image/png" } });
+			/* only files that are actually STORED answer, so "is this already
+			   served?" (a HEAD, no key) is a real question with a real no. A mock
+			   that answered 200 to everything would make every upload skip itself. */
+			const what = u.pathname.split("/").pop();
+			if (!mediaStored.has(what)) return new Response('{"error":"no such repo file"}', { status: 404 });
+			return new Response("PNG:" + what, { status: 200, headers: { "content-type": "image/png" } });
 		}
 		/* presence comes through the API (here/ is the node the script writes), so
 		   the live user list is built from this, not from a direct database read */
@@ -271,6 +304,21 @@ global.fetch = async (url, init) => {
 
 /* --------------------------------------------------------- boot the editor */
 
+/* Node ships File and Blob but no FileReader, and the editor's embed fallback
+   uses one. Four lines here are the difference between testing that path and
+   skipping it - and that path is the one that costs every player bandwidth, so
+   it is the last thing that should go untested. */
+if (typeof FileReader === "undefined") {
+	globalThis.FileReader = class {
+		readAsDataURL(file) {
+			file.arrayBuffer().then(buf => {
+				this.result = "data:" + (file.type || "application/octet-stream") + ";base64," + Buffer.from(buf).toString("base64");
+				if (this.onload) this.onload();
+			}).catch(e => { if (this.onerror) this.onerror(e); });
+		}
+	};
+}
+
 const factory = new Function(
 	"window", "document", "localStorage", "fetch", "setInterval", "setTimeout", "confirm", "console",
 	script +
@@ -289,54 +337,61 @@ const factory = new Function(
 const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 
 (async () => {
+	/* a leftover token from the build that had a token field: the page must have
+	   no use for it. It stays in storage for the whole run as bait. */
 	localStorage.setItem("xyro_token", "github_pat_test");
+	apiJson = '{"api":{"url":"https://api.example","key":"pub-key"}}';
 	const api = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
 	await settle();
 
-	/* --- 1. the editor shows the file, not the CDN's older copy ---------- */
+	/* --- 1. one origin, and it is the API -------------------------------- */
 
 	ok("boot loads the published rules", api.live && api.live.tags.length === 2, JSON.stringify(api.live && api.live.tags));
-	ok("the token is honoured, so the file sha is known", typeof api.liveSha === "string" && api.liveSha.length > 0, String(api.liveSha));
+	ok("the sha comes from the API, so a publish can guard on it", typeof api.liveSha === "string" && api.liveSha.length > 0, String(api.liveSha));
+	ok("the rules came from the API", calls.some(c => c.url.hostname === "api.example" && c.url.pathname === "/nametags"), calls.map(c => c.url.hostname).join(", "));
+	/* api.json itself is a same-origin file and stays that way - what must never
+	   appear is a GITHUB request, from the token in storage or anything else */
+	const GITHUB_HOSTS = ["api.github.com", "raw.githubusercontent.com", "cdn.jsdelivr.net"];
+	const githubCalls = () => calls.filter(c => GITHUB_HOSTS.includes(c.url.hostname)).map(c => c.url.hostname + c.url.pathname);
+	ok("...and GitHub was not asked for anything at all, even with a token in storage",
+		githubCalls().length === 0, githubCalls().join(", "));
 	api.renderEditorPreview();
-	ok("with no API configured the rules and the badge come from GitHub/jsDelivr as before",
-		/loaded from GitHub/.test(el("status").textContent) && /cdn\.jsdelivr\.net\/gh\/vertxxy-1\/Xyro@main\/media\//.test(el("edBadgeCheck").src),
-		el("status").textContent + " | " + el("edBadgeCheck").src);
+	ok("the badge artwork comes from the API's media route",
+		/^https:\/\/api\.example\/media\//.test(el("edBadgeCheck").src), el("edBadgeCheck").src);
+	ok("...so no CDN is consulted for the preview either",
+		!calls.some(c => /jsdelivr/.test(c.url.hostname)), calls.map(c => c.url.hostname).join(", "));
 
-	// now the CDN starts handing back the PREVIOUS revision
-	gh.cdn = text({ options: { size: 99, pillColor: "#0000BD" }, tags: [{ match: "*", label: "old cached copy" }] });
-	await api.refreshLive(false, { checkApi: true });
-	ok("a stale CDN copy is not mistaken for the file", api.live.tags.length === 2 && api.live.options.size === 15, JSON.stringify(api.live.tags));
-	ok("...and the API was consulted to decide that", calls.some(c => c.url.hostname === "api.github.com" && c.method === "GET"));
-
-	/* --- 2. a publish that lands survives a stale poll ------------------- */
+	/* --- 2. publishing is the owner key's job ---------------------------- */
 
 	const before = JSON.parse(JSON.stringify(api.live));
+	const apiPutsBeforeFirst = apiPuts;
 	api.cfg = { options: { ...api.cfg.options, size: 33 }, tags: api.cfg.tags.map(t => (t.match === "*" ? { ...t, label: "xyro user (new)" } : t)) };
+	/* with no key saved there is nothing to publish WITH, and a token sitting in
+	   storage must not become one: the page stops and asks for the key */
 	await api.publish();
-	ok("the publish reached the file", gh.puts === 1 && gh.file.options.size === 33, "puts " + gh.puts + " size " + gh.file.options.size);
+	ok("a publish with no owner key is refused", apiPuts === apiPutsBeforeFirst && gh.puts === 0, "api puts " + (apiPuts - apiPutsBeforeFirst) + ", github puts " + gh.puts);
+	ok("...and it asks for the key rather than reporting success", /Paste your owner key/.test(el("status").textContent), el("status").textContent);
+	localStorage.setItem("xyro_owner_key", OWNER_KEY);
+	await api.publish();
+	ok("the publish went to the API", apiPuts === apiPutsBeforeFirst + 1, "puts " + (apiPuts - apiPutsBeforeFirst));
+	ok("...and never to GitHub", gh.puts === 0, "github puts " + gh.puts);
 	ok("the editor kept its own publish after it", api.cfg.options.size === 33, "cfg size " + api.cfg.options.size);
-	ok("a publish guard was armed", !!api.publishGuard, JSON.stringify(api.publishGuard && api.publishGuard.until));
-	ok("the publish did not land on a stale sha", gh.conflicts === 0, String(gh.conflicts));
+	ok("a publish guard was armed for its own echo", !!api.publishGuard, JSON.stringify(api.publishGuard && api.publishGuard.until));
 
-	// the CDN is still serving the pre-publish copy, and the poll runs
-	gh.cdn = text(before);
+	// the API's edge still answers with the revision we just replaced
+	apiStale = text(before);
 	const statusAfterPublish = el("status").textContent;
 	await api.refreshLive(true, {});
 	ok("a stale poll cannot undo a publish", api.cfg.options.size === 33 && api.live.options.size === 33, "cfg " + api.cfg.options.size + " live " + api.live.options.size);
-	ok("...and the tab does not claim it refreshed over it", el("status").textContent === statusAfterPublish && !/refreshed from GitHub/.test(el("status").textContent), el("status").textContent);
-
-	// Without a token the poll reads raw alone - which is exactly where the
-	// stale copy used to win. The guard has to ask the API before believing it.
-	localStorage.removeItem("xyro_token");
-	await api.refreshLive(true, {});
-	ok("tokenless: a stale poll still cannot undo a publish", api.cfg.options.size === 33 && api.live.options.size === 33, "cfg " + api.cfg.options.size + " live " + api.live.options.size);
-	ok("tokenless: and it says which copy it rejected", /cached copy/.test(el("status").textContent), el("status").textContent);
+	ok("...and the tab says which copy it refused instead of refreshing over it",
+		/refreshed from/.test(el("status").textContent) === false && /still handing out the revision we replaced/.test(el("status").textContent),
+		el("status").textContent + " (was: " + statusAfterPublish.slice(0, 60) + ")");
 
 	/* --- 3. a REAL change elsewhere still comes through ------------------ */
 
-	// someone reverts the file for real: the API agrees with the CDN this time
+	// the cache clears and someone reverts the rules for real
+	apiStale = null;
 	gh.file = JSON.parse(JSON.stringify(before));
-	gh.cdn = text(before);
 	await api.refreshLive(true, {});
 	ok("a genuine remote change is still accepted", api.cfg.options.size === 15 && api.live.options.size === 15, "cfg " + api.cfg.options.size);
 
@@ -404,16 +459,20 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("an unranked rule uses the API's verified badge", el("edBadgeCheck").src === "https://api.example/media/verified_seal_blue.png", el("edBadgeCheck").src);
 	hosted.closeEditor();
 
-	/* and when the API is down, the editor is exactly as it was before */
+	/* With the API unreachable there is no second source to find, and looking for
+	   one is how a page ends up showing rules nobody plays by. */
 	apiDown = true;
 	calls.length = 0;
 	const offline = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
 	await settle();
-	ok("an unreachable API falls back to the old GitHub path", offline.live && offline.live.tags.length === 2 && calls.some(c => c.url.hostname === "raw.githubusercontent.com" && c.url.pathname.endsWith("/nametags.json")), JSON.stringify(offline.live && offline.live.tags));
-	ok("...and says where those rules came from", /loaded from GitHub/.test(el("status").textContent), el("status").textContent);
-	// the API itself is reachable, so the artwork still comes from it - only the
-	// rules read failed, and the CDN would be the wrong answer for that
-	ok("...while artwork still comes from the reachable API", /^https:\/\/api\.example\/media\//.test(el("edBadgeCheck").src), el("edBadgeCheck").src);
+	ok("an unreachable API leaves the editor with no rules, and says so",
+		offline.live === null && /network error/.test(el("status").textContent), el("status").textContent);
+	ok("...and no CDN or GitHub read is attempted as a substitute",
+		calls.filter(c => /api\.github\.com|raw\.githubusercontent\.com|jsdelivr/.test(c.url.hostname)).length === 0,
+		calls.map(c => c.url.hostname).join(", "));
+	// the artwork URL is still built from the configured API, so a preview that
+	// does render is pointing at the same place the game reads
+	ok("...while artwork still points at the API that is configured", /^https:\/\/api\.example\/media\//.test(el("edBadgeCheck").src), el("edBadgeCheck").src);
 	apiDown = false;
 
 	/* --- 6. publishing through the API with an owner key ----------------- */
@@ -502,18 +561,71 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("a Worker without GH_TOKEN explains what is missing", /cannot publish/.test(el("status").textContent) && /GH_TOKEN/.test(el("status").textContent), el("status").textContent);
 	ok("...and still keeps the key, so it works the moment GH_TOKEN is set", localStorage.getItem("xyro_owner_key") === OWNER_KEY, "");
 
-	// an API that can read but not write: the GitHub token still gets it done
+	// a Worker that can neither store nor commit has nowhere to put the change,
+	// and "nowhere" must not be reported as "published somewhere else"
+	apiNoToken = true;
 	apiPub.cfg = { options: { ...apiPub.cfg.options, size: 77 }, tags: apiPub.cfg.tags };
-	const putsBeforeFallback = gh.puts;
+	const apiPutsBeforeNoStore = apiPuts;
+	const putsBeforeNoStore = gh.puts;
 	await apiPub.publish();
-	ok("an API that cannot publish falls back to the GitHub token", gh.puts === putsBeforeFallback + 1 && gh.file.options.size === 77, "github puts " + (gh.puts - putsBeforeFallback) + ", size " + gh.file.options.size);
+	ok("an API that cannot publish publishes nothing anywhere",
+		apiPuts === apiPutsBeforeNoStore && gh.puts === putsBeforeNoStore,
+		"api puts +" + (apiPuts - apiPutsBeforeNoStore) + ", github puts +" + (gh.puts - putsBeforeNoStore));
+	ok("...and says what the Worker is missing instead", /cannot publish yet/.test(el("status").textContent), el("status").textContent);
 	apiNoToken = false;
 	localStorage.removeItem("xyro_owner_key");
 
+	/* --- 6b. picking a file: uploaded through the API, or embedded ------- */
+
+	/* The upload used to be a GitHub PUT with a token the page held. It is now a
+	   POST to the API with the owner key - and the same whole-image rule the game
+	   applies is applied at the door, so the file is checked where it is stored. */
+	localStorage.setItem("xyro_owner_key", OWNER_KEY);
+	const PNG_SIG_ = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+	const IEND_ = Buffer.from([0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
+	const iconBytes = Buffer.concat([PNG_SIG_, Buffer.from("pretend-pixels"), IEND_]);
+	const iconName = crypto.createHash("sha1").update(iconBytes).digest("hex") + ".png";
+	const iconFile = new File([iconBytes], "icon.png", { type: "image/png" });
+	mediaStored.delete(iconName); // not on the server yet
+	mediaUploads.length = 0;
+	await el("edIconFile").onchange({ target: { files: [iconFile], value: "" } });
+	ok("a picked file is uploaded through the API", mediaUploads.length === 1 && mediaUploads[0].name === iconName, JSON.stringify(mediaUploads.map(u => u.name)));
+	ok("...with the owner key", !!mediaUploads[0] && mediaUploads[0].headers["x-api-key"] === OWNER_KEY, JSON.stringify(mediaUploads[0] && mediaUploads[0].headers));
+	ok("...and the bytes that were picked are the bytes that were sent", !!mediaUploads[0] && mediaUploads[0].bytes.equals(iconBytes), "");
+	ok("...so the rule points at the API's own media URL",
+		el("fImage").value === "https://api.example/media/" + iconName, el("fImage").value);
+	ok("...which means nothing was embedded into the rules", !/^data:/.test(el("fImage").value), el("fImage").value.slice(0, 40));
+
+	// the same file again: its URL is already served, so nothing is uploaded
+	mediaUploads.length = 0;
+	await el("edIconFile").onchange({ target: { files: [iconFile], value: "" } });
+	ok("re-picking a file that is already served sends nothing", mediaUploads.length === 0, JSON.stringify(mediaUploads));
+	ok("...and still fills the field", el("fImage").value === "https://api.example/media/" + iconName, el("fImage").value);
+
+	/* No key saved: there is nothing to upload WITH, so the picture is embedded -
+	   and the page must say what that costs, because every player re-downloads
+	   and re-decodes it on every refresh, forever. */
+	localStorage.removeItem("xyro_owner_key");
+	const bgBytes = Buffer.from("GIF89a" + "0123456789abcdefghij", "latin1");
+	const bgFile = new File([bgBytes], "backdrop.gif", { type: "image/gif" });
+	mediaStored.delete(crypto.createHash("sha1").update(bgBytes).digest("hex") + ".gif");
+	mediaUploads.length = 0;
+	const toastsBeforeEmbed = toastCount();
+	await el("edBgFile").onchange({ target: { files: [bgFile], value: "" } });
+	ok("with no key saved nothing is uploaded", mediaUploads.length === 0, JSON.stringify(mediaUploads));
+	ok("...and the file is embedded instead of failing", /^data:image\/gif;base64,/.test(el("fBgImage").value), el("fBgImage").value.slice(0, 40));
+	ok("...with the cost to every player stated, not hidden",
+		/KB to EVERY player's download every refresh/.test(newToasts(toastsBeforeEmbed)), newToasts(toastsBeforeEmbed).slice(0, 220));
+	localStorage.setItem("xyro_owner_key", OWNER_KEY);
+
 	/* --- 7. structural invariants --------------------------------------- */
 
-	ok("the publish verifies itself against the API", script.includes("const landed = check ? canonJSON(asConfig(check.config)) === canonJSON(wanted) : null;") && script.includes('status("published, but GitHub'), "");
-	ok("a verified publish says so", script.includes('status("published and checked against the file"'), "");
+	ok("a publish verifies itself against the API",
+		script.includes("const landed = canonJSON(asConfig(r.config)) === canonJSON(wrote);") &&
+		script.includes('status("published, but the file reads back differently'), "");
+	ok("a verified publish says so", script.includes('" - every client is current within ~30s"'), "");
+	ok("...and a read-back that never answered is not called verified",
+		script.includes("the verification read did not answer - the write itself was accepted"), "");
 	/* the chip is how a cached page gets spotted, so it must be a build id rather
 	   than a literal anyone forgets to bump. Asserting "api-r3" here only meant
 	   this file had to be edited on every bump - assert the SHAPE, and that it is
@@ -522,10 +634,10 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("the build chip is a build id so a cached page is recognisable",
 		!!chip && Number(chip.replace("api-r", "")) >= 3, "chip text: " + chip);
 	ok("load() checks the API", /const json = await fetchConfig\(\{ checkApi: true, report: true \}\)/.test(script), "");
-	ok("the periodic poll stays off the API budget when there is no token", script.includes("!!getToken() || !!opts.checkApi || !raw"), "");
-	ok("the editor reads the rules through the API when one is configured", /async function hostedRules\(opts\)/.test(script) && script.includes('NT_BASE + "/nametags"'), "");
+	ok("the periodic poll only reads the API", /setInterval\(\(\) => refreshLive\(true\), 120000\)/.test(script), "");
+	ok("the editor reads the rules through the API", /async function hostedRules\(opts\)/.test(script) && script.includes('NT_BASE + "/nametags"'), "");
 	ok("and gets tag artwork from the same origin", /function mediaURL\(file\)/.test(script) && script.includes('NT_BASE + "/media/"'), "");
-	ok("no hardcoded jsDelivr media URL is left in the editor", !/cdn\.jsdelivr\.net\/gh\/vertxxy-1\/Xyro@main\/media/.test(script), "");
+	ok("there is no jsDelivr or purge path left in the editor at all", !/jsdelivr|purge/i.test(script), "");
 
 	/* The bug this locks out: one rule carried a 1.29 MB PNG as a base64 data
 	   URI even though the identical file was already in media/, taking the rules
@@ -537,14 +649,21 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	const blobFn = script.slice(script.indexOf("async function fileToBlobURL"), script.indexOf("function wireFilePicker"));
 	ok("picking a file reuses an already-uploaded copy before embedding base64",
 		/async function mediaAlreadyServed\(path\)/.test(script) && blobFn.includes("await mediaAlreadyServed(path)"), "");
-	ok("and asks that question before it even looks for a token",
-		blobFn.indexOf("await mediaAlreadyServed(path)") < blobFn.indexOf("const token = getToken()"), "");
-	ok("the reuse check reads the API's own media route when one is configured",
+	ok("and asks that question before it needs the owner key",
+		blobFn.indexOf("await mediaAlreadyServed(path)") < blobFn.indexOf("const key = getOwnerKey()"), "");
+	ok("the reuse check reads the API's own media route",
 		/mediaAlreadyServed[\s\S]{0,500}NT_BASE \+ "\/media\//.test(script), "");
+	ok("an upload goes to the API with the owner key, not to GitHub",
+		/async function fileToBlobURL\(file\)/.test(script) && /fetch\(stamp\(apiURL\), \{[\s\S]{0,120}"x-api-key": key/.test(script) &&
+		!/api\.github\.com|Authorization|Bearer/.test(script), "");
+	ok("and a Worker that cannot store artwork falls back to embedding, not to failure",
+		/res\.status === 503\) throw Object\.assign\(new Error\(out\.error \|\| "the API cannot store artwork"\), \{ code: "notoken" \}\)/.test(script), "");
 	ok("embedding reports what it costs every player, not just that it happened",
 		/adding " \+ kb \+ " KB to EVERY player's download every refresh/.test(script), "");
-	ok("a publish does not purge a CDN the API clients never read", /if \(!NT_BASE\) \{/.test(script) && /the API serves it, so every client is current/.test(script), "");
-	ok("publishing prefers the API whenever a key is saved", script.includes("if (getOwnerKey() && NT_BASE) {") && /async function publishThroughApi\(\)/.test(script), "");
+	ok("the page no longer has a CDN to purge or a token to carry",
+		!/jsdelivr|purge|api\.github\.com|getToken|LS_TOKEN/i.test(script), "");
+	ok("publishing has exactly one route, and it needs the owner key",
+		/if \(!getOwnerKey\(\)\) \{[\s\S]{0,200}?Paste your owner key below/.test(script) && /async function publishThroughApi\(\)/.test(script), "");
 	ok("the API publish sends the blob sha, so a stale write is refused rather than clobbering",
 		script.includes('shaToSend ? "?sha=" + encodeURIComponent(shaToSend)'), "");
 	ok("with no sha known it still reads the file before writing", /if \(!shaToSend\) \{/.test(script), "");
@@ -691,14 +810,13 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	blNoCred = false;
 	localStorage.removeItem("xyro_owner_key");
 
-	/* --- 8. a publish that cannot reach players is refused ---------------- */
+	/* --- 8. one route, one credential, and a token that does nothing ------- */
 
-	/* The API's database owns the rules (x-xyro-sha is "d1-<rev>") and this
-	   browser has no owner key - only a GitHub token. Writing nametags.json then
-	   looks EXACTLY like a successful publish while every player keeps reading
-	   the Worker's own row. That is the state that shipped a tag nobody could
-	   see, and "Published" on a write no player reads is worse than an error,
-	   because it ends the search for the problem. */
+	/* The page used to hold a GitHub personal access token and write to the repo
+	   with it. That write could never reach a player once the database owned the
+	   rules (the Worker serves its own row first), which is how a "successful"
+	   publish shipped a tag nobody could see. The token is gone, and the thing
+	   that keeps it gone is that the page has no write path left to use it on. */
 	apiJson = '{"api":{"url":"https://api.example","key":"pub-key"}}';
 	apiStoresRules = true;
 	apiDbRev = 12;
@@ -707,78 +825,82 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	calls.length = 0;
 	const dbOwns = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
 	await settle();
-	ok("the editor can tell the API's database holds the rules", dbOwns.liveSha === "d1-12", String(dbOwns.liveSha));
-	ok("the chip stops promising GitHub and asks for the owner key", el("tokenChip").textContent === "owner key needed to publish", el("tokenChip").textContent);
-	ok("the button stops saying Publish to GitHub in that state", el("publishBtn").innerHTML.indexOf("GitHub") === -1, el("publishBtn").innerHTML);
+	ok("the sha the API reports is kept, whatever store it names", dbOwns.liveSha === "d1-12", String(dbOwns.liveSha));
+	ok("the chip asks for the owner key instead of promising GitHub", el("tokenChip").textContent === "owner key needed to publish", el("tokenChip").textContent);
+	ok("the button never says Publish to GitHub", el("publishBtn").innerHTML.indexOf("GitHub") === -1, el("publishBtn").innerHTML);
+	ok("...so a token in storage cannot make it write to GitHub", gh.puts === 0 && calls.filter(c => /api\.github\.com|raw\.githubusercontent\.com/.test(c.url.hostname)).length === 0, "github puts " + gh.puts);
 
 	dbOwns.cfg = { options: { ...dbOwns.cfg.options, size: 41 }, tags: dbOwns.cfg.tags };
-	const ghPutsBeforeRefusal = gh.puts;
 	const toastsBeforeRefusal = toastCount();
+	const apiPutsBeforeRefusal = apiPuts;
 	await dbOwns.publish();
-	ok("a publish with no owner key writes NOTHING to GitHub", gh.puts === ghPutsBeforeRefusal, "github puts +" + (gh.puts - ghPutsBeforeRefusal));
+	ok("a publish with no owner key writes NOTHING at all",
+		apiPuts === apiPutsBeforeRefusal && gh.puts === 0, "api puts +" + (apiPuts - apiPutsBeforeRefusal) + ", github puts " + gh.puts);
 	ok("...and never claims it published", !/Published/.test(newToasts(toastsBeforeRefusal)), newToasts(toastsBeforeRefusal).slice(0, 200));
-	ok("...it names where players actually read from", /database/.test(el("status").textContent), el("status").textContent);
-	ok("...and asks for the owner key, the one thing that unlocks it", /owner key/i.test(newToasts(toastsBeforeRefusal)), newToasts(toastsBeforeRefusal).slice(0, 200));
+	ok("...it says the browser has no other route", /no other route/.test(newToasts(toastsBeforeRefusal)), newToasts(toastsBeforeRefusal).slice(0, 200));
 
-	// the SAME state with the key saved: the API is used, so the refusal must not fire
+	// the SAME state with the key saved: the one route is open, so it publishes
 	localStorage.setItem("xyro_owner_key", OWNER_KEY);
 	apiPuts = 0;
 	const dbOwnsKey = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
 	await settle();
-	ok("with the owner key saved the same state publishes through the API", el("tokenChip").textContent === "publish: API", el("tokenChip").textContent);
+	ok("with the owner key saved the chip promises the API route", el("tokenChip").textContent === "publish: API", el("tokenChip").textContent);
 	dbOwnsKey.cfg = { options: { ...dbOwnsKey.cfg.options, size: 42 }, tags: dbOwnsKey.cfg.tags };
 	await dbOwnsKey.publish();
-	ok("...and the write lands", /published through the API/.test(el("status").textContent), el("status").textContent);
+	ok("...and the write lands on that route", apiPuts === 1 && gh.puts === 0, "api puts " + apiPuts + ", github puts " + gh.puts);
+	ok("...and the status says so", /published through the API/.test(el("status").textContent), el("status").textContent);
 
-	/* The over-blocking check. When the repo file IS still the store the GitHub
-	   path has to keep working - a guard that refuses everything would be a
-	   different bug wearing the same fix. */
-	apiStoresRules = false;
-	localStorage.removeItem("xyro_owner_key");
-	const repoStore = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
-	await settle();
-	const repoPutsBefore = gh.puts;
-	repoStore.cfg = { options: { ...repoStore.cfg.options, size: 43 }, tags: repoStore.cfg.tags };
-	await repoStore.publish();
-	ok("while the repo file is still the store, a GitHub publish still works",
-		gh.puts === repoPutsBefore + 1 && gh.file.options.size === 43,
-		"github puts +" + (gh.puts - repoPutsBefore) + ", size " + gh.file.options.size);
-
-	/* And no answer at all: the API is unreachable, so which store players read
-	   from is not knowable. The invariant that matters is that NO GitHub write
-	   happens and nothing claims success - whichever honest reason is printed,
-	   guessing here is the same dead end. (The API's own error path also stops
-	   before any write, which is why this asserts the outcome rather than one
-	   particular message.) */
-	localStorage.setItem("xyro_owner_key", OWNER_KEY);
-	apiStoresRules = true;
+	/* An API that cannot answer at all: the write stops before it is made, and
+	   nothing pretends otherwise. Guessing here is the same dead end as before. */
 	apiDown = true;
-	const unknownStore = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
-	await settle();
-	const unknownPutsBefore = gh.puts;
+	const putsBeforeUnknown = gh.puts;
+	const apiPutsBeforeUnknown = apiPuts;
 	const toastsBeforeUnknown = toastCount();
-	unknownStore.cfg = { options: { ...unknownStore.cfg.options, size: 44 }, tags: unknownStore.cfg.tags };
-	await unknownStore.publish();
-	ok("an unreachable API never becomes a silent GitHub publish", gh.puts === unknownPutsBefore, "github puts +" + (gh.puts - unknownPutsBefore));
-	ok("...and it never claims success", !/Published/.test(newToasts(toastsBeforeUnknown)), newToasts(toastsBeforeUnknown).slice(0, 160));
+	dbOwnsKey.cfg = { options: { ...dbOwnsKey.cfg.options, size: 44 }, tags: dbOwnsKey.cfg.tags };
+	await dbOwnsKey.publish();
+	ok("an unreachable API does not become a silent publish somewhere else",
+		apiPuts === apiPutsBeforeUnknown && gh.puts === putsBeforeUnknown, "api puts +" + (apiPuts - apiPutsBeforeUnknown) + ", github puts +" + (gh.puts - putsBeforeUnknown));
+	ok("...and it never claims success", !/Published -/.test(newToasts(toastsBeforeUnknown)), newToasts(toastsBeforeUnknown).slice(0, 160));
 	ok("...reporting a failure instead", /fail|could not|did not answer/i.test(el("status").textContent), el("status").textContent);
 	apiDown = false;
 	apiStoresRules = false;
 	localStorage.removeItem("xyro_owner_key");
 
-	/* structural: the refusal for a page with no owner key, and the probe it now
-	   depends on instead of a remembered sha */
-	ok("a page with no owner key asks the API where the rules live before writing to GitHub",
-		script.includes("async function rulesOrigin()") && script.includes("const origin = await rulesOrigin();"), "");
-	ok("...and an API that cannot answer is not mistaken for the repo store",
-		/rulesOrigin[\s\S]*?return "unknown";/.test(script), "");
+	/* structural: the write path itself, and the absence of the one it replaced */
+	ok("the only write the page knows is the API publish",
+		/async function publishThroughApi\(\)/.test(script) && !/function publishThroughGitHub|github\.com\/repos/.test(script), "");
+	ok("...and no GitHub credential is read or stored anywhere in the page",
+		!/getToken|LS_TOKEN|xyro_token|Authorization|Bearer/.test(script) && !/api\.github\.com/.test(script), "");
 
-	/* structural: the two lines that shipped the lie in the first place */
-	ok("the publish dialog only promises raw GitHub when the repo file IS the store",
-		/const reach = NT_BASE/.test(script) && script.includes('+ summary + "\\n\\n" + reach)') &&
-		/with no API configured, the game reads raw GitHub live/.test(script), "");
-	ok("a publish whose read-back never ran is not reported as checked",
-		script.includes("if (landed === null) {") && script.includes("} else if (landed) {") && !script.includes("if (landed !== false) {"), "");
+	/* the dialog has to name the destination it will actually use - the old one
+	   promised "the game reads raw GitHub live", which stopped being true the day
+	   the rules database became the store */
+	ok("the publish dialog names the API as where players read from",
+		/The Worker commits it and drops its cache, so every client gets it within seconds/.test(script) &&
+		!/the game reads raw GitHub live/.test(script), "");
+
+	/* --- 9. an API that cannot be reached is a REAL error ------------------ */
+
+	/* No second source exists any more, so a read that cannot happen must say so
+	   instead of showing rules from somewhere the game does not read. This boots
+	   LAST on purpose: the fake DOM rebinds each element's handlers to the newest
+	   instance, so an instance created early would be the one driven by every
+	   later click. */
+	apiStoresRules = false;
+	localStorage.removeItem("xyro_owner_key");
+	apiDown = true;
+	calls.length = 0;
+	const unreachable = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle();
+	ok("an unreachable API is reported instead of silently reading elsewhere",
+		/network error/.test(el("status").textContent) && unreachable.live === null,
+		el("status").textContent + " | live " + JSON.stringify(unreachable.live));
+	ok("...and nothing else is consulted in its place",
+		calls.filter(c => /api\.github\.com|raw\.githubusercontent\.com|jsdelivr/.test(c.url.hostname)).length === 0,
+		calls.map(c => c.url.hostname).join(", "));
+	ok("...and the page cannot publish from that state either",
+		/network error|no API is configured|owner key/.test(el("status").textContent), el("status").textContent);
+	apiDown = false;
 
 	console.log("\n" + (failures.length ? failures.length + " FAILED" : pass + " checks passed") + (failures.length ? " (" + pass + " passed)" : ""));
 	process.exit(failures.length ? 1 : 0);

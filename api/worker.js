@@ -34,7 +34,8 @@
  *      GET    /nametags                      -> the published tag rules
  *      GET    /nametags.json, /config        -> aliases for the same bytes
  *      GET    /media/<file>                  -> seals, verified badge, artwork
- *      PUT    /nametags                      (owner key + GH_TOKEN) publish them
+ *      POST   /media/<file>                  (owner key + GH_TOKEN) store artwork
+ *      PUT    /nametags                      (publish key) publish them
  *      POST   /nametags/check                (owner key) can this Worker publish?
  *    The rules are public and ungated on purpose (the editor has no key, and
  *    the file is public in the repo anyway); publishing is owner-only, and a
@@ -882,6 +883,128 @@ async function serveMedia(env, ctx, url, name) {
 	});
 }
 
+/** Is this a WHOLE image? The editor's uploads are trusted no further than the
+ *  game's downloads are.
+ *
+ *  A 404 body is not a picture, and a truncated upload is not a picture either,
+ *  yet both would be committed to media/ under a filename the game fetches and
+ *  caches per URL. The client refuses to save such a body (ntImageLooksWhole in
+ *  xyro.lua); refusing it here as well means a bad upload is rejected at the
+ *  door instead of becoming the artwork every player is served.
+ *
+ *  The check is shape + end marker, not a decode: a full PNG/JPEG/GIF parse in a
+ *  Worker is a lot of code to protect a route that only ever receives files this
+ *  same repo produced. */
+const IMAGE_MIN_BYTES = 24;
+/** The same ceiling the editor applies before it even sends the file. Workers
+ *  have a 100 MB request limit, but tag artwork is polled by every player on
+ *  every refresh - an unbounded upload is a way to make every tag slow. */
+const MEDIA_MAX_BYTES = 3 * 1024 * 1024;
+function imageBytesLookWhole(bytes) {
+	if (!bytes || bytes.length < IMAGE_MIN_BYTES) return false;
+	const tail = bytes.subarray(Math.max(0, bytes.length - 16));
+	const has = (needle) => {
+		outer: for (let i = 0; i + needle.length <= tail.length; i++) {
+			for (let j = 0; j < needle.length; j++) if (tail[i + j] !== needle[j]) continue outer;
+			return true;
+		}
+		return false;
+	};
+	if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+		return has([0x49, 0x45, 0x4e, 0x44]); // IEND
+	}
+	if (bytes[0] === 0xff && bytes[1] === 0xd8) return has([0xff, 0xd9]);
+	const gif = String.fromCharCode(...bytes.subarray(0, 6));
+	if (gif === "GIF87a" || gif === "GIF89a") return has([0x3b]);
+	const riff = String.fromCharCode(...bytes.subarray(0, 4));
+	const webp = String.fromCharCode(...bytes.subarray(8, 12));
+	return riff === "RIFF" && webp === "WEBP";
+}
+
+/** POST /media/<name> - upload tag artwork with the owner key.
+ *
+ *  This exists so the editor needs no GitHub credential of its own. It used to
+ *  hold a personal access token purely to PUT bytes into media/, which meant the
+ *  one place with the widest permission in the whole system (a token that can
+ *  write to the repo) lived in a browser and was re-entered on every device. The
+ *  Worker already holds a token to mirror the rules; this reuses it.
+ *
+ *  A filename that is ALREADY present is left alone and reported as a hit: names
+ *  are content hashes, so the same bytes cannot mean a different picture, and
+ *  re-committing one would only add an identical blob to history. */
+async function uploadMedia(env, req, url, name) {
+	const ext = (name.match(/\.([A-Za-z0-9]+)$/) || [])[1];
+	const type = ext ? MEDIA_TYPES[ext.toLowerCase()] : null;
+	if (!type) {
+		return json(env, { error: "unsupported media type: " + name + " (allowed: " + Object.keys(MEDIA_TYPES).join(", ") + ")" }, 400);
+	}
+	const declared = Number(req.headers.get("content-length") || 0);
+	if (declared > MEDIA_MAX_BYTES) {
+		return json(env, { error: "that file is " + Math.round(declared / 1024) + " KB; the limit is " + Math.round(MEDIA_MAX_BYTES / 1024) + " KB" }, 413);
+	}
+	let bytes;
+	try {
+		bytes = new Uint8Array(await req.arrayBuffer());
+	} catch (_) {
+		return json(env, { error: "could not read the upload body" }, 400);
+	}
+	if (bytes.length > MEDIA_MAX_BYTES) {
+		return json(env, { error: "that file is " + Math.round(bytes.length / 1024) + " KB; the limit is " + Math.round(MEDIA_MAX_BYTES / 1024) + " KB" }, 413);
+	}
+	if (!imageBytesLookWhole(bytes)) {
+		return json(env, {
+			error: "those bytes are not a whole image, so they were not stored",
+			hint: "the same check the game makes before it caches a download - a truncated or error-page body would become the artwork every player is served",
+		}, 400);
+	}
+	const ref = repoRef(env);
+	const base = "https://api.github.com/repos/" + ref.owner + "/" + ref.repo + "/contents/media/" + name;
+	if (!env.GH_TOKEN) {
+		return json(env, {
+			error: "this Worker has no GH_TOKEN, so it cannot store artwork",
+			hint: "media/ is served from the repo, so an upload has to be committed there - set GH_TOKEN (api/README.md section 7) and the editor no longer needs a token of its own",
+		}, 503);
+	}
+	const headers = {
+		authorization: "Bearer " + env.GH_TOKEN,
+		accept: "application/vnd.github+json",
+		"user-agent": "xyro-api",
+	};
+	/* Names are content hashes, so a hit can be answered without a write. */
+	const existing = await fetch(base + "?ref=" + ref.branch + "&t=" + Date.now(), { headers });
+	if (existing.ok) {
+		return json(env, { ok: true, url: "/media/" + name, bytes: bytes.length, stored: "already" });
+	}
+	const put = await fetch(base, {
+		method: "PUT",
+		headers: { ...headers, "content-type": "application/json" },
+		body: JSON.stringify({
+			message: "Add tag media " + name.slice(0, 12),
+			content: toBase64(bytes),
+			branch: ref.branch,
+		}),
+	});
+	const out = await put.json().catch(() => ({}));
+	if (!put.ok) {
+		/* 422 is a race with another upload of the same content-hashed name: the
+		   file IS there, which is all the caller asked for */
+		if (put.status === 422) return json(env, { ok: true, url: "/media/" + name, bytes: bytes.length, stored: "already" });
+		return json(env, { error: "github refused the upload: " + (out && out.message ? out.message : put.status) }, 503);
+	}
+	/* the new file must not be answered by a cache holding the old 404 under this
+	   URL - the same trap that made a fresh seal render blank in game */
+	if (typeof caches !== "undefined" && caches.default) {
+		await caches.default.delete(new Request(url.origin + "/media/" + name)).catch(() => {});
+	}
+	return json(env, {
+		ok: true,
+		url: "/media/" + name,
+		bytes: bytes.length,
+		stored: "committed",
+		sha: out && out.content ? (out.content.sha || "") : "",
+	});
+}
+
 /** base64 for the contents API, chunked so a large file cannot blow the stack. */
 function toBase64(bytes) {
 	let bin = "";
@@ -1474,6 +1597,14 @@ async function handle(req, env, ctx) {
 	   whitelisted by shape (one path segment, known extension) because it is
 	   concatenated onto a repo path - `..` never gets the chance to matter. */
 	const media = path.match(/^\/media\/([A-Za-z0-9_.-]{1,80})$/);
+	if (media && (req.method === "POST" || req.method === "PUT")) {
+		/* uploading is a PUBLISH: it needs the same key that can change what
+		   every tag looks like, and the publish-only key is enough for it */
+		const denied = publishKeyResponse(req, url, env);
+		if (denied) return denied;
+		if (writeThrottled(req)) return json(env, { error: "too many writes, slow down" }, 429);
+		return uploadMedia(env, req, url, media[1]);
+	}
 	if (media && (req.method === "GET" || req.method === "HEAD")) {
 		const res = await serveMedia(env, ctx, url, media[1]);
 		/* HEAD exists so the editor can ask "is this artwork already served?"
