@@ -70,13 +70,13 @@
 		},
 		{
 			"match": "larp_139",
-			"label": "trxsy",
+			"label": "Developer",
 			"color": "#130FFF",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/670802608852e58fc63bc498016e2e9fbb1a7e61.png",
+			"bgImage": "https://xyro-api.xyroapi.workers.dev/media/88145c0845c111adbbb51f40d8670e4dd1399020.jpg",
 			"badge": true,
 			"rank": "developer",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/225cd37da6d4753d5d06c642fc9239b92048b2fc.gif",
-			"bgLum": 0.016
+			"image": "https://xyro-api.xyroapi.workers.dev/media/83dca0308751a2951971e8ffa8d902eefa146aae.jpg",
+			"bgLum": 0.112
 		},
 		{
 			"match": "DiahArianna18",
