@@ -267,3 +267,9 @@ history and nothing a player sees — it looks like it worked and does nothing.
 
 Full copy-paste guide, including a complete `/nametag` slash command:
 **[DISCORD-BOT.md](DISCORD-BOT.md)**.
+
+**Hosting it on Cloudflare:** `/block`-style slash-command bots work well there -
+`api/bot/` is a ready Worker for Discord's HTTP interactions endpoint, and it
+needs no always-on host. A bot that reads chat cannot be hosted there at all:
+Discord blocks gateway (persistent WebSocket) connections from Cloudflare, so
+message events, member joins and presence are off the table.

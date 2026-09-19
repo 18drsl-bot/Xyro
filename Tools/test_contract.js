@@ -311,6 +311,35 @@ ok("the bot's blacklist calls match the Worker's routes and methods",
 ok("and it documents the trap it exists to avoid (a repo commit reaching nobody)",
 	/WHAT NOT TO DO/.test(bot) && /nametags\.json/.test(bot) && /mirror/.test(bot), "");
 
+/* --- the Discord bot on Cloudflare names the same routes ---------------- */
+
+/* The bot Worker is a third consumer of the same API, deployed separately. It
+   has to agree with the Xyro Worker about routes, methods and the header, or it
+   fails only in production, only for a staff command, and only in Discord - the
+   least debuggable place there is. */
+const botWorker = fs.readFileSync(path.join(ROOT, "api", "bot", "bot-worker.js"), "utf8");
+const botCommands = fs.readFileSync(path.join(ROOT, "api", "bot", "commands.js"), "utf8");
+const botToml = fs.readFileSync(path.join(ROOT, "api", "bot", "wrangler.toml"), "utf8");
+ok("the bot reads and writes the same rules routes",
+	botWorker.includes('"/nametags?fresh=1"') && botWorker.includes('"/nametags"') && botWorker.includes('"?sha="'), "");
+ok("the bot sends the owner key in x-api-key, the header the Worker reads",
+	/"x-api-key": key/.test(botWorker) && worker.includes('req.headers.get("x-api-key")'), "");
+ok("the bot's blacklist calls use the Worker's methods",
+	botWorker.includes('call("POST", "/blacklist/"') && botWorker.includes('call("DELETE", "/blacklist/"') && worker.includes('req.method === "POST" || req.method === "DELETE"'), "");
+ok("the bot reads the revision from the same header the API sends",
+	/x-xyro-sha/.test(botWorker) && worker.includes('"x-xyro-sha"'), "");
+/* Routing is a switch on a name Discord sends, so a name in commands.js that
+   bot-worker.js does not handle is offered to users and then answers "Unknown
+   command" - the test suite drives every one of them, this just keeps the two
+   files in step as text. */
+const registeredNames = [...botCommands.matchAll(/^\t\tname: "([a-z]+)",$/gm)].map(m => m[1]);
+ok("every registered command is handled in the bot Worker",
+	registeredNames.length > 0 && registeredNames.every(n => botWorker.includes('name === "' + n + '"')),
+	registeredNames.join(", ") + " / handled: " + (botWorker.match(/name === "[a-z]+"/g) || []).join(" "));
+ok("the bot has its own wrangler config, so it cannot redeploy the players' API",
+	/name = "xyro-bot"/.test(botToml) && /env\.XYRO_ADMIN_KEY|XYRO_ADMIN_KEY/.test(botToml), "");
+ok("and it says the bot TOKEN must not live on the Worker", /NOT here, deliberately/.test(botToml), "");
+
 /* --- tag artwork: three sides, one route ------------------------------- */
 
 /* The editor asks HEAD /media/<file> to decide whether a picture is already

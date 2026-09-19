@@ -229,6 +229,123 @@ switch**, and `api/gate.js` is a ready CLI for the same thing
 database credential on the Worker (`FB_SERVICE_ACCOUNT`), because the database
 refuses anonymous writes to that node.
 
+## Hosting the bot on Cloudflare
+
+Yes - **if your bot is slash commands and moderation.** No - if it reads chat.
+
+Discord gives you two ways to receive events, and Cloudflare can only host one of
+them:
+
+| | Runs on Cloudflare? |
+|---|---|
+| **HTTP interactions endpoint** - Discord POSTs each slash command, button and modal to a URL you own | **Yes.** Nothing has to stay alive |
+| **Gateway** - your process holds a persistent WebSocket and Discord streams every event down it | **No.** Discord deliberately refuses gateway connections from Cloudflare's shared egress addresses, so this is not a configuration problem you can work around |
+
+What that costs you is everything that only exists on the gateway: **message
+events** (so no `!prefix` commands, autoresponders or chat logging), member
+join/leave, presence, and bot status changes. Slash commands, buttons, select
+menus, modals and autocomplete all work.
+
+There is a Worker for it in **`api/bot/`**. It is a separate deployment from the
+tag API on purpose, so a bot change can never take the tags down:
+
+```
+Discord ──interaction──▶ api/bot (xyro-bot)  ──x-api-key──▶ api/worker.js ──▶ rules database
+                         verifies the Ed25519                     serves GET /nametags
+                         signature, ~200ms                        PUT /nametags, /blacklist
+```
+
+### Setup
+
+Do these in order - the last one only works once the Worker is answering.
+
+**1. Deploy the bot Worker.**
+
+```powershell
+cd "$HOME\Downloads\x9k-main\script\Xyro\api\bot"
+npx --yes wrangler@latest deploy
+```
+
+It prints a URL like `https://xyro-bot.<your-subdomain>.workers.dev`.
+
+**2. Give it your owner key** (the same one from the top of this page):
+
+```powershell
+npx --yes wrangler@latest secret put XYRO_ADMIN_KEY    # paste at the prompt
+```
+
+**3. Register the slash commands** - from your machine, not the Worker, because
+this is the one thing that needs the bot **token**:
+
+```powershell
+$env:DISCORD_TOKEN = "your-bot-token"
+$env:DISCORD_APPLICATION_ID = "your-application-id"
+$env:DISCORD_GUILD_ID = "your-test-server-id"   # optional; guild commands appear instantly
+node api/bot/register-commands.js
+```
+
+**4. Set the Interactions Endpoint URL.** Developer Portal → your app → General
+Information → **Interactions Endpoint URL** → the Worker URL from step 1.
+
+Discord immediately sends a signed `PING` to confirm the endpoint is real, and
+**refuses to save the URL** unless the Worker answers it correctly. If the save
+fails, the Worker is not verifying signatures - start with
+`npx wrangler tail` in `api/bot/` and watch what the request does.
+
+**5. Set the Public Key.** The Worker needs `DISCORD_PUBLIC_KEY` (General
+Information → Public Key) to verify signatures:
+
+```powershell
+npx --yes wrangler@latest secret put DISCORD_PUBLIC_KEY
+```
+
+It is public by design - it verifies, and cannot be used to impersonate anyone.
+
+### Things worth knowing before you move your bot here
+
+**The 3-second deadline is why the bot answers inline.** Discord requires the
+initial response within 3 seconds, and a deferred reply needs a *second* call to
+Discord's API from the Worker. This bot never makes that second call: it reads
+and publishes the tags (a Worker-to-Worker hop, ~200ms) and answers in the same
+request. That is also what keeps it clear of the one real Cloudflare caveat:
+Discord rate-limits Cloudflare's shared egress addresses, which has produced
+`429` and Cloudflare error `1015` for Workers calling `discord.com/api` from some
+regions (see discord-api-docs issue #7146). Registering commands is unaffected
+because you run it locally, not from the Worker.
+
+**You cannot fetch Discord attachments.** The official Cloudflare tutorial notes
+that Workers get a `403` for non-ephemeral `cdn.discordapp.com` media. Only
+relevant if you wanted to read an uploaded image.
+
+**Lock it to your server.** Set `DISCORD_GUILD_ID` in `api/bot/wrangler.toml`
+(and re-deploy), or anyone who installs your bot in their own server gets these
+commands. The Manage Roles check still applies - their admins would pass it.
+
+**Never send a message as your bot from the Worker.** The bot token would let
+any request path post as your bot, which is why it only exists in
+`register-commands.js`, on your machine. The Worker holds the *public* key and
+your owner key and nothing else.
+
+**Test it offline first.** `node Tools/test_bot_worker.js` generates a real
+Ed25519 keypair, signs payloads the way Discord does, and drives the Worker's
+own verify path - including the cases that matter: a tampered body, a replayed
+timestamp, the wrong key, and a member without Manage Roles. 48 checks, no
+network, no Cloudflare account.
+
+### What you need from the Developer Portal
+
+| | Where |
+|---|---|
+| Public Key | General Information → Public Key (a Worker secret) |
+| Application ID | General Information → Application ID (for registering) |
+| Bot Token | Bot → Reset Token (local only, never on the Worker) |
+| Interactions Endpoint URL | General Information → set it to the Worker URL |
+| Install link | OAuth2 → URL Generator → `bot` + `applications.commands` |
+
+Still prefer a normal always-on host? Everything on this page works unchanged
+there - the bot just needs to reach your Worker, and `api/nametags-client.js` is
+the Node client for it.
+
 ## Testing
 
 Offline, no network and no key:

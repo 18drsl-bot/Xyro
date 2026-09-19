@@ -1,0 +1,49 @@
+# The Discord bot's Worker. Separate from ../wrangler.toml on purpose: it is a
+# different deployment with a different audience (Discord, not Roblox clients),
+# and it should be able to be redeployed or thrown away without touching the
+# Xyro API that every player depends on.
+#
+#   cd api/bot
+#   npx wrangler deploy
+#
+# Secrets it needs - never in this file, and never in the repo:
+#
+#   npx wrangler secret put DISCORD_PUBLIC_KEY    # Developer Portal -> General
+#                                                 # Information -> Public Key.
+#                                                 # PUBLIC by design: it verifies
+#                                                 # Discord's signature.
+#   npx wrangler secret put XYRO_ADMIN_KEY        # the OWNER key (api/README.md
+#                                                 # section 4). This one is a real
+#                                                 # credential: it can also edit
+#                                                 # the blacklist and trip the
+#                                                 # kill switch, which is why it
+#                                                 # lives here and not in the bot.
+#
+# NOT here, deliberately: the bot TOKEN. It is only needed by
+# register-commands.js, which runs on your machine. Putting it on the Worker
+# would mean every request path could send messages as your bot.
+#
+# After the first deploy, set the Interactions Endpoint URL in the Developer
+# Portal to https://<worker>.<subdomain>.workers.dev - Discord validates it with
+# a signed PING, and refuses to save it unless the Worker answers.
+
+name = "xyro-bot"
+main = "bot-worker.js"
+compatibility_date = "2025-06-01"
+
+[vars]
+# Where the rules, the blacklist and the kill switch live. A Worker-to-Worker
+# subrequest, so it is one hop on Cloudflare's own network.
+XYRO_API_URL = "https://xyro-api.xyroapi.workers.dev"
+
+# How old a signed request may be, in seconds (replay protection). Set to "0" to
+# disable, which is not recommended: a captured interaction stays valid forever.
+SIGNATURE_MAX_AGE = "300"
+
+# Uncomment to lock the bot to one server. Without it, anyone who installs the
+# bot in their own server gets these commands - the permission check still
+# applies, but their admins would pass it.
+# DISCORD_GUILD_ID = "123456789012345678"
+
+# While developing locally, `wrangler dev` will send real requests to the
+# deployed Xyro API. Point this at a staging Worker if you would rather not.
