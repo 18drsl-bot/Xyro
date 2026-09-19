@@ -70,13 +70,14 @@
 		},
 		{
 			"match": "larp_139",
-			"label": "porn hub",
+			"label": "Developer",
 			"color": "#130FFF",
-			"bgImage": "https://xyro-api.xyroapi.workers.dev/media/282907e68034c5b81a97f08a8bc309a26af67068.jpg",
+			"bgImage": "https://xyro-api.xyroapi.workers.dev/media/88145c0845c111adbbb51f40d8670e4dd1399020.jpg",
 			"badge": true,
 			"rank": "developer",
-			"image": "https://xyro-api.xyroapi.workers.dev/media/2e75d7f8e84b6ae48b81dcca3c4020937bc52d3c.jpg",
-			"bgLum": 0.334
+			"image": "https://xyro-api.xyroapi.workers.dev/media/83dca0308751a2951971e8ffa8d902eefa146aae.jpg",
+			"bgLum": 0.112,
+			"bgTransparency": 0.05
 		},
 		{
 			"match": "DiahArianna18",
