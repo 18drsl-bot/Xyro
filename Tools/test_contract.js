@@ -793,5 +793,45 @@ ok("the contrast math is sRGB linearised with the WCAG luminance weights",
 	/0\.2126 \* channel\(c\.R\) \+ 0\.7152 \* channel\(c\.G\) \+ 0\.0722 \* channel\(c\.B\)/.test(lua)
 		&& /v <= 0\.03928 and v \/ 12\.92/.test(lua));
 
+/* ------------------------------------------------------ the hub's two scopes */
+
+/* The hub block (~3,000 lines of feature installs) held 174 locals in ONE
+   scope, and Luau allows 200 per scope - so adding the board half pushed it
+   over and the script stopped compiling for everyone:
+     "Out of local registers when trying to allocate r: exceeded limit 200".
+   The engine half is a function now and hands the board half a table of the
+   names it still uses, which the board half then declares as its own locals.
+
+   Both sides are written by hand, so they have to agree. A field with no local
+   is a silently discarded value; a local with no field reads `nil` in the board
+   half and fails somewhere far away from here. The one name BOTH halves assign
+   (hubRunCommand, the command runner) is deliberately not in either list: it is
+   declared before the wrapper so the two halves share one upvalue. */
+const hubWrap = lua.indexOf("local HUB = (function()");
+const hubClose = lua.indexOf("end)()", hubWrap);
+ok("the hub block still splits into an engine scope and a board scope",
+	hubWrap > 0 && hubClose > hubWrap);
+const hubTable = hubWrap > 0 ? lua.slice(lua.lastIndexOf("return {", hubClose), hubClose) : "";
+const hubFields = [...hubTable.matchAll(/([A-Za-z_][\w]*) = \1,\s/g)].map(m => m[1]).sort();
+const hubLocals = [...(hubWrap > 0 ? lua.slice(hubClose) : "")
+	.matchAll(/^local ([^\n=]+) = HUB\.[^\n]*/gm)]
+	.map(m => m[1])
+	.flatMap(names => names.split(",").map(s => s.trim()).filter(Boolean)).sort();
+ok("the engine hands over a real list of names", hubFields.length > 20 && hubLocals.length > 20,
+	hubFields.length + " fields, " + hubLocals.length + " locals");
+ok("...and the board half declares exactly those, no more and no fewer",
+	hubFields.join() === hubLocals.join(),
+	"only in the table: " + hubFields.filter(n => !hubLocals.includes(n)).join() +
+	" | only in the locals: " + hubLocals.filter(n => !hubFields.includes(n)).join());
+/* The shared name has to be declared OUTSIDE the wrapper: inside it would be a
+   second variable, and the board half's assignment to hubRunCommand would then
+   never reach the command bar the engine built. */
+ok("the one name both halves assign is declared before the wrapper, not in it",
+	/^local hubRunCommand\n/m.test(lua) &&
+		lua.indexOf("local hubRunCommand") < hubWrap &&
+		!/^local hubRunCommand\n/m.test(hubTable));
+ok("that name is the only thing the board half assigns from the engine's scope",
+	/^hubRunCommand = function\(input\)/m.test(lua));
+
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);

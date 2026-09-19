@@ -318,3 +318,32 @@ is a small dependency-free gateway keeper (`node api/bot/presence.js`) that give
 it a green dot by running somewhere always-on; it holds presence and nothing else,
 so commands still go to the Worker. Don't deploy it to Cloudflare - that is the
 one thing Workers can't do.
+
+## Working on the script
+
+**The one hard limit to know about:** Luau allows **200 registers (locals) per
+scope**, and a local holds one from its line to the end of its block. The script
+is one big file, so a feature that declares thirty locals in an already-fat
+scope is fine right up until the scope crosses 200 - and then the executor
+refuses the whole thing with `Out of local registers when trying to allocate x:
+exceeded limit 200`, which reads like a corrupt download rather than a bug in the
+line that crossed it. That happened once, in the hub block, and cost a release.
+
+So before shipping a change to `xyro.lua`:
+
+```bash
+node Tools/test_registers.js     # every scope's peak local count, and the ceiling
+node Tools/test_contract.js      # the script and the site agree on their vocabulary
+node Tools/test_editor_sync.js   # the editor's preview matches what the script draws
+node Tools/test_seals.js         # the badge artwork, its tints and its geometry
+node api/test.js                 # the Worker, including the shipped rules file
+```
+
+`test_registers.js` is the guard for that limit: it walks the file's real block
+structure, reports each scope's peak, and fails over its budget. When a scope
+grows too far, the fix is a **scope**, not a rewrite - wrap a chunk in
+`do ... end`, or in a function that hands back what the rest of the code still
+names (that is what `local HUB = (function() ... end)()` in the hub block is).
+`Tools/test_contract.js` pins the hub's handover table against the locals it
+declares, so a name cannot be dropped from one side and read as `nil` on the
+other.

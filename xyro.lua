@@ -8415,13 +8415,36 @@ end
 
 do
 
+-- HUB SCOPE - read this before adding anything to this block.
+--
+-- This block is ~3,000 lines of feature installs, and it used to share ONE
+-- scope. That is invisible until it is fatal: Luau allows 200 registers per
+-- scope, a local holds one until its block ends, and by the time the board and
+-- the Keys tab were added this scope held 174 of them at its own level. The
+-- script then stopped compiling for everyone -
+--   "Out of local registers when trying to allocate r: exceeded limit 200"
+-- reported at the Keys tab's first row, which is simply where the count crossed.
+--
+-- So the engine half is a function of its own (the counter resets at its `end`)
+-- and hands the board half, through the return at the end of it, the names the
+-- board still uses. Nothing else changed: same order, same closures.
+--
+-- The one name both halves share is hubRunCommand - declared HERE, assigned by
+-- the command runner further down - so it stays a single upvalue instead of
+-- becoming a value snapshot at the boundary.
+--
+-- Tools/test_registers.js measures every scope in this file and fails any that
+-- grows past its budget, which is the build-time check this needed.
+local hubRunCommand
+
+local HUB = (function()
+
 local Players, UIS, player, connect, COL = H.Players, H.UIS, H.player, H.connect, H.COL
 local Binds, make, round, gui, click, main = H.Binds, H.make, H.round, H.gui, H.click, H.main
 local world = H.world
 local Speed, Grav, Esp, Hitbox, Move, Fly, hubFindPlayer, hubSaveConfig, hubKeyFromName = H.Speed, H.Grav, H.Esp, H.Hitbox, H.Move, H.Fly, H.findPlayer, H.saveConfig, H.keyFromName
 local Extra = H.Extra
 local isAdmin = H.isAdmin
-local hubRunCommand
 
 local cmdBox = make("TextBox", {
 	Size = UDim2.new(0, 190, 0, 26),
@@ -11571,6 +11594,36 @@ H.Nametags = {
 	cleanup = ntCleanup,
 	url = NT_FALLBACK_URL,
 }
+
+-- end of the engine half: everything the board half still names goes back out.
+--
+-- A table rather than `return a, b, c, ...` on purpose. Those values are simple
+-- locals, but a list this long has to be marshalled into CONSECUTIVE registers
+-- for the return, and the engine is holding ~160 of the 200 a scope gets at this
+-- point - the same knife-edge that stopped the script compiling. Setting one
+-- field at a time needs one spare register per entry, not thirty-seven at once.
+return {
+	Binds = Binds, CMDS = CMDS, COL = COL, Esp = Esp, Extra = Extra, Fly = Fly,
+	Grav = Grav, Hitbox = Hitbox, Move = Move, ORDER = ORDER, Players = Players,
+	RunService = RunService, Speed = Speed, UIS = UIS, UserAliases = UserAliases,
+	add = add, capitalize = capitalize, click = click, cmdBox = cmdBox,
+	commandLabel = commandLabel, connect = connect, gui = gui,
+	hubFindPlayer = hubFindPlayer, hubKeyFromName = hubKeyFromName,
+	hubSaveConfig = hubSaveConfig, isAdmin = isAdmin, main = main, make = make,
+	ntFetch = ntFetch, onoff = onoff, player = player, round = round,
+	saveAliases = saveAliases, say = say, signature = signature, world = world,
+}
+end)()
+
+-- ...and into this block's own scope, one local each, so the board half reads
+-- them exactly as it did when both halves were one scope.
+local Binds, CMDS, COL, Esp, Extra, Fly, Grav, Hitbox, Move = HUB.Binds, HUB.CMDS, HUB.COL, HUB.Esp, HUB.Extra, HUB.Fly, HUB.Grav, HUB.Hitbox, HUB.Move
+local ORDER, Players, RunService, Speed, UIS = HUB.ORDER, HUB.Players, HUB.RunService, HUB.Speed, HUB.UIS
+local UserAliases, add, capitalize, click, cmdBox = HUB.UserAliases, HUB.add, HUB.capitalize, HUB.click, HUB.cmdBox
+local commandLabel, connect, gui, hubFindPlayer, hubKeyFromName = HUB.commandLabel, HUB.connect, HUB.gui, HUB.hubFindPlayer, HUB.hubKeyFromName
+local hubSaveConfig, isAdmin, main, make, ntFetch = HUB.hubSaveConfig, HUB.isAdmin, HUB.main, HUB.make, HUB.ntFetch
+local onoff, player, round, saveAliases, say = HUB.onoff, HUB.player, HUB.round, HUB.saveAliases, HUB.say
+local signature, world = HUB.signature, HUB.world
 
 local function listWindow(name, title, rows)
 	local existing = gui:FindFirstChild(name)
