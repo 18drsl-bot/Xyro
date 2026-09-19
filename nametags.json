@@ -81,7 +81,8 @@
 			"color": "#FF1FF8",
 			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/240c6ae0ab958b3694a62e9293653f8dfcabd1ce.jpg",
 			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/629414ffd07cfc628423a02475807316cf768152.jpg",
-			"rank": "founder"
+			"rank": "founder",
+			"bg": "#0F0F10"
 		},
 		{
 			"match": "*",
