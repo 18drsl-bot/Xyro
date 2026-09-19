@@ -768,11 +768,36 @@ ok("the local seal build takes an ink, so a rankless badge can have one too",
 ok("a contrasting disc is drawn behind the seal to fill its cut-out check",
 	/checkDisc\.Name = "SealCheck"/.test(badgeBlock) && /checkDisc\.Parent = b\n/.test(badgeBlock)
 		&& /checkCorner\.CornerRadius = UDim\.new\(1, 0\)/.test(badgeBlock));
-/* Below the seal, not on top of it: the seal keeps Roblox's default ZIndex of 1,
-   so a disc at 0 cannot depend on which of the two the build happens to parent
-   first - the same fragility the tag's own shadow had. */
+/* Below the seal, not on top of it - and the order is pinned from BOTH ends.
+   Leaving the seal at whatever ZIndex the engine defaults to, and letting
+   creation order break the tie, is how the disc came out painted OVER the
+   artwork: a plain disc of one ink where the verified mark should be, which is
+   what the badge looked like in game. */
 ok("...under the seal, by ZIndex rather than by creation order",
-	/checkDisc\.ZIndex = 0/.test(badgeBlock));
+	/checkDisc\.ZIndex = 0\n\s*img\.ZIndex = 2/.test(badgeBlock));
+ok("...and the seal's own layer is stated, never left to a default",
+	/local img = Instance\.new\("ImageLabel"\)[\s\S]*?img\.ZIndex = 2/.test(badgeBlock));
+/* A SQUARE, measured off the seal's square. The badge label the disc is parented
+   to is a rectangle (badgeW x nameRowH), so a scale size was taken against two
+   different numbers: the disc stretched into an ellipse that poked out of the
+   scalloped edge along the longer axis - two dark bumps beside the badge - while
+   failing to cover the check's tips along the shorter one. */
+ok("the disc is square, sized from the seal and not from the badge label",
+	/local sealPx = math\.max\(nameSize \+ 5, 15\)/.test(badgeBlock)
+		&& /img\.Size = UDim2\.fromOffset\(sealPx, sealPx\)/.test(badgeBlock)
+		&& /local discPx = math\.max\(math\.floor\(sealPx \* NT_SEAL_CHECK_DISC \+ 0\.5\), 4\)/.test(badgeBlock)
+		&& /checkDisc\.Size = UDim2\.fromOffset\(discPx, discPx\)/.test(badgeBlock)
+		&& !/checkDisc\.Size = UDim2\.fromScale/.test(badgeBlock));
+/* The disc is a HOLE FILLER, so it is only worth showing when the artwork that
+   has the hole is on screen. Visible before then it paints a bare disc where a
+   badge should be - which is exactly what a slow, blocked or poisoned seal
+   image looked like. */
+ok("the disc stays invisible until the seal it sits behind has loaded",
+	/checkDisc\.BackgroundTransparency = 1/.test(badgeBlock)
+		&& /local function revealCheckDisc\(\)/.test(badgeBlock)
+		&& /img\.Image ~= "" and img\.IsLoaded then\n\s*checkDisc\.BackgroundTransparency = 0/.test(badgeBlock));
+ok("...and is revealed on the verifier's own loaded branch, not on a timer's",
+	/if loaded then\n\s*revealCheckDisc\(\)\n\s*return/.test(badgeBlock));
 /* What the disc contrasts is the DISC's colour, not the backdrop's: a seal drawn
    flat black on a white photo still needs a white check inside it. */
 ok("...in an ink that contrasts the seal it fills, not the backdrop",

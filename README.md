@@ -122,6 +122,25 @@ blue seal keeps the exact look of the real Roblox mark. `Tools/test_seals.js`
 pins that size against `media/verified_seal.png`, so artwork and script cannot
 drift.
 
+Three details make that disc behave, and all three are pinned by
+`Tools/test_contract.js` because getting any of them wrong shows a plain disc
+where the badge should be:
+
+- **It is a square, measured off the seal** (89% of the seal's own square), never
+  off the badge label it is parented to. That label is a rectangle — `badgeW` ×
+  `nameRowH` — so a scale size was taken against two different numbers and
+  stretched the disc into an ellipse: it poked out of the scalloped edge on the
+  long axis (two dark bumps beside the badge) and failed to cover the check's
+  tips on the short one.
+- **The layer order is stated, not inherited.** The disc is `ZIndex 0` and the
+  seal is explicitly `2`. Leaving the seal on the engine's default and letting
+  creation order break the tie is how the disc came out painted *over* the
+  artwork.
+- **It stays invisible until the seal has actually loaded** (checked at 0.5s,
+  2.5s and on the 4s/6s verifiers, which fall back to the glyph if the image
+  never arrives). A hole filler with no artwork in front of it is only a bare
+  disc — which is what a slow, blocked or poisoned seal URL used to look like.
+
 That backdrop is the rule's `bgImage` when it has one, **not** its `bg`: a
 background image replaces the pill (the pill's own transparency is set to 1 and the
 picture takes its place), so a white seal on a white *photo* would be invisible

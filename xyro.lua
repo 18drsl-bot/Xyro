@@ -10697,7 +10697,11 @@ local function ntBuild(plr, rule)
 		img.BackgroundTransparency = 1
 		img.AnchorPoint = Vector2.new(0.5, 0.5)
 		img.Position = UDim2.fromScale(0.5, 0.5)
-		img.Size = UDim2.fromOffset(math.max(nameSize + 5, 15), math.max(nameSize + 5, 15))
+		-- the seal's own square. Everything drawn inside the badge (the check's
+		-- disc) is measured against THIS, never against the badge label, which is
+		-- a rectangle (badgeW x nameRowH).
+		local sealPx = math.max(nameSize + 5, 15)
+		img.Size = UDim2.fromOffset(sealPx, sealPx)
 		img.ScaleType = Enum.ScaleType.Fit
 		img.Parent = b
 		-- the disc that fills the artwork's cut-out check, created further down
@@ -10717,7 +10721,7 @@ local function ntBuild(plr, rule)
 				checkDisc:Destroy()
 			end
 			b.Text = (badgeRank or ntIsStaff(plr)) and (NT_BADGE_GLYPH ~= "" and NT_BADGE_GLYPH or "\xE2\x9C\x93") or "\xE2\x9C\x93"
-			b.TextSize = math.max(nameSize + 5, 15)
+			b.TextSize = sealPx
 			b.TextColor3 = badgeTint or ntColor(rule.color, Color3.fromRGB(0, 170, 255))
 			if over then
 				b.AnchorPoint = Vector2.new(1, 0.5)
@@ -10755,17 +10759,43 @@ local function ntBuild(plr, rule)
 		checkDisc.Name = "SealCheck"
 		checkDisc.AnchorPoint = Vector2.new(0.5, 0.5)
 		checkDisc.Position = UDim2.fromScale(0.5, 0.5)
-		checkDisc.Size = UDim2.fromScale(NT_SEAL_CHECK_DISC, NT_SEAL_CHECK_DISC)
+		-- measured off the seal's square, not off this label: a scale size is taken
+		-- against badgeW x nameRowH, which are different numbers, so the disc
+		-- became an ellipse - wider than the seal whenever badgeW was the longer
+		-- side - and poked out of the scalloped edge at both ends of that axis
+		-- instead of hiding behind the artwork. Two dark bumps beside a badge is
+		-- that ellipse, not a second badge.
+		local discPx = math.max(math.floor(sealPx * NT_SEAL_CHECK_DISC + 0.5), 4)
+		checkDisc.Size = UDim2.fromOffset(discPx, discPx)
 		checkDisc.BackgroundColor3 = ntCheckInk(ntLuminance(discColor))
 		checkDisc.BorderSizePixel = 0
-		-- under the seal: this ZIndex is local to the badge label, and the seal
-		-- keeps Roblox's default 1, so the order cannot depend on which was
-		-- created first
+		-- INVISIBLE until the seal it sits behind has loaded (revealCheckDisc).
+		-- The disc is a hole filler: with no artwork in front of it, all it can
+		-- do is paint a bare disc where a badge should be - which is a blob, and
+		-- is what a blocked, slow or poisoned seal image looked like.
+		checkDisc.BackgroundTransparency = 1
+		-- under the seal, and the order is pinned from BOTH ends: the disc at 0
+		-- and the artwork explicitly at 2. Trusting the seal's default ZIndex
+		-- (and creation order to break the tie) is how the disc ended up painted
+		-- OVER the artwork, hiding the whole mark behind a plain disc.
 		checkDisc.ZIndex = 0
+		img.ZIndex = 2
 		local checkCorner = Instance.new("UICorner")
 		checkCorner.CornerRadius = UDim.new(1, 0)
 		checkCorner.Parent = checkDisc
 		checkDisc.Parent = b
+		-- the seal has to have really arrived before the disc is worth showing:
+		-- confirmed at a few points rather than once, because a cached image fills
+		-- immediately and a first-time download can take a second or two
+		local function revealCheckDisc()
+			if checkDisc and checkDisc.Parent and img.Image ~= "" and img.IsLoaded then
+				checkDisc.BackgroundTransparency = 0
+				return true
+			end
+			return false
+		end
+		task.delay(0.5, revealCheckDisc)
+		task.delay(2.5, revealCheckDisc)
 		local inkSeal = sealInk and ntSealAsset(badgeRank, sealInk) or nil
 		local sealUrl = nil
 		if inkSeal then
@@ -10774,11 +10804,13 @@ local function ntBuild(plr, rule)
 			-- trusted but not guaranteed (getcustomasset can still refuse the
 			-- file), so verify it like any other seal
 			task.delay(4, function()
-				if img.Parent and b.Parent and not (img.Image ~= "" and img.IsLoaded) then
+				if not (img.Parent and b.Parent and img.Image ~= "" and img.IsLoaded) then
 					badgeGlyphFallback()
 					if b.Parent then
 						b.TextColor3 = sealInk -- the glyph, in the ink that contrasts
 					end
+				else
+					revealCheckDisc()
 				end
 			end)
 		elseif sealInk then
@@ -10820,6 +10852,7 @@ local function ntBuild(plr, rule)
 			end
 			local loaded = img.Image ~= "" and img.IsLoaded
 			if loaded then
+				revealCheckDisc()
 				return
 			end
 			local triedEngine = img:GetAttribute("EngineSeal") == true
