@@ -145,6 +145,7 @@ let blWrites = [];
 let hereData = {}; // the here/ node: who is running the script right now
 let blNoCred = false; // the Worker has no database credential, so writes are refused
 let apiPuts = 0; // publishes that went through the API (not GitHub)
+let apiDbRev = 7; // the Worker's own rules revision, served as x-xyro-sha "d1-<rev>"
 const OWNER_KEY = "owner-secret";
 
 /* relative URLs resolve against the page, exactly as a browser resolves them -
@@ -214,7 +215,11 @@ global.fetch = async (url, init) => {
 				gh.file = JSON.parse(init.body);
 				return new Response(JSON.stringify({ ok: true, sha: "api-sha-" + ++apiPuts }), { status: 200 });
 			}
-			return new Response(text(gh.file), { status: 200, headers: { "x-xyro-sha": gh.sha() } });
+			/* The real Worker answers "d1-<rev>" when its OWN database holds the rules
+			   and a git blob sha when the repo file is still the store. That prefix is
+			   the difference between a publish players see and one they never will, so
+			   the mock models both instead of only the git one. */
+			return new Response(text(gh.file), { status: 200, headers: { "x-xyro-sha": apiStoresRules ? "d1-" + apiDbRev : gh.sha() } });
 		}
 		if (u.pathname === "/blacklist") {
 			// reading is gated by the CLIENT key, which the editor sends as ?key=
@@ -685,6 +690,95 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("...and does not call it a key problem", !/owner key refused/i.test(el("blockState").textContent) && /write the database/i.test(toastsAdded), toastsAdded.slice(0, 200));
 	blNoCred = false;
 	localStorage.removeItem("xyro_owner_key");
+
+	/* --- 8. a publish that cannot reach players is refused ---------------- */
+
+	/* The API's database owns the rules (x-xyro-sha is "d1-<rev>") and this
+	   browser has no owner key - only a GitHub token. Writing nametags.json then
+	   looks EXACTLY like a successful publish while every player keeps reading
+	   the Worker's own row. That is the state that shipped a tag nobody could
+	   see, and "Published" on a write no player reads is worse than an error,
+	   because it ends the search for the problem. */
+	apiJson = '{"api":{"url":"https://api.example","key":"pub-key"}}';
+	apiStoresRules = true;
+	apiDbRev = 12;
+	localStorage.removeItem("xyro_owner_key");
+	localStorage.setItem("xyro_token", "github_pat_test");
+	calls.length = 0;
+	const dbOwns = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle();
+	ok("the editor can tell the API's database holds the rules", dbOwns.liveSha === "d1-12", String(dbOwns.liveSha));
+	ok("the chip stops promising GitHub and asks for the owner key", el("tokenChip").textContent === "owner key needed to publish", el("tokenChip").textContent);
+	ok("the button stops saying Publish to GitHub in that state", el("publishBtn").innerHTML.indexOf("GitHub") === -1, el("publishBtn").innerHTML);
+
+	dbOwns.cfg = { options: { ...dbOwns.cfg.options, size: 41 }, tags: dbOwns.cfg.tags };
+	const ghPutsBeforeRefusal = gh.puts;
+	const toastsBeforeRefusal = toastCount();
+	await dbOwns.publish();
+	ok("a publish with no owner key writes NOTHING to GitHub", gh.puts === ghPutsBeforeRefusal, "github puts +" + (gh.puts - ghPutsBeforeRefusal));
+	ok("...and never claims it published", !/Published/.test(newToasts(toastsBeforeRefusal)), newToasts(toastsBeforeRefusal).slice(0, 200));
+	ok("...it names where players actually read from", /database/.test(el("status").textContent), el("status").textContent);
+	ok("...and asks for the owner key, the one thing that unlocks it", /owner key/i.test(newToasts(toastsBeforeRefusal)), newToasts(toastsBeforeRefusal).slice(0, 200));
+
+	// the SAME state with the key saved: the API is used, so the refusal must not fire
+	localStorage.setItem("xyro_owner_key", OWNER_KEY);
+	apiPuts = 0;
+	const dbOwnsKey = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle();
+	ok("with the owner key saved the same state publishes through the API", el("tokenChip").textContent === "publish: API", el("tokenChip").textContent);
+	dbOwnsKey.cfg = { options: { ...dbOwnsKey.cfg.options, size: 42 }, tags: dbOwnsKey.cfg.tags };
+	await dbOwnsKey.publish();
+	ok("...and the write lands", /published through the API/.test(el("status").textContent), el("status").textContent);
+
+	/* The over-blocking check. When the repo file IS still the store the GitHub
+	   path has to keep working - a guard that refuses everything would be a
+	   different bug wearing the same fix. */
+	apiStoresRules = false;
+	localStorage.removeItem("xyro_owner_key");
+	const repoStore = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle();
+	const repoPutsBefore = gh.puts;
+	repoStore.cfg = { options: { ...repoStore.cfg.options, size: 43 }, tags: repoStore.cfg.tags };
+	await repoStore.publish();
+	ok("while the repo file is still the store, a GitHub publish still works",
+		gh.puts === repoPutsBefore + 1 && gh.file.options.size === 43,
+		"github puts +" + (gh.puts - repoPutsBefore) + ", size " + gh.file.options.size);
+
+	/* And no answer at all: the API is unreachable, so which store players read
+	   from is not knowable. The invariant that matters is that NO GitHub write
+	   happens and nothing claims success - whichever honest reason is printed,
+	   guessing here is the same dead end. (The API's own error path also stops
+	   before any write, which is why this asserts the outcome rather than one
+	   particular message.) */
+	localStorage.setItem("xyro_owner_key", OWNER_KEY);
+	apiStoresRules = true;
+	apiDown = true;
+	const unknownStore = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle();
+	const unknownPutsBefore = gh.puts;
+	const toastsBeforeUnknown = toastCount();
+	unknownStore.cfg = { options: { ...unknownStore.cfg.options, size: 44 }, tags: unknownStore.cfg.tags };
+	await unknownStore.publish();
+	ok("an unreachable API never becomes a silent GitHub publish", gh.puts === unknownPutsBefore, "github puts +" + (gh.puts - unknownPutsBefore));
+	ok("...and it never claims success", !/Published/.test(newToasts(toastsBeforeUnknown)), newToasts(toastsBeforeUnknown).slice(0, 160));
+	ok("...reporting a failure instead", /fail|could not|did not answer/i.test(el("status").textContent), el("status").textContent);
+	apiDown = false;
+	apiStoresRules = false;
+	localStorage.removeItem("xyro_owner_key");
+
+	/* structural: the refusal for a page with no owner key, and the probe it now
+	   depends on instead of a remembered sha */
+	ok("a page with no owner key asks the API where the rules live before writing to GitHub",
+		script.includes("async function rulesOrigin()") && script.includes("const origin = await rulesOrigin();"), "");
+	ok("...and an API that cannot answer is not mistaken for the repo store",
+		/rulesOrigin[\s\S]*?return "unknown";/.test(script), "");
+
+	/* structural: the two lines that shipped the lie in the first place */
+	ok("the publish dialog only promises raw GitHub when the repo file IS the store",
+		/const reach = NT_BASE/.test(script) && script.includes('+ summary + "\\n\\n" + reach)') &&
+		/with no API configured, the game reads raw GitHub live/.test(script), "");
+	ok("a publish whose read-back never ran is not reported as checked",
+		script.includes("if (landed === null) {") && script.includes("} else if (landed) {") && !script.includes("if (landed !== false) {"), "");
 
 	console.log("\n" + (failures.length ? failures.length + " FAILED" : pass + " checks passed") + (failures.length ? " (" + pass + " passed)" : ""));
 	process.exit(failures.length ? 1 : 0);

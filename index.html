@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r12</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r13</span>
 		<span class="chip" id="tokenChip" title="token status">no token</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules now (through the API when one is configured, otherwise straight from GitHub)">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -628,7 +628,7 @@
 	<button class="subtle" id="revertBtn">Revert</button>
 	<button class="subtle" id="exportBtn">Export</button>
 	<button class="subtle" id="importBtn">Import</button>
-	<button id="publishBtn">&#9650;&nbsp; Publish to GitHub</button>
+	<button id="publishBtn">&#9650;&nbsp; Publish</button>
 </div>
 
 <div id="toasts"></div>
@@ -1712,11 +1712,43 @@ setInterval(pollUsers, 20000);
 pollUsers();
 
 /* ---------- token + owner key ---------- */
+/* Where the published rules actually LIVE. The Worker answers x-xyro-sha
+   "d1-<rev>" when its OWN database holds them, and a git blob sha when the repo
+   file is still the store (the database is a seed-and-fallback, not a
+   migration, so both states are real). That three-character prefix decides
+   whether a publish to GitHub is a publish or a write nobody reads: the Worker
+   serves its own row FIRST, so once a row exists a repo write cannot reach a
+   single player - it only makes the repo file disagree with the game, and the
+   next API publish silently reverts it. */
+function databaseOwnsRules() {
+	return typeof liveSha === "string" && liveSha.slice(0, 3) === "d1-";
+}
+/* What GET /nametags would do RIGHT NOW: "database" when the Worker's own row is
+   the store, "repo" while the file still is, "unknown" when the API cannot be
+   asked. This is a READ, not a memory, and deliberately so - liveSha is a
+   publish guard that is only updated when a read happens, so a read that landed
+   while the store changed leaves it pointing at the wrong origin. Deciding a
+   publish's destination from a stale value is how a "database" page publishes
+   to GitHub, and it is exactly the mistake this replaced. */
+async function rulesOrigin() {
+	if (!NT_BASE) return "repo";
+	try {
+		const res = await fetch(stamp(NT_BASE + "/nametags?fresh=1"), { cache: "no-store" });
+		if (!res.ok) return "unknown";
+		const sha = res.headers.get("x-xyro-sha") || "";
+		if (sha.slice(0, 3) === "d1-") return "database";
+		return sha ? "repo" : "unknown";
+	} catch (_) {
+		return "unknown";
+	}
+}
 /* One place that decides what Publish will do, so the chip can never disagree
    with the button: the API when a key is saved and an API is configured, else
-   GitHub with the token, else nothing. */
+   the owner key is the only thing that CAN publish, else GitHub with the
+   token, else nothing. */
 function publishRoute() {
 	if (getOwnerKey() && NT_BASE) return "api";
+	if (NT_BASE && databaseOwnsRules()) return "locked";
 	if (getToken()) return "github";
 	return "none";
 }
@@ -1725,8 +1757,14 @@ function refreshKeyChip() {
 	$("ownerState").textContent = hasKey ? "key saved" : "not set";
 	$("ownerState").className = "chip" + (hasKey ? " on" : "");
 	const route = publishRoute();
-	$("tokenChip").textContent = route === "api" ? "publish: API" : route === "github" ? "publish: GitHub" : "no publish key";
+	$("tokenChip").textContent = route === "api" ? "publish: API"
+		: route === "locked" ? "owner key needed to publish"
+		: route === "github" ? "publish: GitHub"
+		: "no publish key";
 	$("tokenChip").className = "chip" + (route === "none" ? "" : " on");
+	/* the button said "Publish to GitHub" in every mode, which is how a
+	   repo-only publish read as the normal, working path */
+	$("publishBtn").innerHTML = route === "github" ? "&#9650;&nbsp; Publish to GitHub" : "&#9650;&nbsp; Publish";
 }
 function refreshTokenChip() {
 	const has = !!getToken();
@@ -2049,6 +2087,7 @@ async function load() {
 		const json = await fetchConfig({ checkApi: true, report: true });
 		live = { options: json.config.options || {}, tags: Array.isArray(json.config.tags) ? json.config.tags : [] };
 		liveSha = json.sha;
+		refreshKeyChip(); // liveSha is what decides whether a GitHub publish can reach players
 		saveSnapshot(live);
 		/* the PUBLISHED rules always win on open - a stale draft must never
 		   masquerade as the live config. A differing draft is offered as an
@@ -2105,7 +2144,7 @@ async function refreshLive(sayIt, opts) {
 	try {
 		const json = await fetchConfig(opts);
 		const fresh = { options: json.config.options || {}, tags: Array.isArray(json.config.tags) ? json.config.tags : [] };
-		if (sameJSON(fresh, live)) { if (json.sha) liveSha = json.sha; return false; }
+		if (sameJSON(fresh, live)) { if (json.sha) liveSha = json.sha; refreshKeyChip(); return false; }
 		/* The copy that just arrived is the one we published OVER. That is either
 		   a stale CDN revision or a real revert by someone else, and guessing
 		   wrong is what makes the editor look broken in both directions - so ask
@@ -2121,6 +2160,7 @@ async function refreshLive(sayIt, opts) {
 		live = fresh;
 		saveSnapshot(live);
 		if (json.sha) liveSha = json.sha;
+		refreshKeyChip();
 		if (!hadEdits && editing < 0) {
 			cfg = deepCopy(live);
 			saveDraft();
@@ -2321,7 +2361,33 @@ $("publishBtn").onclick = async () => {
 	if (getOwnerKey() && NT_BASE) {
 		const handled = await publishThroughApi();
 		if (handled || !getToken()) return;
+		/* The API could not publish. ASK where the rules live before falling
+		   back, rather than trust a value the page happens to be holding. */
+		const origin = await rulesOrigin();
+		if (origin !== "repo") {
+			const msg = origin === "database"
+				? "The API could not publish (see the status line). Players read its database, not the repo file, so falling back to GitHub would change nothing in game. Your draft is safe - fix the API and Publish again."
+				: "The API did not answer, so there is no way to tell whether players read its database or the repo file. Publishing to GitHub might write a copy nobody reads. Your draft is safe - try again once the API answers.";
+			status(msg, "err");
+			toast(msg, "err", 16);
+			return;
+		}
 		toast("Publishing through the API is unavailable - falling back to your GitHub token", "info", 10);
+	} else if (NT_BASE) {
+		/* No owner key is saved here, so the only route left would be GitHub - and
+		   if the API's database holds the rules, that route writes a file no
+		   player reads while saying "Published". Refuse, and name the one field
+		   that fixes it. */
+		const origin = await rulesOrigin();
+		if (origin !== "repo") {
+			const msg = origin === "database"
+				? "Players read the API's database, not the repo file, so a GitHub publish cannot reach them. Paste your owner key below and Publish goes through the API."
+				: "The API did not answer, so there is no way to tell whether players read its database or the repo file. Publishing to GitHub might write a copy nobody reads. Paste your owner key below to publish through the API.";
+			status(msg, "err");
+			toast(msg, "err", 18);
+			$("ownerCard").scrollIntoView({ behavior: "smooth" });
+			return;
+		}
 	}
 	const token = getToken();
 	if (!token) {
@@ -2383,7 +2449,15 @@ $("publishBtn").onclick = async () => {
 			meta = await cur.json();
 		}
 		const summary = live ? publishSummary() : cfg.tags.length + " rules";
-		if (!confirm("Publish to " + REPO + "?\n\n" + summary + "\n\nEvery player running Xyro gets this within seconds (the game reads raw GitHub live, with an API double-check every ~60s).")) { status("publish cancelled", "info"); return; }
+		/* Name where this actually lands. It used to promise "the game reads raw
+		   GitHub live", which stopped being true the moment the API's database
+		   became the store - and that promise is why a repo-only publish looked
+		   like a normal, working publish. Getting here means the database does
+		   NOT own the rules, so the repo file really is still the store. */
+		const reach = NT_BASE
+			? "Your API serves the repo file (its database has no row yet, so the file is still the store) - clients are current within ~30s."
+			: "Every player running Xyro gets this within seconds - with no API configured, the game reads raw GitHub live.";
+		if (!confirm("Publish to " + REPO + "?\n\n" + summary + "\n\n" + reach)) { status("publish cancelled", "info"); return; }
 		/* one canonical body string for GitHub, the local server sync, and
 		   the draft (previously the sync silently referenced a shadowed
 		   outer body -> local copy never actually updated) */
@@ -2462,7 +2536,12 @@ $("publishBtn").onclick = async () => {
 				}, waitS * 1000);
 			}
 		}
-		if (landed !== false) {
+		if (landed === null) {
+			/* the verification read did not answer at all, so "checked against the
+			   file" would be a claim this never made - say only what is known */
+			status("published - the read-back check did not answer, so it is unverified", "info");
+			toast("Published, but the read-back check did not answer. Reload (Ctrl+Shift+R) before trusting it.", "info", 12);
+		} else if (landed) {
 			status("published and checked against the file" + (liveSha ? " (sha " + String(liveSha).slice(0, 7) + ")" : "") +
 				(NT_BASE ? " - the API serves it, so every client is current within ~30s" : " - in game in seconds, or run !nametagsfetch now"), "ok");
 			toast(NT_BASE ? "Published" : "Published - purging CDN...", "ok", 4);

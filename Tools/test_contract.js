@@ -416,5 +416,17 @@ ok("the bot guide documents the green dot and where it can run",
 ok("the bot guide does not promise presence from the Worker",
 	!/needs no always-on host[^]*?presence works/i.test(botDoc), "");
 
+/* The same dead end reaches the EDITOR, which is where it actually bit: a page
+   with a GitHub token and no owner key published to the repo and said
+   "Published". The guide is the only place that explains it, so it may not
+   quietly lose the paragraph - the bot half alone would leave the trap live. */
+const editorSrc = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
+ok("the editor asks where the rules live before it would write to GitHub",
+	editorSrc.includes("async function rulesOrigin()") && editorSrc.includes("const origin = await rulesOrigin();"), "");
+ok("...and refuses instead of reporting a publish no player reads",
+	/Players read the API's database, not the repo file, so a GitHub publish cannot reach them/.test(editorSrc), "");
+ok("the bot guide explains the editor's version of the same trap",
+	/The tag editor is not exempt from this/i.test(botDoc), "");
+
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);

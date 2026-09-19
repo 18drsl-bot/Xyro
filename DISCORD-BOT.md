@@ -24,6 +24,15 @@ works (the commit succeeds, the file changes) and **changes nothing in game**.
 That is the trap this page exists to keep you out of. Everything below talks to
 the Worker instead.
 
+**The tag editor is not exempt from this.** Publishing there needs the owner key
+saved in the browser; with only a GitHub token connected it used to publish to
+the repo and report `Published`, which is the same trap with a better disguise.
+It now asks the Worker where the rules live before writing anything and refuses
+when the answer is its database (or when the API cannot answer at all), telling
+you to save the owner key. That is why Publish can decline with "owner key needed
+to publish" while a GitHub token is connected - the token is not what players
+read.
+
 ## Setup (once)
 
 The bot needs your **owner key** on the machine it runs on. Either:
