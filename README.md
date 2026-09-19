@@ -105,13 +105,25 @@ white check — after the name; every rule with `badge: true` gets it, staff or 
 `trial` / `purple` / `partner`) · `height` · `imageSize`. First matching rule wins —
 put exact names above the `*` catch-all.
 
-Badges look after themselves: a seal whose colour would blend into its pill (the
+Badges look after themselves: a seal whose colour would blend into its backdrop (the
 white HR seal on a white pill, the navy partner seal on a black one) is drawn flat
-black on a light pill or flat white on a dark one instead. The check is cut out of
-the seal, so it takes the pill's colour either way and still reads as a check. A
-seal that already contrasts is left exactly as it is, so nothing needs configuring
-and a background image is judged by the rule's `bg` (or the global `pillColor`),
-which is the same colour the site previews against.
+black on a light backdrop or flat white on a dark one instead. The check is cut out
+of the seal, so it takes the backdrop's colour either way and still reads as a
+check. A seal that already contrasts is left exactly as it is, so nothing needs
+configuring.
+
+That backdrop is the rule's `bgImage` when it has one, **not** its `bg`: a
+background image replaces the pill (the pill's own transparency is set to 1 and the
+picture takes its place), so a white seal on a white *photo* would be invisible
+however black `bg` is. The editor measures each background picture's mean
+brightness with a canvas readback when the rule is saved — and once for every rule
+in a document that was published before this existed, so **opening the editor is
+enough to fix a live tag's badge** — and publishes it as the rule's `bgLum` (0 =
+black, 1 = white, WCAG relative luminance). The script clamps it and runs the same
+contrast rule against it. A picture the browser cannot read (no CORS headers, or a
+broken URL) publishes no number at all and that rule keeps the pill-colour
+behaviour, which is what every rule did before. `bgLum` has no input in the site on
+purpose: it is measured, not typed.
 
 **Options:** `size` · `userSize` · `height` · `imageSize` · `maxDistance` (studs, 0 =
 always) · `showDistance` · `showHealth` · `showBox` (pill background on/off) ·

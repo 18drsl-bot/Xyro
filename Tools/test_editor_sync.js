@@ -96,7 +96,11 @@ const el = id => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id)
    `canvasPlan.blobBytes` is how big the re-encoded picture comes out. No pixels
    are drawn - the assertions are about what the editor decides to send. */
 let bitmapPlan = { width: 2000, height: 1000 };
-let canvasPlan = { alpha: false, blobBytes: 40 * 1024 };
+/* `rgb` is the brightness a "decoded" picture has when it is drawn: the badge
+   contrast path reads pixels back and averages them, so a test has to be able to
+   say how bright the picture is instead of only how big it is. Unset, the fill is
+   what the resize tests have always seen. */
+let canvasPlan = { alpha: false, blobBytes: 40 * 1024, rgb: null };
 let canvasCalls = [];
 /* every drawImage, minus the bitmap itself: [sx, sy, sw, sh, dx, dy, dw, dh]. The
    source rect is how a crop becomes visible to a test with no pixels in it. */
@@ -104,9 +108,13 @@ let canvasDraws = [];
 let bitmapCalls = 0;
 
 if (typeof global.createImageBitmap !== "function") global.createImageBitmap = null;
-global.createImageBitmap = async () => {
+global.createImageBitmap = async (blob) => {
 	bitmapCalls++;
 	if (bitmapPlan.fail) throw new Error("not an image");
+	/* a real decoder refuses anything that is not a picture - which is how a 404
+	   body (the API answers those in JSON) reaches the badge-contrast path: it has
+	   to fail there rather than be measured as an average of text bytes */
+	if (blob && blob.type && !/^image\//i.test(blob.type)) throw new Error("not an image: " + blob.type);
 	return { width: bitmapPlan.width, height: bitmapPlan.height, close() {} };
 };
 
@@ -116,7 +124,18 @@ function makeCanvas() {
 	canvas.height = 0;
 	canvas.getContext = () => ({
 		drawImage(...a) { canvasDraws.push(a.slice(1)); },
-		getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4).fill(canvasPlan.alpha ? 128 : 255) }),
+		getImageData: (x, y, w, h) => {
+			const data = new Uint8ClampedArray(w * h * 4).fill(canvasPlan.alpha ? 128 : 255);
+			if (canvasPlan.rgb) {
+				for (let i = 0; i < data.length; i += 4) {
+					data[i] = canvasPlan.rgb[0];
+					data[i + 1] = canvasPlan.rgb[1];
+					data[i + 2] = canvasPlan.rgb[2];
+					data[i + 3] = 255;
+				}
+			}
+			return { data };
+		},
 	});
 	canvas.toBlob = (cb, type, quality) => {
 		canvasCalls.push({ type, quality, width: canvas.width, height: canvas.height });
@@ -369,7 +388,8 @@ const factory = new Function(
 	"  get publishGuard(){return publishGuard;}, get liveSha(){return liveSha;}," +
 	"  refreshLive: refreshLive, publish: () => $(\"publishBtn\").onclick(), canonJSON: canonJSON, asConfig: asConfig," +
 	"  renderPreview: renderPreview, renderEditorPreview: renderEditorPreview, editorTag: editorTag," +
-	"  mediaURL: mediaURL, sealInk: sealInk, contrastRatio: contrastRatio, get rulesSource(){return rulesSource;}," +
+	"  mediaURL: mediaURL, sealInk: sealInk, sealInkForLum: sealInkForLum, relLuminance: relLuminance, contrastRatio: contrastRatio, get rulesSource(){return rulesSource;}," +
+	"  measureBgLum: measureBgLum, bgLumOf: bgLumOf, ensureBgLum: ensureBgLum, measureRuleBackgrounds: measureRuleBackgrounds," +
 	"  openEditor: openEditor, closeEditor: closeEditor, changed: changed, renderUsers: renderUsers," +
 	"  blockAccount: blockAccount, loadBlacklist: loadBlacklist, renderBlacklist: renderBlacklist, pollUsers: pollUsers," +
 	"  toasts: () => $(\"toasts\").children.map(t => t.textContent)," +
@@ -570,6 +590,152 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 		el("edBadgeCheck").style.filter === "", JSON.stringify(el("edBadgeCheck").style.filter));
 	el("fBgHex").value = "";
 	hosted.closeEditor();
+
+	/* --- 5c. a background PICTURE decides the ink, not the pill colour ---- */
+
+	/* A rule's bgImage does not sit behind the pill colour, it REPLACES it: the
+	   game sets the pill's own transparency to 1 and fills the pill with the
+	   picture. So weighing the seal against the pill colour weighs it against
+	   something nobody can see - a white HR seal on a white PHOTO disappears
+	   whatever the rule's bg says. The picture's mean brightness is measured here
+	   (one canvas readback per URL) and published as the rule's bgLum on the same
+	   0..1 luminance scale the script's ntLuminance returns, so the game's ink
+	   choice and this preview cannot disagree. */
+	const WHITE_BG = "white-bg.jpg";
+	const BLACK_BG = "black-bg.jpg";
+	const GREY_BG = "grey-bg.jpg";
+	const RED_BG = "red-bg.jpg";
+	const urlOf = n => "https://api.example/media/" + n;
+	mediaStored.add(WHITE_BG);
+	mediaStored.add(BLACK_BG);
+	mediaStored.add(GREY_BG);
+	mediaStored.add(RED_BG);
+
+	canvasPlan.rgb = [255, 255, 255];
+	const lumWhite = await hosted.measureBgLum(urlOf(WHITE_BG));
+	canvasPlan.rgb = [0, 0, 0];
+	const lumBlack = await hosted.measureBgLum(urlOf(BLACK_BG));
+	canvasPlan.rgb = [128, 128, 128];
+	const lumGrey = await hosted.measureBgLum(urlOf(GREY_BG));
+	/* a COLOURED picture is what pins the weights: pure red is 0.2126 by the WCAG
+	   formula, 1.0 by "how bright is the red channel", and the script's own
+	   ntLuminance returns 0.2126 for the same pixel - so a brightness that is
+	   merely monotonic (or one channel) would pick a different ink than the game */
+	canvasPlan.rgb = [255, 0, 0];
+	const lumRed = await hosted.measureBgLum(urlOf(RED_BG));
+	canvasPlan.rgb = null;
+	/* the resize tests read this log to see the crop rectangle they got, so the
+	   measurements above must not be left in it */
+	canvasDraws = [];
+
+	ok("a white picture measures as luminance 1", lumWhite === 1, String(lumWhite));
+	ok("a black picture measures as luminance 0", lumBlack === 0, String(lumBlack));
+	ok("a coloured picture is measured with the WCAG weights, not one channel",
+		Math.abs(lumRed - 0.2126) < 1e-4, String(lumRed));
+	ok("...and the scale is the script's own, not a different brightness curve",
+		Math.abs(lumGrey - api.relLuminance("#808080")) < 1e-9,
+		lumGrey + " vs " + api.relLuminance("#808080"));
+
+	/* one URL is measured ONCE: the preview re-renders on every keystroke, and a
+	   measurement per redraw would put a fetch and a decode behind each one */
+	const lumCallsBefore = calls.filter(c => c.url.pathname === "/media/" + WHITE_BG).length;
+	await hosted.measureBgLum(urlOf(WHITE_BG));
+	await hosted.measureBgLum(urlOf(WHITE_BG));
+	ok("a picture is measured once, however often it is asked for",
+		calls.filter(c => c.url.pathname === "/media/" + WHITE_BG).length === lumCallsBefore,
+		calls.filter(c => c.url.pathname === "/media/" + WHITE_BG).length + " vs " + lumCallsBefore);
+	/* ...and even a picture that cannot be measured is answered from the cache:
+	   a promise that resolves without landing in it makes the preview kick a fresh
+	   measurement on every redraw, which is a loop that never yields to the page */
+	ok("a picture that cannot be read measures as nothing",
+		(await hosted.measureBgLum("rbxassetid://12345")) === null &&
+			(await hosted.measureBgLum(urlOf("missing-picture.jpg"))) === null,
+		"unreadable artwork must not be reported as a brightness");
+	ok("...but it is remembered as unmeasurable, so the preview stops asking",
+		hosted.bgLumOf("rbxassetid://12345") === null && hosted.bgLumOf(urlOf("missing-picture.jpg")) === null,
+		String(hosted.bgLumOf("rbxassetid://12345")) + "/" + String(hosted.bgLumOf(urlOf("missing-picture.jpg"))));
+
+	/* the ink the script would pick for that picture - flat black on a white one,
+	   flat white on a black one, and untouched when the tint already reads */
+	ok("the picture's brightness is what picks the ink",
+		api.sealInkForLum(1, "#ffffff") === "black" && api.sealInkForLum(0, "#2452dc") === "white",
+		api.sealInkForLum(1, "#ffffff") + "/" + api.sealInkForLum(0, "#2452dc"));
+	ok("...and the pill colour still decides when there is no picture",
+		api.sealInkForLum(api.relLuminance("#ffffff"), "#ffffff") === api.sealInk("#ffffff", "#ffffff"),
+		"");
+
+	/* what a rule is published with: the number, or none at all */
+	const whiteRule = { match: "someone", label: "pic", bgImage: urlOf(WHITE_BG) };
+	ok("saving a rule measures its picture into bgLum",
+		(await hosted.ensureBgLum(whiteRule)) === true && whiteRule.bgLum === 1, JSON.stringify(whiteRule));
+	ok("...and asks for nothing when the number is already right",
+		(await hosted.ensureBgLum(whiteRule)) === false, JSON.stringify(whiteRule));
+	const changedRule = { bgImage: urlOf(BLACK_BG), bgLum: 1 };
+	await hosted.ensureBgLum(changedRule);
+	ok("changing the picture replaces the old picture's brightness",
+		changedRule.bgLum === 0, JSON.stringify(changedRule));
+	/* ...and SAVING a rule is what actually puts the number in the document: a
+	   measurement nothing writes down is a measurement the game never sees */
+	hosted.openEditor(0);
+	el("fBgImage").value = urlOf(GREY_BG);
+	await hosted.measureBgLum(urlOf(GREY_BG));
+	await el("edSave").onclick();
+	/* 3 decimal places on purpose: it is a brightness, not a measurement record, and
+	   the file it lands in is re-downloaded by every player every refresh */
+	ok("saving a rule publishes the measured brightness with it",
+		typeof hosted.cfg.tags[0].bgLum === "number" && Math.abs(hosted.cfg.tags[0].bgLum - api.relLuminance("#808080")) < 5e-4,
+		JSON.stringify(hosted.cfg.tags[0]));
+
+	const staleRule = { bgImage: urlOf("missing-picture.jpg"), bgLum: 0.5 };
+	await hosted.ensureBgLum(staleRule);
+	ok("a picture that cannot be read clears the number instead of keeping a stale one",
+		staleRule.bgLum === undefined, JSON.stringify(staleRule));
+	const emptiedRule = { bgImage: "", bgLum: 0.5 };
+	ok("...and removing the picture does the same",
+		(await hosted.ensureBgLum(emptiedRule)) === true && emptiedRule.bgLum === undefined, JSON.stringify(emptiedRule));
+
+	/* the mini preview has to SHOW that, on both sides of the flip */
+	hosted.openEditor(0); // founder: silver, the seal that vanishes on a white picture
+	el("fBgImage").value = urlOf(WHITE_BG);
+	await hosted.measureBgLum(urlOf(WHITE_BG));
+	hosted.renderEditorPreview();
+	ok("the preview draws the badge black on a white background picture",
+		el("edBadgeCheck").style.filter === "brightness(0)" && /background picture/.test(el("edBadgeCheck").title),
+		JSON.stringify(el("edBadgeCheck").style.filter) + " / " + el("edBadgeCheck").title);
+	el("fBgImage").value = urlOf(BLACK_BG);
+	el("fRank").value = "partner"; // navy on black: the other direction
+	await hosted.measureBgLum(urlOf(BLACK_BG));
+	hosted.renderEditorPreview();
+	ok("...and white on a black one",
+		el("edBadgeCheck").style.filter === "brightness(0) invert(1)", JSON.stringify(el("edBadgeCheck").style.filter));
+	/* the same two rules judged by the pill colour would be the wrong way round:
+	   the pill is white by default, so the navy seal is left alone there */
+	el("fBgImage").value = "";
+	el("fRank").value = "";
+	el("fBgHex").value = "#FFFFFF";
+	hosted.renderEditorPreview();
+	ok("a flat pill still uses the pill colour",
+		el("edBadgeCheck").style.filter === "brightness(0)", JSON.stringify(el("edBadgeCheck").style.filter));
+	el("fBgHex").value = "";
+	hosted.closeEditor();
+
+	/* A rule published before bgLum existed has no number, so a document is
+	   measured through once when it loads: that is what makes OPENING the editor
+	   enough to fix a badge that is already live, instead of every tag needing to
+	   be opened and saved by hand. */
+	const servedDoc = gh.file;
+	canvasPlan.rgb = [255, 255, 255];
+	gh.file = { options: { size: 15 }, tags: [{ match: "picuser", label: "pic", bgImage: urlOf(WHITE_BG) }] };
+	const bgHost = factory({ addEventListener() {} }, document, localStorage, global.fetch, setIntervalFn, setTimeoutFn, () => true, consoleStub);
+	await settle(40);
+	ok("loading a document measures the backgrounds it published without one",
+		bgHost.cfg.tags[0].bgLum === 1, JSON.stringify(bgHost.cfg.tags[0]));
+	ok("...and says so, rather than changing the document in silence",
+		/Measured 1 background picture/.test(bgHost.toasts().join(" | ")), bgHost.toasts().join(" | "));
+	ok("...leaving the PUBLISHED copy alone until a publish is pressed",
+		!gh.file.tags[0].bgLum, JSON.stringify(gh.file.tags[0]));
+	gh.file = servedDoc;
+	canvasPlan.rgb = null;
 
 	/* With the API unreachable there is no second source to find, and looking for
 	   one is how a page ends up showing rules nobody plays by. */
@@ -785,9 +951,13 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	mediaUploads.length = 0;
 	const toastsBeforeCrop = toastCount();
 	await el("edBgFile").onchange({ target: { files: [new File([Buffer.alloc(300 * 1024, 9)], "banner.png", { type: "image/png" })], value: "" } });
+	/* A background pick also triggers the badge-contrast measurement, which draws
+	   the picture again on a 24x24 luminance grid (no source rectangle) - so the
+	   resize draw is the one that names a source rect: 8 arguments, not 4. */
+	const cropDraws = canvasDraws.filter(d => d.length === 8);
 	ok("an extreme background is cropped to a pill-like shape, never a sliver",
-		canvasDraws.length === 1 && canvasDraws[0][2] === 400 && canvasDraws[0][3] === 50,
-		JSON.stringify(canvasDraws[0]));
+		cropDraws.length === 1 && cropDraws[0][2] === 400 && cropDraws[0][3] === 50,
+		JSON.stringify(cropDraws[0]));
 	ok("...so it keeps real pixels instead of magnifying its short side",
 		canvasCalls[0].width === 400 && canvasCalls[0].height === 50,
 		canvasCalls[0].width + "x" + canvasCalls[0].height);
@@ -800,7 +970,7 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	mediaUploads.length = 0;
 	await el("edIconFile").onchange({ target: { files: [new File([Buffer.alloc(90 * 1024, 11)], "wide.png", { type: "image/png" })], value: "" } });
 	ok("the same shape as an icon is never cropped (icons are Fit, not Crop)",
-		canvasDraws.length === 1 && canvasDraws[0][2] === 8000 && canvasDraws[0][3] === 50,
+		canvasDraws.filter(d => d.length === 8).length === 1 && canvasDraws[0][2] === 8000 && canvasDraws[0][3] === 50,
 		JSON.stringify(canvasDraws[0]));
 	bitmapPlan = { width: 2000, height: 1000 };
 	canvasPlan = { alpha: false, blobBytes: 40 * 1024 };

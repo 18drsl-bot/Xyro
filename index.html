@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r17</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r18</span>
 		<span class="chip" id="tokenChip" title="where Publish will write">no publish key</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules from the API now">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -826,23 +826,127 @@ function userColorOf(t) {
 const RANK_TINTS = { founder: "#d2d6de", hr: "#ffffff", support: "#42d878", trial: "#46cdc8", purple: "#b066ff", partner: "#2452dc", developer: "#e63e3e" };
 const SEAL_BLUE = "#00a2ff"; /* media/verified_seal_blue.png, the rankless seal */
 const BADGE_MIN_CONTRAST = 3.5;
+function relLumChannel(v) { return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }
+function relLuminanceRGB(r, g, b) {
+	return 0.2126 * relLumChannel(r / 255) + 0.7152 * relLumChannel(g / 255) + 0.0722 * relLumChannel(b / 255);
+}
 function relLuminance(hex) {
 	const n = parseInt((hex6(hex) || "#000000").replace("#", ""), 16);
-	const ch = v => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
-	return 0.2126 * ch(((n >> 16) & 255) / 255) + 0.7152 * ch(((n >> 8) & 255) / 255) + 0.0722 * ch((n & 255) / 255);
+	return relLuminanceRGB((n >> 16) & 255, (n >> 8) & 255, n & 255);
+}
+/* WCAG contrast ratio between two luminances. The script does the same on
+   numbers (its ntLumRatio) because a tag's backdrop is not always a colour: with
+   a bgImage it is a picture, whose mean brightness arrives as the rule's bgLum on
+   this very scale - see measureBgLum. */
+function lumRatio(la, lb) {
+	return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 function contrastRatio(a, b) {
-	const x = relLuminance(a), y = relLuminance(b);
-	return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+	return lumRatio(relLuminance(a), relLuminance(b));
 }
-/* null = the seal's own colour reads on that pill, which is the case for nearly
-   every tag, so nothing else about the badge changes. "black"/"white" = draw it
-   flat in that ink. */
+/* null = the seal's own colour reads on that backdrop, which is the case for
+   nearly every tag, so nothing else about the badge changes. "black"/"white" =
+   draw it flat in that ink. */
+function sealInkForLum(backdropLum, sealHex) {
+	const seal = relLuminance(hex6(sealHex) || SEAL_BLUE);
+	if (lumRatio(backdropLum, seal) >= BADGE_MIN_CONTRAST) return null;
+	return lumRatio(backdropLum, 0) >= lumRatio(backdropLum, 1) ? "black" : "white";
+}
 function sealInk(pillHex, sealHex) {
-	const pill = hex6(pillHex) || "#0c0c10";
-	const seal = hex6(sealHex) || SEAL_BLUE;
-	if (contrastRatio(pill, seal) >= BADGE_MIN_CONTRAST) return null;
-	return contrastRatio(pill, "#000000") >= contrastRatio(pill, "#ffffff") ? "black" : "white";
+	return sealInkForLum(relLuminance(hex6(pillHex) || "#0c0c10"), sealHex);
+}
+
+/* ---------- how bright is a background picture? ---------- */
+/* A rule's bgImage REPLACES the pill (the game sets the pill's own transparency
+   to 1 and fills it with the picture), so the seal's contrast cannot be judged
+   from the pill colour: a white HR seal on a white photo is invisible whatever
+   the rule's bg says. The picture's MEAN brightness is measured here - one canvas
+   readback per URL, 24x24 samples - and published as the rule's bgLum (0 = black,
+   1 = white, WCAG relative luminance, the scale the script's ntLuminance returns),
+   which the script clamps and feeds straight into the same contrast rule.
+
+   Two deliberate limits:
+     - a picture that will not load, or one served without CORS headers (canvas
+       readback taints - throw - caught below), yields NO bgLum, and the script
+       falls back to the pill colour, i.e. what it did before this existed;
+     - the mean is over the whole picture, not the few pixels actually behind the
+       seal: for a broadly light or dark picture that is the right answer, and for
+       one that is half black and half white either ink is a coin toss. */
+const LUM_SAMPLE = 24;
+const bgLumCache = new Map(); /* url -> number | null, once measured */
+const bgLumPending = new Map(); /* url -> in-flight promise, so one URL is measured once */
+function bgLumOf(url) {
+	return bgLumCache.has(url) ? bgLumCache.get(url) : undefined;
+}
+function measureBgLum(url) {
+	const u = String(url || "");
+	/* a URL this editor would never draw (an rbxassetid, a relative path, a typo)
+	   is answered - and cached - as "nothing measured", never re-asked: a promise
+	   that resolves without landing in the cache would make the preview kick a
+	   fresh measurement on every redraw, which is a loop that never yields */
+	if (!/^(https:\/\/|data:image\/|\/)/i.test(u)) {
+		bgLumCache.set(u, null);
+		return Promise.resolve(null);
+	}
+	if (bgLumCache.has(u)) return Promise.resolve(bgLumCache.get(u));
+	if (bgLumPending.has(u)) return bgLumPending.get(u);
+	const p = (async () => {
+		let lum = null;
+		try {
+			const res = await fetch(u);
+			const blob = await res.blob();
+			const bmp = await createImageBitmap(blob);
+			const c = document.createElement("canvas");
+			c.width = LUM_SAMPLE;
+			c.height = LUM_SAMPLE;
+			const ctx = c.getContext("2d");
+			ctx.drawImage(bmp, 0, 0, LUM_SAMPLE, LUM_SAMPLE);
+			if (bmp.close) bmp.close();
+			const d = ctx.getImageData(0, 0, LUM_SAMPLE, LUM_SAMPLE).data;
+			let sum = 0;
+			let n = 0;
+			for (let i = 0; i < d.length; i += 4) { sum += relLuminanceRGB(d[i], d[i + 1], d[i + 2]); n++; }
+			lum = n ? sum / n : null;
+		} catch (_) { /* no picture, no CORS, no canvas: leave it unmeasured */ }
+		bgLumCache.set(u, lum);
+		bgLumPending.delete(u);
+		return lum;
+	})();
+	bgLumPending.set(u, p);
+	return p;
+}
+/* Write the measured brightness onto a rule (or clear a stale one: a rule whose
+   picture changed must not keep the old picture's number, and no bgLum is the
+   safe direction - the script then uses the pill colour). Returns whether the
+   rule actually changed, so a caller can count what it fixed. */
+async function ensureBgLum(rule) {
+	const url = String(rule.bgImage || "");
+	let lum = null;
+	if (url) lum = await measureBgLum(url);
+	if (lum == null || !(lum >= 0 && lum <= 1)) {
+		if (rule.bgLum === undefined) return false;
+		delete rule.bgLum;
+		return true;
+	}
+	const rounded = Math.round(lum * 1000) / 1000; /* 3dp: enough to pick an ink, small in the file */
+	if (rule.bgLum === rounded) return false;
+	rule.bgLum = rounded;
+	return true;
+}
+/* Rules published before bgLum existed (and any picture the browser could not
+   read at the time) have no number, so a loaded document is measured through
+   once. That is what makes opening the editor enough to fix an existing tag's
+   badge - the change is kept in the working copy and published like any edit. */
+async function measureRuleBackgrounds() {
+	let fixed = 0;
+	for (const t of (cfg.tags || [])) {
+		if (await ensureBgLum(t)) fixed++;
+	}
+	if (fixed) {
+		changed("badge contrast measured on " + fixed + " background" + (fixed === 1 ? "" : "s"));
+		toast("Measured " + fixed + " background picture" + (fixed === 1 ? "" : "s") + " so badges stay visible on " + (fixed === 1 ? "it" : "them"), "info", 6);
+	}
+	return fixed;
 }
 
 /* The font the game will actually draw. The script resolves this for real now
@@ -1430,6 +1534,19 @@ function renderEditorPreview() {
 	   so a tag with no bg of its own previewed on the wrong background) */
 	const pillHex = hex6(t.bg) || hex6($("optPillColor").value) || "#0c0c10";
 	badge.style.setProperty("--pill", pillHex);
+	/* ...but a rule's background PICTURE replaces that pill (the game makes the
+	   pill colour invisible behind it), so the ink has to be weighed against the
+	   picture's measured brightness instead - bgLum, the number this editor
+	   publishes. A picture not measured yet (just typed, just picked, or straight
+	   out of a document published before bgLum existed) is measured now and the
+	   preview redrawn when the answer lands; measured once per URL, so this
+	   cannot loop. */
+	const bgUrl = String(t.bgImage || "");
+	const bgLumNow = bgLumOf(bgUrl);
+	if (bgUrl && bgLumNow === undefined) measureBgLum(bgUrl).then(() => renderEditorPreview());
+	const backdropLum = t.bgImage && typeof bgLumNow === "number" && bgLumNow >= 0 && bgLumNow <= 1
+		? bgLumNow
+		: relLuminance(pillHex);
 	/* same resolver as the big preview, so both show what the game will draw */
 	$("edLabel").style.color = nameColorOf(t);
 	$("edUser").style.color = userColorOf(t);
@@ -1461,9 +1578,11 @@ function renderEditorPreview() {
 	/* ...including which ink it is drawn in: brightness(0) flattens any tint to
 	   black and keeps the cut-out check transparent, invert(1) makes it white -
 	   exactly what the script's own mask build does locally */
-	const ink = sealInk(pillHex, RANK_TINTS[t.rank] || SEAL_BLUE);
+	const ink = sealInkForLum(backdropLum, RANK_TINTS[t.rank] || SEAL_BLUE);
 	check.style.filter = ink === "black" ? "brightness(0)" : ink === "white" ? "brightness(0) invert(1)" : "";
-	check.title = ink ? "badge drawn " + ink + " to stand out on this background" : "";
+	check.title = ink
+		? "badge drawn " + ink + " to stand out on " + (t.bgImage ? "the background picture" : "this pill")
+		: "";
 	const img = $("edImg");
 	if (t.image && /^(https:\/\/|data:image\/)/i.test(t.image)) {
 		img.src = t.image; img.classList.remove("hidden");
@@ -1540,7 +1659,7 @@ $("fTextColorHex").addEventListener("input", () => { if (hex6($("fTextColorHex")
 $("fUserColor").addEventListener("input", () => { $("fUserColorHex").value = $("fUserColor").value.toUpperCase(); renderEditorPreview(); });
 $("fUserColorHex").addEventListener("input", () => { if (hex6($("fUserColorHex").value)) $("fUserColor").value = $("fUserColorHex").value; renderEditorPreview(); });
 
-$("edSave").onclick = () => {
+$("edSave").onclick = async () => {
 	const t = editorTag();
 	if (!t.match) { toast("Match is required (a username or *)", "err"); return; }
 	if (!t.label || t.label === "?") { toast("Tag text is required", "err"); return; }
@@ -1561,6 +1680,12 @@ $("edSave").onclick = () => {
 	else if (t.userBox === "false") clean.userBox = false;
 	else delete clean.userBox;
 	if (t.userText) clean.userText = t.userText; else delete clean.userText;
+	/* the ink the badge will be drawn in (and every colour decision above) depends
+	   on the background picture's brightness, so it is measured BEFORE the rule is
+	   stored. A picture that cannot be read clears any earlier number rather than
+	   keeping the previous picture's - the script then falls back to the pill
+	   colour, which is visible; a stale number would be a lie. */
+	await ensureBgLum(clean);
 	if (editing >= cfg.tags.length) {
 		// insert BEFORE the "*" catch-all: rules match first-wins, so a rule
 		// appended after the wildcard could never fire. If there's no
@@ -2184,6 +2309,8 @@ async function load() {
 			status(live.tags.length + " rules loaded from " + rulesSource + " - your edit was kept, publish when ready", "info");
 			return;
 		}
+		/* the working copy, not `live`: measuring writes bgLum into cfg only, so the
+		   published document is untouched until a publish is pressed */
 		cfg = deepCopy(live);
 		/* the preview @line: nothing on the network can resolve the logged-in
 		   Roblox name from this origin, so use the first real rule - in practice
@@ -2211,6 +2338,7 @@ async function load() {
 		renderOptions();
 		renderAll();
 		status(live.tags.length + " rules loaded from " + rulesSource + (liveSha ? " (file " + String(liveSha).slice(0, 7) + ")" : "") + ($("draftBtn").classList.contains("hidden") ? "" : " - a saved draft is available"), "");
+		measureRuleBackgrounds(); // no await: the rules are on screen, this only fills in badge contrast
 	} catch (e) {
 		status("network error: " + e, "err");
 	}

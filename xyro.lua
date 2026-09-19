@@ -8962,12 +8962,22 @@ end
 --
 -- Relative luminance (sRGB linearised, WCAG weights) turns "does this read?"
 -- into a number instead of a guess. Below NT_BADGE_MIN_CONTRAST the same mask is
--- drawn flat black on a light pill or flat white on a dark one - and because the
--- check stays a cut-out, it takes the pill colour either way, so the mark is
--- still a check and not a solid disc.
+-- drawn flat black on a light backdrop or flat white on a dark one - and because
+-- the check stays a cut-out, it takes the backdrop colour either way, so the mark
+-- is still a check and not a solid disc.
+--
+-- The comparisons are done on LUMINANCE NUMBERS rather than on colours, because
+-- a tag's backdrop is not always a colour: with a bgImage it is a picture, and
+-- the tag editor publishes that picture's mean brightness as bgLum on the same
+-- scale ntLuminance returns. Feeding both through one helper is what keeps the
+-- site's preview and this build picking the same ink.
 local NT_BADGE_MIN_CONTRAST = 3.5
 local NT_SEAL_INK_DARK = Color3.new(0, 0, 0)
 local NT_SEAL_INK_LIGHT = Color3.new(1, 1, 1)
+-- ntLuminance of flat black and of flat white, exactly (channel(0) = 0,
+-- channel(1) = 1), so no rounding creeps in between the two sides
+local NT_SEAL_INK_DARK_LUM = 0
+local NT_SEAL_INK_LIGHT_LUM = 1
 
 local function ntLuminance(c)
 	local function channel(v)
@@ -8976,23 +8986,53 @@ local function ntLuminance(c)
 	return 0.2126 * channel(c.R) + 0.7152 * channel(c.G) + 0.0722 * channel(c.B)
 end
 
-local function ntContrast(a, b)
-	local la, lb = ntLuminance(a), ntLuminance(b)
+-- WCAG contrast ratio between two luminances. a colour version would only
+-- re-linearise numbers that are already linear.
+local function ntLumRatio(la, lb)
 	return (math.max(la, lb) + 0.05) / (math.min(la, lb) + 0.05)
 end
 
--- nil = the seal's own tint reads on this pill, so keep it (this is the case for
--- nearly every tag, which is why nothing else changes). Otherwise the ink to
+-- nil = the seal's own tint reads on this backdrop, so keep it (this is the case
+-- for nearly every tag, which is why nothing else changes). Otherwise the ink to
 -- draw the mask in: whichever of black/white actually contrasts more, so a
--- near-white pill gets black ink and a dark blue one gets white.
-local function ntSealInk(pillColor, sealColor)
-	if ntContrast(pillColor, sealColor) >= NT_BADGE_MIN_CONTRAST then
+-- near-white backdrop gets black ink and a dark one gets white.
+local function ntSealInk(backdropLum, sealColor)
+	local sealLum = ntLuminance(sealColor)
+	if ntLumRatio(backdropLum, sealLum) >= NT_BADGE_MIN_CONTRAST then
 		return nil
 	end
-	if ntContrast(pillColor, NT_SEAL_INK_DARK) >= ntContrast(pillColor, NT_SEAL_INK_LIGHT) then
+	if ntLumRatio(backdropLum, NT_SEAL_INK_DARK_LUM) >= ntLumRatio(backdropLum, NT_SEAL_INK_LIGHT_LUM) then
 		return NT_SEAL_INK_DARK
 	end
 	return NT_SEAL_INK_LIGHT
+end
+
+-- The luminance the badge is really drawn on.
+--
+-- A rule's bgImage does not sit BEHIND the pill colour, it REPLACES it: the tag
+-- build sets the pill's own transparency to 1 and fills the pill with the
+-- picture. So for those tags the pill colour is not on screen at all, and
+-- weighing the seal against it is how a white HR seal ends up on a white photo
+-- with nothing to see - the same invisible badge, from the same cause, with a
+-- bgImage in the way of the fix.
+--
+-- The tag editor measures each background picture's mean brightness when it is
+-- picked (canvas readback, one measurement per URL) and publishes it as the
+-- rule's bgLum: 0 = black, 1 = white, WCAG relative luminance - the number
+-- ntLuminance above returns. It is used as a number, not turned back into a
+-- grey, because a grey would only be rounded into a slightly different one.
+--
+-- No bgLum (a rule published before this existed, or a picture the browser could
+-- not read - a host with no CORS headers taints the canvas): the pill colour, so
+-- those tags behave exactly as they did before.
+local function ntBadgeBackdropLum(pillColor, bgImage, bgLum)
+	if type(bgImage) == "string" and bgImage ~= "" then
+		local lum = tonumber(bgLum)
+		if lum then
+			return math.clamp(lum, 0, 1)
+		end
+	end
+	return ntLuminance(pillColor)
 end
 
 local function ntTextWidth(text, size, font)
@@ -9453,6 +9493,7 @@ local function ntSignature(plr, rule)
 		tostring(rule.bgTransparency or ntOpts.pillTransparency),
 		tostring(rule.image or ""),
 		tostring(rule.bgImage or ""),
+		tostring(rule.bgLum or ""),
 		tostring(rule.userText or ""),
 		tostring((rule.userBox == nil and ntOpts.userBox or rule.userBox) and 1 or 0),
 		tostring(rule.userBoxColor or ntOpts.userBoxColor),
@@ -10623,14 +10664,18 @@ local function ntBuild(plr, rule)
 		-- entry; a new buster gives every seal a fresh stem, so the red developer
 		-- seal (added after ?v=14) stops inheriting that history.
 		local sealBuster = "?v=15"
-		-- CONTRAST FIRST. The seal is drawn ON the pill, so a rank tint that sits
-		-- close to the pill's own lightness vanishes into it - the white HR seal on
-		-- a white pill, the navy partner seal on a black one. When that happens the
-		-- mask is built locally in flat black (light pill) or flat white (dark
-		-- pill) instead; the check stays a cut-out, so it takes the pill colour and
-		-- the mark still reads as a check. nil = the tint is fine, i.e. almost
-		-- every tag, which is why nothing else about the badge changes.
-		local sealInk = ntSealInk(pill.BackgroundColor3, badgeTint or NT_SEAL_BLUE)
+		-- CONTRAST FIRST. The seal is drawn ON the backdrop the pill shows, so a
+		-- rank tint that sits close to that backdrop's lightness vanishes into it -
+		-- the white HR seal on a white pill, the navy partner seal on a black one.
+		-- When that happens the mask is built locally in flat black (light
+		-- backdrop) or flat white (dark backdrop) instead; the check stays a
+		-- cut-out, so it takes the backdrop colour and the mark still reads as a
+		-- check. nil = the tint is fine, i.e. almost every tag, which is why
+		-- nothing else about the badge changes.
+		--
+		-- the backdrop is a bgImage when the rule has one, not the pill colour the
+		-- build just made invisible (see ntBadgeBackdropLum)
+		local sealInk = ntSealInk(ntBadgeBackdropLum(pill.BackgroundColor3, rule.bgImage, rule.bgLum), badgeTint or NT_SEAL_BLUE)
 		local inkSeal = sealInk and ntSealAsset(badgeRank, sealInk) or nil
 		local sealUrl = nil
 		if inkSeal then

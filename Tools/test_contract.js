@@ -81,6 +81,11 @@ ok("every rule field the site writes is read by the script", rulesMissingFromScr
 const RULE_FIELDS_WITHOUT_UI = [
 	"font", "height", "imageSize", "userSize",
 	"userBoxColor", "userBoxRadius", "userBoxStroke", "userBoxTransparency",
+	// measured, never typed: the editor writes bgLum itself, from the background
+	// picture's pixels, when a rule is saved and when a loaded document has no
+	// number for its picture (see measureBgLum). A text box for it would be a way
+	// to publish an ink the picture does not need.
+	"bgLum",
 ];
 const unreachable = [...scriptRuleFields].filter(f =>
 	!editorRuleFields.has(f) && !identity.includes(f) && !RULE_FIELDS_WITHOUT_UI.includes(f));
@@ -720,8 +725,31 @@ ok("the tag pins the ZIndexBehavior its layout assumes",
    feature removed = the badge is simply invisible on those tags. */
 const badgeBlock = block(lua, "if rule.badge then", "\n\t-- optional customizable box");
 ok("the badge block was found", badgeBlock.length > 1000, badgeBlock.length + " chars");
-ok("the badge weighs its own tint against the pill before drawing it",
-	/ntSealInk\(pill\.BackgroundColor3, badgeTint or NT_SEAL_BLUE\)/.test(badgeBlock));
+ok("the badge weighs its own tint against its backdrop before drawing it",
+	/ntSealInk\(ntBadgeBackdropLum\(pill\.BackgroundColor3, rule\.bgImage, rule\.bgLum\), badgeTint or NT_SEAL_BLUE\)/.test(badgeBlock));
+/* ...and that backdrop is the background PICTURE when the rule has one. A
+   bgImage does not sit behind the pill colour, it REPLACES it (the build sets
+   the pill's transparency to 1 and fills the pill with the picture), so weighing
+   the seal against the pill colour is weighing it against something nobody can
+   see: the white HR seal on a white photo stays invisible with a bg of #000000.
+   The picture's brightness arrives as bgLum - measured by the site, published on
+   the same 0..1 luminance scale this script's ntLuminance returns. */
+const backdropFn = block(lua, "local function ntBadgeBackdropLum", "\n\treturn ntLuminance(pillColor)");
+ok("a background picture is what decides the ink, not the pill colour behind it",
+	/if type\(bgImage\) == "string" and bgImage ~= "" then/.test(backdropFn)
+		&& /return math\.clamp\(lum, 0, 1\)/.test(backdropFn), backdropFn.length + " chars");
+ok("...on the same luminance scale the editor measures and publishes",
+	/function relLuminanceRGB\(r, g, b\)/.test(html) && /function lumRatio\(la, lb\)/.test(html)
+		&& /lumRatio\(backdropLum, seal\)/.test(html) && /ntLumRatio\(backdropLum, sealLum\)/.test(lua));
+ok("...and a rule with no number for its picture keeps the old behaviour",
+	/return ntLuminance\(pillColor\)/.test(lua));
+ok("a picture that cannot be measured publishes no number, never a guessed one",
+	/if \(rule\.bgLum === undefined\) return false;\n\s*delete rule\.bgLum;/.test(html)
+		&& /bgLumCache\.set\(u, null\)/.test(html));
+ok("a changed brightness forces a rebuild in game, like the other rule fields",
+	/tostring\(rule\.bgLum or ""\)/.test(lua), "the rebuild signature does not carry bgLum");
+ok("a loaded document is measured through, so a live tag's badge is fixed by opening it",
+	/async function measureRuleBackgrounds\(\)/.test(html) && /measureRuleBackgrounds\(\); \/\/ no await/.test(html));
 ok("...and builds the mask locally in that ink when it would blend",
 	/local inkSeal = sealInk and ntSealAsset\(badgeRank, sealInk\) or nil/.test(badgeBlock));
 ok("...falling back to the glyph in the SAME ink when it cannot build one",
