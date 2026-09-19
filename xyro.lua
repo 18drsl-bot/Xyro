@@ -2177,8 +2177,9 @@ H.gui, H.click, H.main, H.titleBar, H.keyChip = gui, click, main, titleBar, keyC
 -- parentless (created, never shown)
 H.userCard = userCard
 
-H.guiHost, H.DISPLAY_ORDER = guiHost, DISPLAY_ORDER	H.pages, H.tabs, H.selectTab, H.makeTab = pages, tabs, selectTab, makeTab
-	H.isAdmin, H.ADMIN_IDS, H.ADMIN_NAMES = isAdmin, ADMIN_IDS, ADMIN_NAMES
+H.guiHost, H.DISPLAY_ORDER = guiHost, DISPLAY_ORDER
+H.pages, H.tabs, H.selectTab, H.makeTab = pages, tabs, selectTab, makeTab
+H.isAdmin, H.ADMIN_IDS, H.ADMIN_NAMES = isAdmin, ADMIN_IDS, ADMIN_NAMES
 H.debugPage = debugPage
 H.row, H.makeSwitch = row, makeSwitch
 
@@ -2205,6 +2206,12 @@ do
 local gui, COL, make, round, connect = H.gui, H.COL, H.make, H.round, H.connect
 local TweenService = H.TweenService
 local TextService = game:GetService("TextService")
+-- exported, because the nametag pills measure their own text from another scope.
+-- H.TextService was never assigned, so ntTextWidth's pcall failed every single
+-- time and every pill was sized by a character-count guess instead of real
+-- glyphs - which is also why changing the `font` option never changed a pill's
+-- width: the guess is handed the font and ignores it.
+H.TextService = TextService
 
 local WIDTH, LEFT, RIGHT = 250, 12, 12
 local BODY_W = WIDTH - LEFT - RIGHT
@@ -8937,16 +8944,21 @@ local function ntColor(hex, fallback)
 	return Color3.fromRGB(r, g, b)
 end
 
+-- Keys are LOWERCASE on purpose: the lookup goes through ntNormalize, which
+-- lowercases its input. They used to be written GothamBlack/GothamBold/..., so
+-- NT_FONTS["bangers"] was nil and EVERY choice fell through to the fallback -
+-- the font option was a silent no-op that looked like it worked, because the
+-- fallback happens to be GothamBlack and GothamBlack was the default anyway.
 local NT_FONTS = {
-	GothamBlack = Enum.Font.GothamBlack,
-	GothamBold = Enum.Font.GothamBold,
-	Gotham = Enum.Font.Gotham,
-	GothamMedium = Enum.Font.GothamMedium,
-	Bangers = Enum.Font.Bangers,
-	SourceSansBold = Enum.Font.SourceSansBold,
-	FredokaOne = Enum.Font.FredokaOne,
-	Arcade = Enum.Font.Arcade,
-	Pixel = Enum.Font.Arcade,
+	gothamblack = Enum.Font.GothamBlack,
+	gothambold = Enum.Font.GothamBold,
+	gotham = Enum.Font.Gotham,
+	gothammedium = Enum.Font.GothamMedium,
+	bangers = Enum.Font.Bangers,
+	sourcesansbold = Enum.Font.SourceSansBold,
+	fredokaone = Enum.Font.FredokaOne,
+	arcade = Enum.Font.Arcade,
+	pixel = Enum.Font.Arcade, -- alias: both names read as the arcade face
 }
 local function ntFont(name)
 	return NT_FONTS[ntNormalize(name)] or Enum.Font.GothamBlack

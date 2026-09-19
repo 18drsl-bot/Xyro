@@ -360,7 +360,7 @@
 		<span class="tag">live</span>
 	</div>
 	<div class="top-right">
-		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r15</span>
+		<span class="chip" id="buildChip" title="editor build - GitHub Pages caches this page for ~10 min, so a hard refresh (Ctrl+Shift+R) is needed to load a newer build">build: api-r16</span>
 		<span class="chip" id="tokenChip" title="where Publish will write">no publish key</span>
 		<button class="subtle" id="refreshBtn" title="pull the latest published rules from the API now">&#8635; refresh</button>
 		<a class="ghlink" href="https://github.com/vertxxy-1/Xyro/blob/main/nametags.json" target="_blank" rel="noopener">
@@ -815,6 +815,35 @@ function userColorOf(t) {
 	return (hex6(t && t.userColor) || $("optUserColor").value || "#8b92a5").toLowerCase();
 }
 
+/* The font the game will actually draw. The script resolves this for real now
+   (its table keys had to be lowercase - they were not, so every pick fell
+   through to GothamBlack), which is exactly why the preview has to show
+   something for it: a setting that changes nothing on screen is the same
+   complaint the colour options above were fixed for. Roblox's faces have no
+   exact CSS twin, so this is an approximation and is labelled as one - the
+   Gotham family differs only in weight (it is the neutral sans Roblox ships),
+   and the display faces map to the closest family a browser already has. */
+const FONT_PREVIEW = {
+	gothamblack: { weight: "900" },
+	gothambold: { weight: "700" },
+	gotham: { weight: "400" },
+	gothammedium: { weight: "500" },
+	bangers: { family: "'Comic Sans MS','Segoe UI',cursive", spacing: "0.5px" },
+	sourcesansbold: { family: "'Segoe UI',system-ui,sans-serif", weight: "700" },
+	fredokaone: { family: "'Trebuchet MS','Segoe UI',sans-serif", weight: "700" },
+	arcade: { family: "'Courier New',monospace" },
+	pixel: { family: "'Courier New',monospace" },
+};
+function applyPreviewFont() {
+	const f = FONT_PREVIEW[String($("optFont").value || "").toLowerCase()] || FONT_PREVIEW.gothamblack;
+	for (const id of ["pvLabel", "pvUser", "edLabel", "edUser"]) {
+		const st = $(id).style;
+		st.fontFamily = f.family || "";
+		st.fontWeight = f.weight || "";
+		st.letterSpacing = f.spacing || "";
+	}
+}
+
 function renderPreview() {
 	const t = (editing >= 0 ? editorTag() : null) || cfg.tags[0] || { label: "x9k_alt", color: "#ffd700" };
 	const badge = $("pvBadge");
@@ -845,6 +874,7 @@ function renderPreview() {
 	} else {
 		img.classList.add("hidden");
 	}
+	applyPreviewFont();
 }
 
 /* edit the preview pill directly: clicking the name rewrites rule #1's
@@ -1408,6 +1438,7 @@ function renderEditorPreview() {
 	} else {
 		badge.style.backgroundImage = "none";
 	}
+	applyPreviewFont();
 }
 
 function openEditor(i) {
@@ -1558,7 +1589,11 @@ function readOptions() {
 		userBox: $("optUBox").checked,
 		userBoxColor: $("optUBoxColor").value.toUpperCase(),
 		userBoxTransparency: Math.min(1, Math.max(0, numOr($("optUBoxTrans").value, 0.25))),
-		userBoxRadius: Math.min(24, Math.max(0, intOr($("optUBoxRadius").value, 0))),
+		/* 8, not 0: 8 is what the script defaults to (ntOpts.userBoxRadius) and what
+		   load() puts in this field when a file omits the key. Falling back to 0
+		   made a blanked field silently publish a square box instead - a default
+		   that disagreed with the other three copies of the same default. */
+		userBoxRadius: Math.min(24, Math.max(0, intOr($("optUBoxRadius").value, 8))),
 		userBoxStroke: $("optUBoxStroke").value.trim().toUpperCase(),
 		clickTeleport: $("optClickTp").checked,
 		seeThroughWalls: $("optWalls").checked,

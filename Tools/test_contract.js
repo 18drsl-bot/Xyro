@@ -537,5 +537,111 @@ if (rowConst && nameOffset && userOffset && rowPad && heightClamp) {
 		"line gap " + shipped.gap.toFixed(1) + "px, pill padding " + shipped.pad + "px at size " + file.options.size + "/" + file.options.userSize);
 }
 
+/* --- the script never reads a field it did not assign --------------------- */
+/* H is how the script's separate scopes share anything, and the sharing runs one
+   way: one block exports H.foo, another scope reads it. A missing export does
+   not throw at load - the read is simply nil, so the symptom is either a silent
+   no-op or "attempt to call a nil value", never a sentence that names the
+   cause. That is how a nametag helper once crashed, and how H.TextService left
+   every pill width a character-count guess (a guess that is handed the font and
+   ignores it, so the font option could not change a pill's width either).
+   Checked mechanically, because reading 16k lines is not a strategy. */
+{
+	/* comments stripped CRLF-safely: `.` does not match a carriage return, so a
+	   /--.*$/ without the m flag silently strips nothing on a Windows checkout */
+	const code = lua.replace(/--(?!\[\[?|-).*$/gm, "");
+	const assigned = new Set();
+	let m;
+	const decl = /function\s+H\.([A-Za-z_][A-Za-z0-9_]*)/g;
+	while ((m = decl.exec(code))) assigned.add(m[1]);
+	for (const line of code.split("\n")) {
+		const eq = /(?<![=<>~])=(?!=)/.exec(line);
+		if (!eq) continue;
+		const re = /\bH\.([A-Za-z_][A-Za-z0-9_]*)/g;
+		while ((m = re.exec(line.slice(0, eq.index)))) assigned.add(m[1]);
+	}
+	const read = new Set();
+	const use = /\bH\.([A-Za-z_][A-Za-z0-9_]*)/g;
+	while ((m = use.exec(code))) read.add(m[1]);
+	const unassigned = [...read].filter(n => !assigned.has(n));
+	ok("every H field the script reads is assigned somewhere (a missing export is nil, not an error)",
+		unassigned.length === 0, unassigned.length + " never assigned: " + unassigned.join(", "));
+	ok("...including the text service the pills measure their own width with",
+		assigned.has("TextService") && /H\.TextService:GetTextSize\(/.test(lua), "");
+}
+
+/* --- every font the editor offers actually resolves in the script ---------- */
+/* The script looks a font up through ntNormalize, which LOWERCASES its input, so
+   the table's keys have to be lowercase as well. Written GothamBlack/Bangers/...
+   every lookup missed and fell through to the fallback - so the font option was
+   a silent no-op, and an invisible one, because the fallback is GothamBlack and
+   GothamBlack is what the file asks for anyway. */
+{
+	const at = html.indexOf('id="optFont"');
+	const body = at === -1 ? "" : html.slice(at, html.indexOf("</select>", at));
+	const options = [];
+	let m;
+	const opt = /<option[^>]*>([^<]+)<\/option>/g;
+	while ((m = opt.exec(body))) options.push(m[1].trim());
+
+	const table = lua.slice(lua.indexOf("local NT_FONTS"), lua.indexOf("local function ntFont"));
+	const keys = new Set();
+	const key = /^\t([a-z0-9_]+)\s*=/gm;
+	while ((m = key.exec(table))) keys.add(m[1]);
+
+	const unresolved = options.filter(o => !keys.has(o.toLowerCase()));
+	ok("every font the editor offers resolves in the script's font table (" + options.length + " options)",
+		options.length >= 8 && unresolved.length === 0,
+		unresolved.length + " unresolved: " + unresolved.join(", ") + " | keys seen: " + [...keys].join(", ") + " | options: " + options.join(", "));
+	ok("...and the lookup normalises names the same way the keys are spelled",
+		/NT_FONTS\[ntNormalize\(name\)\]/.test(lua), "");
+}
+
+/* --- four copies of every default, and they have to agree ------------------ */
+/* A numeric option lives in four places: what the script falls back to when the
+   file omits the key, what the form LOADS into the field when the key is absent,
+   what the form PUBLISHES when the field is left blank, and the clamp that
+   guards it. They drifted on userBoxRadius - the script and the form both said
+   8, while a blanked field published 0, so clearing a field silently changed a
+   rounded box to a square one. Nothing errored; the value just moved. */
+{
+	let m;
+	const loaded = new Map(); // id -> { field, def }
+	const loadOr = /\$\("([A-Za-z0-9_]+)"\)\.value = o\.([A-Za-z0-9_]+) \|\| ([0-9.]+);/g;
+	while ((m = loadOr.exec(html))) loaded.set(m[1], { field: m[2], def: m[3] });
+	const loadNe = /\$\("([A-Za-z0-9_]+)"\)\.value = \(?o\.([A-Za-z0-9_]+) != null \? o\.\2 : ([0-9.]+)\)?;/g;
+	while ((m = loadNe.exec(html))) loaded.set(m[1], { field: m[2], def: m[3] });
+
+	const published = new Map(); // id -> default used when the field is blank
+	const saveRe = /(?:intOr|numOr)\(\$\("([A-Za-z0-9_]+)"\)\.value, ([0-9.]+)\)/g;
+	while ((m = saveRe.exec(html))) published.set(m[1], m[2]);
+
+	const drift = [];
+	let compared = 0;
+	for (const [id, def] of published) {
+		if (!loaded.has(id)) continue;
+		compared++;
+		if (loaded.get(id).def !== def) drift.push(id + " loads " + loaded.get(id).def + " but publishes " + def);
+	}
+	ok("a blanked option publishes the same default the form loads (" + compared + " compared)",
+		compared >= 6 && drift.length === 0, drift.join("; "));
+
+	const scriptDefault = new Map();
+	const luaRe = /ntOpts\.([A-Za-z0-9_]+) = math\.clamp\(tonumber\(o\.\1\) or ([0-9.]+)/g;
+	while ((m = luaRe.exec(lua))) scriptDefault.set(m[1], m[2]);
+
+	const scriptDrift = [];
+	let scriptCompared = 0;
+	for (const [id, info] of loaded) {
+		if (!published.has(id) || !scriptDefault.has(info.field)) continue;
+		scriptCompared++;
+		if (scriptDefault.get(info.field) !== published.get(id)) {
+			scriptDrift.push(info.field + " is " + scriptDefault.get(info.field) + " in the script, " + published.get(id) + " in the editor");
+		}
+	}
+	ok("...and the same number the script falls back to (" + scriptCompared + " fields)",
+		scriptCompared >= 5 && scriptDrift.length === 0, scriptDrift.join("; "));
+}
+
 console.log("\n" + (failures.length ? failures.length + " FAILED (" + pass + " passed)" : pass + " checks passed"));
 process.exit(failures.length ? 1 : 0);

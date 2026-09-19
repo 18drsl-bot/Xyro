@@ -465,6 +465,34 @@ const settle = (ms = 12) => new Promise(r => setTimeout(r, ms));
 	ok("the mini preview matches the big one", colorOf("edLabel") === "#ff0000" && colorOf("edUser") === "#00ff00",
 		colorOf("edLabel") + "/" + colorOf("edUser"));
 
+	/* --- 4b. the font: chosen, published, and shown in the preview ---------- */
+	/* This pair of bugs is why the check exists. The script looked a font up
+	   through a normaliser that LOWERCASES, against a table keyed GothamBlack/
+	   Bangers/... - so every lookup missed and fell back to GothamBlack, and the
+	   option did nothing at all. Its only symptom was "nothing looks different",
+	   which is invisible on its own: the fallback was GothamBlack and GothamBlack
+	   was the default. So the editor now renders it and this asserts it. */
+	el("optFont").value = "Bangers";
+	api.renderPreview();
+	ok("picking a display font changes the big preview",
+		/Comic/i.test(el("pvLabel").style.fontFamily || ""), JSON.stringify(el("pvLabel").style.fontFamily));
+	ok("...and the @username line with it, not just the name",
+		/Comic/i.test(el("pvUser").style.fontFamily || ""), JSON.stringify(el("pvUser").style.fontFamily));
+	api.renderEditorPreview();
+	ok("...and the mini preview, so the two cannot disagree about the font",
+		/Comic/i.test(el("edLabel").style.fontFamily || "") &&
+		String(el("edLabel").style.fontFamily) === String(el("pvLabel").style.fontFamily),
+		JSON.stringify(el("edLabel").style.fontFamily) + " / " + JSON.stringify(el("pvLabel").style.fontFamily));
+
+	el("optFont").value = "GothamBlack";
+	api.renderPreview();
+	ok("a Gotham face is previewed as a weight rather than an invented family",
+		el("pvLabel").style.fontWeight === "900" && !(el("pvLabel").style.fontFamily || ""),
+		el("pvLabel").style.fontWeight + " / " + JSON.stringify(el("pvLabel").style.fontFamily));
+	ok("...and changing back clears the family the other one set",
+		!(el("pvUser").style.fontFamily || ""), JSON.stringify(el("pvUser").style.fontFamily));
+	el("optFont").value = "";
+
 	api.closeEditor();
 	api.openEditor(1); // a rule with no colours of its own
 	ok("a rule with no colours leaves both hex boxes blank (= global)",
