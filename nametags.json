@@ -102,6 +102,14 @@
 			"bgLum": 0.105
 		},
 		{
+			"match": "ethanbhe_4",
+			"label": "Cryptic",
+			"color": "#6E6BFF",
+			"image": "https://xyro-api.xyroapi.workers.dev/media/55414b7ded147bd3137a88ec192366c63c42ae53.jpg",
+			"bgImage": "https://xyro-api.xyroapi.workers.dev/media/e012c8b1b11a37cf316897a751f8b7fdd1f4cd73.png",
+			"bgLum": 0.567
+		},
+		{
 			"match": "*",
 			"label": "xyro user",
 			"color": "#FFFFFF",
