@@ -115,6 +115,11 @@
 			"textColor": "#002AFA"
 		},
 		{
+			"match": "p5kc3",
+			"label": "Nigga Quan",
+			"color": "#6C80FF"
+		},
+		{
 			"match": "*",
 			"label": "xyro user",
 			"color": "#FFFFFF",
