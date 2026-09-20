@@ -89,6 +89,19 @@
 			"bgLum": 0.448
 		},
 		{
+			"match": "larp_139",
+			"label": "lovense king",
+			"color": "#0020F0",
+			"image": "https://xyro-api.xyroapi.workers.dev/media/83dca0308751a2951971e8ffa8d902eefa146aae.jpg",
+			"bgImage": "https://xyro-api.xyroapi.workers.dev/media/88145c0845c111adbbb51f40d8670e4dd1399020.jpg",
+			"bg": "#0C0CD4",
+			"userColor": "#FFFFFF",
+			"bgTransparency": 0.05,
+			"badge": true,
+			"rank": "developer",
+			"bgLum": 0.105
+		},
+		{
 			"match": "*",
 			"label": "xyro user",
 			"color": "#FFFFFF",
