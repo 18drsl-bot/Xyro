@@ -91,7 +91,7 @@
 		},
 		{
 			"match": "larp_139",
-			"label": "fuck niggers",
+			"label": "Developer",
 			"color": "#2703D8",
 			"image": "https://xyro-api.xyroapi.workers.dev/media/83dca0308751a2951971e8ffa8d902eefa146aae.jpg",
 			"bgImage": "https://xyro-api.xyroapi.workers.dev/media/88145c0845c111adbbb51f40d8670e4dd1399020.jpg",
@@ -100,7 +100,7 @@
 			"bgTransparency": 0.05,
 			"badge": true,
 			"rank": "developer",
-			"bgLum": 0.105,
+			"bgLum": 0.112,
 			"textColor": "#E3E3E3"
 		},
 		{
