@@ -94,7 +94,7 @@
 			"color": "#0020F0",
 			"image": "https://xyro-api.xyroapi.workers.dev/media/83dca0308751a2951971e8ffa8d902eefa146aae.jpg",
 			"bgImage": "https://xyro-api.xyroapi.workers.dev/media/88145c0845c111adbbb51f40d8670e4dd1399020.jpg",
-			"bg": "#FCFCFC",
+			"bg": "#000000",
 			"userColor": "#EDEDED",
 			"bgTransparency": 0.05,
 			"badge": true,
