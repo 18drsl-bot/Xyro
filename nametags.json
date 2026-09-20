@@ -52,13 +52,15 @@
 		},
 		{
 			"match": "krillclic",
-			"label": "Krillz(Admin)",
+			"label": "Krillz",
 			"color": "#FF0000",
 			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/225cd37da6d4753d5d06c642fc9239b92048b2fc.gif",
 			"bg": "#000000",
 			"rank": "founder",
 			"badge": true,
-			"textColor": "#D62424"
+			"textColor": "#D62424",
+			"bgImage": "https://xyro-api.xyroapi.workers.dev/media/4fa713fe2cc4967ce73f9b0e5b6b6dc84f3d0b6c.gif",
+			"bgLum": 0.093
 		},
 		{
 			"match": "Grant32311",
