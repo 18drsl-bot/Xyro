@@ -32,11 +32,11 @@
 			"label": "Vertxxy(Owner)",
 			"color": "#6C80FF",
 			"rank": "purple",
-			"image": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/0eacddd5646ecb32dcd5fba4c5c44891b2f34205.jpg",
-			"bgImage": "https://cdn.jsdelivr.net/gh/vertxxy-1/Xyro@main/media/f77b149da7816504bb573156677450a6e9562296.gif",
+			"image": "https://xyro-api.xyroapi.workers.dev/media/535c4ddee33a1252b215719861648b8d30a70e27.gif",
+			"bgImage": "https://xyro-api.xyroapi.workers.dev/media/19e886405d8dd7324ccc69c8fe68f73d4c7bcaa2.gif",
 			"bg": "#1C1CA6",
 			"badge": true,
-			"bgLum": 0.01
+			"bgLum": 0.004
 		},
 		{
 			"match": "furyrAin620",
